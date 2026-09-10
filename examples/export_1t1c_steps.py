@@ -124,7 +124,7 @@ def main() -> None:
         render_step_state(state, image_path, step_number=index, step_name=step.name)
 
     render_step_contact_sheet(
-        [args.state_dir / f"step-{index:02d}.npz" for index in range(1, 10)],
+        [args.state_dir / f"step-{index:02d}.npz" for index in range(1, len(flow.steps) + 1)],
         [step.name for step in flow.steps],
         args.image_dir / "all-steps-aa.png",
     )

@@ -106,7 +106,7 @@ $env:PYTHONPATH='src'
 python examples\build_1t1c_demo.py --output-dir ..\process-studio-1t1c-demo
 ```
 
-示例包含 9 个步骤：电容沟槽刻蚀、Al2O3/TiN 保形沉积、W 填充、CMP、层间介质、垂直沟道、栅介质和 TiN 字线。输出中包含可直接打开的工程数据库、9 个步骤快照、Quick Sketch、最终材料状态、日志、Excel Recipe 模板和总览图。
+示例包含 12 个步骤：涂胶、显影、电容沟槽刻蚀、去胶、Al2O3/TiN 保形沉积、W 填充、CMP、层间介质、垂直沟道、栅介质和 TiN 字线。沟槽刻蚀不用草图掩膜，而是靠图形化的光刻胶挡住刻蚀，掩膜边缘因此是一层真实固体。输出中包含可直接打开的工程数据库、每步快照、Quick Sketch、最终材料状态、日志、Excel Recipe 模板和总览图。
 
 使用已保存状态的网格定义，从初始衬底重新执行 4× 细化（不会插值旧的最终结果）：
 

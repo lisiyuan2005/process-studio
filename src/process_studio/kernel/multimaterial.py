@@ -96,6 +96,15 @@ def selective_etch(
     primary_rate = max(positive_rates.values())
     result = state.clone()
     original_union = state.combined_phi()
+    # A material this recipe cannot consume is not merely spared: it shields
+    # whatever lies behind it, so the etch front has to go around its edges.
+    # This is what makes a patterned resist mask and a buried stop layer work.
+    protected = [name for name in state.priority if name not in positive_rates]
+    obstacle = (
+        np.minimum.reduce([state.fields[name] for name in protected])
+        if protected
+        else None
+    )
     for name, rate in positive_rates.items():
         if name not in state.fields:
             continue
@@ -110,6 +119,7 @@ def selective_etch(
             isotropic_rate=max(rate * (1.0 - directional_fraction), 0.0),
             surface_z=surface_z,
             exposure_sdf=exposure_sdf,
+            obstacle_phi=obstacle,
             solver_order=solver_order,
             tile_shape=tile_shape,
         )

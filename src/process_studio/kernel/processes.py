@@ -77,6 +77,7 @@ def mixed_trench_etch(
     surface_z: float = 0.0,
     cfl: float = 0.35,
     exposure_sdf: np.ndarray | None = None,
+    obstacle_phi: np.ndarray | None = None,
     solver_order: int = 1,
     tile_shape: int | tuple[int, ...] | None = None,
 ) -> tuple[np.ndarray, int]:
@@ -87,6 +88,11 @@ def mixed_trench_etch(
     through the opening while positive normal speed expands it isotropically.
     Subtracting the evolved void from the input material naturally produces
     undercut without nucleating disconnected cavities inside the substrate.
+
+    ``obstacle_phi`` is material the etchant cannot consume, negative inside. The
+    void is barred from it after every sub-step, so such a material shields what
+    lies behind it and the front has to travel around its edges. That is what
+    makes a resist layer or a stop layer act as one.
     """
     stencil_reach_per_step(solver_order)
     if phi.ndim != 3:
@@ -118,13 +124,23 @@ def mixed_trench_etch(
 
     material = np.asarray(phi, dtype=float).copy()
     z_3d = np.broadcast_to(z[:, None, None], material.shape)
+    if obstacle_phi is None:
+        barrier = None
+    else:
+        barrier = np.asarray(obstacle_phi, dtype=float)
+        if barrier.shape != material.shape:
+            raise ValueError("obstacle_phi shape must match the level set")
+        # Only the obstacle's interior blocks the void. Constraining its surface
+        # too would pin the void to zero there, which would in turn stop the etch
+        # from clearing anything else that rests on that same surface.
+        barrier = np.where(barrier < 0.0, -barrier, -np.inf)
     if exposure_sdf is None:
         mask_phi = mask_signed_distance(mask, spacing)
     else:
         mask_phi = np.asarray(exposure_sdf, dtype=float)
         if mask_phi.shape != mask.shape:
             raise ValueError("exposure_sdf shape must match the mask y/x plane")
-    if isotropic_rate == 0:
+    if isotropic_rate == 0 and barrier is None:
         # Exact translation of the mask prism for spatially constant vertical
         # etching. Applies to arbitrary masks, without a raster edge velocity.
         void_phi = np.maximum(mask_phi[None, :, :], surface_z - target_depth - z_3d)
@@ -134,12 +150,29 @@ def mixed_trench_etch(
         surface_z - z_3d,
     ).copy()
     vertical_velocity = -directional_rate
+    if barrier is not None:
+        void_phi = np.maximum(void_phi, barrier)
 
     if solver_order == 2 or tile_shape is not None:
-        void_phi, steps = evolve_hamilton_jacobi(
-            void_phi, spacing, isotropic_rate, (vertical_velocity, 0.0, 0.0),
-            total_time, order=solver_order, tile_shape=tile_shape, cfl=cfl,
-        )
+        if barrier is None:
+            void_phi, steps = evolve_hamilton_jacobi(
+                void_phi, spacing, isotropic_rate, (vertical_velocity, 0.0, 0.0),
+                total_time, order=solver_order, tile_shape=tile_shape, cfl=cfl,
+            )
+        else:
+            # The solver runs the whole interval internally, so an obstacle has
+            # to be re-imposed between slices rather than inside it.
+            slices = steps
+            advanced = 0
+            for index in range(slices):
+                void_phi, taken = evolve_hamilton_jacobi(
+                    void_phi, spacing, isotropic_rate, (vertical_velocity, 0.0, 0.0),
+                    total_time / slices, order=solver_order, tile_shape=tile_shape,
+                    cfl=cfl,
+                )
+                void_phi = np.maximum(void_phi, barrier)
+                advanced += taken
+            steps = advanced
     for _ in range(steps if solver_order == 1 and tile_shape is None else 0):
         directional_term = upwind_advection_term(
             void_phi,
@@ -153,11 +186,15 @@ def mixed_trench_etch(
         )
 
         void_phi -= dt * (directional_term + isotropic_term)
+        if barrier is not None:
+            void_phi = np.maximum(void_phi, barrier)
     # The ideal mask protects the top surface, but not the subsurface undercut.
     # Constraining every intermediate advection inlet would suppress undercut
     # by continuously importing the original opening into the growing void.
     inlet = z >= surface_z - spacing * 1e-9
     void_phi[inlet] = np.maximum(void_phi[inlet], mask_phi[None, :, :])
+    if barrier is not None:
+        void_phi = np.maximum(void_phi, barrier)
     etched = np.maximum(material, -void_phi)
     return etched, steps
 

@@ -111,6 +111,18 @@ class UniformGrid3D:
         return np.meshgrid(self.x, self.y, indexing="xy")
 
     def substrate(self, surface_z: float = 0.0) -> np.ndarray:
-        """Return a planar substrate SDF, negative below ``surface_z``."""
+        """Return a planar substrate SDF, negative below ``surface_z``.
+
+        The surface is placed a hair inside the node it would otherwise land on.
+        A node whose value is exactly zero is neither inside nor outside, and
+        subtracting a void from it with ``max`` can never lift it out of the
+        material: it survives as a zero-thickness membrane that later steps then
+        treat as a real surface to deposit on. The offset is nine orders of
+        magnitude below the node spacing, so it moves no interface anyone can
+        measure; it only removes the tie.
+        """
         zz = self.z[:, None, None]
-        return np.broadcast_to(zz - surface_z, (self.nz, self.ny, self.nx)).copy()
+        inside_nudge = self.dz * 1e-9
+        return np.broadcast_to(
+            zz - surface_z - inside_nudge, (self.nz, self.ny, self.nx)
+        ).copy()

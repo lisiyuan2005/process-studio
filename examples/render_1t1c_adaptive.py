@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import time
 from pathlib import Path
 
@@ -25,7 +26,7 @@ from process_studio.visualization import top_view_labels
 
 
 COLORS = {material.name: material.color for material in MATERIALS}
-ALPHAS = {"Si": 0.62, "SiO2": 0.46, "Al2O3": 0.98, "TiN": 1.0, "W": 1.0}
+ALPHAS = {"Si": 0.62, "SiO2": 0.46, "Al2O3": 0.98, "TiN": 1.0, "W": 1.0, "Photoresist": 0.5}
 
 
 def _labels_to_rgb(labels: np.ndarray, names: list[str]) -> np.ndarray:
@@ -168,7 +169,7 @@ def _lit_facecolors(
 
 def _add_patch_surfaces(axis, adaptive: AdaptiveMaterialState, cut_y: float) -> int:
     triangle_count = 0
-    order = [name for name in ["Si", "SiO2", "Al2O3", "TiN", "W"] if name in adaptive.material_names]
+    order = [material.name for material in MATERIALS if material.name in adaptive.material_names]
     for material in order:
         for patch in adaptive.patches:
             core_x_min, core_x_max, core_y_min, core_y_max = patch.box.core_bounds
@@ -207,10 +208,7 @@ def _add_patch_surfaces(axis, adaptive: AdaptiveMaterialState, cut_y: float) -> 
 def _add_state_surfaces(axis, state: MaterialState, cut_y: float) -> int:
     """Draw raw zero-isosurfaces from one uniform-grid state."""
     triangle_count = 0
-    order = [
-        name for name in ["Si", "SiO2", "Al2O3", "TiN", "W"]
-        if name in state.fields
-    ]
+    order = [material.name for material in MATERIALS if material.name in state.fields]
     for material in order:
         vertices, faces = _surface_mesh(state, material)
         if not len(faces):
@@ -372,7 +370,12 @@ def render_step_contact_sheet(
         plates.append(_labels_to_rgb(section, state.priority))
     assert x is not None and z is not None
 
-    figure, axes = plt.subplots(3, 3, figsize=(15, 9), sharex=True, sharey=True)
+    # The sheet sizes itself to the flow rather than assuming nine steps.
+    columns = 3
+    rows = math.ceil(len(plates) / columns)
+    figure, axes = plt.subplots(
+        rows, columns, figsize=(15, 3 * rows), sharex=True, sharey=True, squeeze=False
+    )
     figure.subplots_adjust(
         left=0.06, right=0.985, bottom=0.085, top=0.89, wspace=0.13, hspace=0.28
     )
@@ -382,7 +385,7 @@ def render_step_contact_sheet(
         fontweight="bold",
     )
     for index, (axis, plate, name) in enumerate(
-        zip(axes.flat, plates, step_names, strict=True), start=1
+        zip(axes.flat, plates, step_names), start=1
     ):
         axis.imshow(
             plate,
@@ -395,6 +398,8 @@ def render_step_contact_sheet(
         axis.set_xlim(x[0], x[-1])
         axis.set_ylim(z[0], z[-1])
         axis.grid(alpha=.10, linewidth=.4)
+    for axis in axes.flat[len(plates):]:
+        axis.set_axis_off()
     for axis in axes[-1, :]:
         axis.set_xlabel("x (µm)")
     for axis in axes[:, 0]:

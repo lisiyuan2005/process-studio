@@ -2,7 +2,9 @@ import numpy as np
 import pytest
 
 from process_studio.kernel.grid import UniformGrid3D
-from process_studio.kernel.masks import rectangle
+from process_studio.kernel.masks import full_exposure, rectangle
+from process_studio.kernel.material_state import MaterialState
+from process_studio.kernel.multimaterial import deposit_material, selective_etch
 from process_studio.kernel.metrics import (
     column_surface_height,
     sealed_void_mask,
@@ -96,3 +98,66 @@ def test_conformal_film_can_seal_a_reentrant_wet_etched_cavity(
 
     assert not np.any(sealed_void_mask(still_open, grid.z))
     assert np.any(sealed_void_mask(pinched_off, grid.z))
+
+
+def test_a_film_over_a_resist_masked_etch_keeps_its_nominal_thickness() -> None:
+    """A patterned mask must not leave a membrane for the film to grow on.
+
+    When the wafer surface sampled exactly on a node, subtracting the etched
+    void could not lift those nodes out of the material. They survived as a
+    zero-thickness sheet over the opening, the distance rebuild treated it as a
+    real surface, and the film's outer boundary rose near every rim.
+    """
+    grid = UniformGrid3D(-0.4, 0.4, -0.4, 0.4, -0.5, 0.3, 41, 41, 41)
+    _, yy, xx = np.meshgrid(grid.z, grid.y, grid.x, indexing="ij")
+    zz = grid.substrate()
+    state = MaterialState(grid)
+    state.add_material("Si", zz)
+    state.add_material(
+        "Photoresist",
+        np.maximum(np.maximum(-zz, zz - 0.1), -(np.hypot(xx, yy) - 0.13)),
+    )
+
+    etched = selective_etch(
+        state,
+        full_exposure((grid.ny, grid.nx)),
+        0.25,
+        {"Si": 0.1, "Photoresist": 0.0},
+        directional_fraction=0.92,
+        surface_z=0.1,
+    )
+    # The membrane, stated directly: a node sitting exactly on the interface
+    # with open space underneath is not a body, and nothing may deposit on it.
+    union = np.minimum.reduce([etched.fields[name] for name in etched.priority])
+    hanging = (union[1:] == 0.0) & (union[:-1] > 0.0)
+    assert not hanging.any(), "the etch left interface nodes with nothing under them"
+
+    stripped = selective_etch(
+        etched,
+        full_exposure((grid.ny, grid.nx)),
+        0.2,
+        {"Photoresist": 0.2, "Si": 0.0},
+        directional_fraction=1.0,
+        surface_z=0.1,
+    )
+    assert not np.any(stripped.fields["Photoresist"] <= 0.0), "the strip must clear the resist"
+
+    thickness = 0.05
+    grown = deposit_material(stripped, "Al2O3", thickness)
+    film = np.minimum(grown.fields["Si"], grown.fields["Al2O3"])
+
+    iy = int(np.argmin(np.abs(grid.y)))
+    tops = []
+    for column in range(grid.nx):
+        values = film[:, iy, column]
+        inside = np.flatnonzero(values <= 0.0)
+        if not inside.size or inside.max() + 1 >= len(values):
+            continue
+        k = inside.max()
+        tops.append(
+            grid.z[k] + grid.dz * (-values[k]) / (values[k + 1] - values[k])
+        )
+    # Offsetting a flat top by the film thickness cannot exceed that thickness,
+    # anywhere. A surface pinned to the node plane used to overshoot by 0.77 of
+    # a cell at the rim.
+    assert max(tops) == pytest.approx(thickness, abs=1e-6)

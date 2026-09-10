@@ -33,6 +33,7 @@ MATERIALS = [
     MaterialDefinition("TiN", "Metal", "#c2a83b", 1.0, id="material-tin"),
     MaterialDefinition("W", "Metal", "#7c8792", 1.0, id="material-w"),
     MaterialDefinition("SiO2", "Dielectric", "#76bfd0", 0.72, id="material-sio2"),
+    MaterialDefinition("Photoresist", "Mask", "#d95c76", 0.55, id="material-pr"),
 ]
 
 
@@ -106,12 +107,47 @@ def make_sketches(array_count: int, pitch: float) -> dict[str, QuickSketch]:
 def make_recipes() -> list[Recipe]:
     return [
         Recipe(
+            "Resist Coat",
+            ProcessType.DEPOSIT,
+            tool="Spin Coater",
+            output_material="Photoresist",
+            parameters={"target": 0.15, "rate": 0.15},
+            id="demo-resist-coat",
+        ),
+        Recipe(
+            "Resist Develop",
+            ProcessType.ETCH,
+            tool="Track",
+            parameters={"target": 0.2, "directional_fraction": 1.0, "surface_z": 0.15},
+            material_responses={
+                "Photoresist": MaterialResponse("Photoresist", 0.2),
+                "Si": MaterialResponse("Si", 0.0, stop_layer=True),
+            },
+            id="demo-resist-open",
+        ),
+        Recipe(
+            # No sketch: the patterned resist is what shapes this etch, the way
+            # it does on a real tool. The mask edge is a solid, not a rule.
             "Capacitor Trench Etch",
             ProcessType.ETCH,
             tool="ICP-RIE",
-            parameters={"target": 0.42, "directional_fraction": 0.92},
-            material_responses={"Si": MaterialResponse("Si", 0.12)},
+            parameters={"target": 0.42, "directional_fraction": 0.92, "surface_z": 0.0},
+            material_responses={
+                "Si": MaterialResponse("Si", 0.12),
+                "Photoresist": MaterialResponse("Photoresist", 0.0, stop_layer=True),
+            },
             id="demo-etch",
+        ),
+        Recipe(
+            "Resist Strip",
+            ProcessType.ETCH,
+            tool="Ash",
+            parameters={"target": 0.2, "directional_fraction": 1.0, "surface_z": 0.15},
+            material_responses={
+                "Photoresist": MaterialResponse("Photoresist", 0.2),
+                "Si": MaterialResponse("Si", 0.0, stop_layer=True),
+            },
+            id="demo-resist-strip",
         ),
         Recipe(
             "Capacitor Al2O3",
@@ -184,7 +220,10 @@ def make_flow(recipes: list[Recipe]) -> FlowBranch:
     return FlowBranch(
         "main",
         [
-            ProcessStep("Etch capacitor trenches", "demo-etch", {"sketch_id": "capacitor"}, "quick_sketch"),
+            ProcessStep("Coat resist", "demo-resist-coat"),
+            ProcessStep("Develop resist", "demo-resist-open", {"sketch_id": "capacitor"}, "quick_sketch"),
+            ProcessStep("Etch capacitor trenches", "demo-etch"),
+            ProcessStep("Strip resist", "demo-resist-strip"),
             ProcessStep("Deposit capacitor dielectric", "demo-cap-oxide"),
             ProcessStep("Deposit lower electrode", "demo-cap-tin"),
             ProcessStep("Fill capacitor metal", "demo-cap-w"),
