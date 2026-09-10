@@ -28,7 +28,15 @@ def measure(state, material, center_x, section_y, half_window, depths):
         left = [x for x in roots if x < center_x]
         right = [x for x in roots if x > center_x]
         imbalance = abs(min(left)+max(right)-2*center_x)*1000 if left and right else None
-        rows.append({"z_um": depth, "roots_um": roots, "outer_half_width_imbalance_nm": imbalance})
+        paired = [
+            abs(roots[i]+roots[-1-i]-2*center_x)*1000
+            for i in range(len(roots)//2)
+        ] if len(roots) % 2 == 0 else []
+        rows.append({
+            "z_um": depth, "roots_um": roots,
+            "outer_half_width_imbalance_nm": imbalance,
+            "paired_interface_imbalances_nm_outer_to_inner": paired,
+        })
     return {"material": material, "spacing_nm": g.dx*1000, "x_center_um": center_x,
             "section_y_um": section_y, "rows": rows}
 

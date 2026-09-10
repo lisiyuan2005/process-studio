@@ -32,6 +32,27 @@ def benchmark():
                     "near_interface_field_rms_nm": float(np.sqrt(np.mean((actual[band]-exact[band])**2))*1000),
                     "elapsed_seconds": time.perf_counter()-started,
                 })
+    corners = []
+    for n in [31, 41, 61]:
+        h = .6/(n-1)
+        z, y, x = np.meshgrid(*([np.linspace(-.3, .3, n)]*3), indexing="ij")
+        q = np.hypot(x[0]-.013, y[0]+.017)-.09
+        phi = np.maximum(q[None], -z)
+        valid = q < .015
+        exact_floor = -.08-np.sqrt(.02**2-np.maximum(q[valid], 0)**2)
+        for order in [1, 2]:
+            actual, _ = evolve_hamilton_jacobi(phi, h, .02, (-.08, 0, 0), 1, order=order)
+            columns = actual[:, valid]
+            if not np.all(np.any(columns <= 0, axis=0)):
+                raise RuntimeError("missing numerical front")
+            iz = np.argmax(columns <= 0, axis=0)
+            j = np.arange(len(iz))
+            f0, f1 = columns[iz-1, j], columns[iz, j]
+            roots = -.3+(iz-1)*h-h*f0/(f1-f0)
+            corners.append({
+                "case": "mixed_prism_rounded_floor", "grid_spacing_nm": h*1000, "order": order,
+                "vertical_zero_crossing_rms_nm": float(np.sqrt(np.mean((roots-exact_floor)**2))*1000),
+            })
     phi = np.random.default_rng(82).normal(size=(23, 27, 31))
     dense, _ = evolve_hamilton_jacobi(phi, .02, .1, (.02, -.01, .03), .1, order=2)
     stats = {}
@@ -39,6 +60,7 @@ def benchmark():
     return {
         "description": "Raw signed-field error in a fixed 30 nm band about analytic circles/spheres; not fab accuracy.",
         "analytic_checks": rows,
+        "prism_corner_checks": corners,
         "synchronized_tiles": {**stats, "dense_max_abs_difference": float(np.max(abs(dense-tiled)))},
     }
 

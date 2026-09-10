@@ -1,0 +1,50 @@
+{
+  "material": "Al2O3",
+  "spacing_nm": 6.249999999999999,
+  "x_center_um": -0.315,
+  "section_y_um": 0.225,
+  "rows": [
+    {
+      "z_um": -0.025,
+      "roots_um": [
+        -0.46859999999999996,
+        -0.4370605349970127,
+        -0.20607727336534964,
+        -0.16140000000000002
+      ],
+      "outer_half_width_imbalance_nm": 0.0,
+      "paired_interface_imbalances_nm_outer_to_inner": [
+        0.0,
+        13.137808362362335
+      ]
+    },
+    {
+      "z_um": -0.05,
+      "roots_um": [
+        -0.46859999999999996,
+        -0.4435999844164487,
+        -0.18640005185948907,
+        -0.16140000000000002
+      ],
+      "outer_half_width_imbalance_nm": 0.0,
+      "paired_interface_imbalances_nm_outer_to_inner": [
+        0.0,
+        3.627593780919369e-05
+      ]
+    },
+    {
+      "z_um": -0.1,
+      "roots_um": [
+        -0.46859999999999996,
+        -0.4435999999609761,
+        -0.18640000707433402,
+        -0.16140000000000002
+      ],
+      "outer_half_width_imbalance_nm": 0.0,
+      "paired_interface_imbalances_nm_outer_to_inner": [
+        0.0,
+        7.0353101122577755e-06
+      ]
+    }
+  ]
+}

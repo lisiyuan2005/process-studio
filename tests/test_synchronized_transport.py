@@ -109,3 +109,27 @@ def test_zero_speed_is_exact_identity():
     actual, steps = evolve_hamilton_jacobi(phi, .1, 0, (0, 0), 1, tile_shape=4)
     assert steps == 0
     np.testing.assert_array_equal(actual, phi)
+
+
+@pytest.mark.parametrize("n", [31, 41, 61])
+def test_mixed_motion_of_prism_corner_against_analytic_front(n):
+    # Constant translation + isotropic growth of an infinite circular prism
+    # has an analytic rounded floor. This exercises a nonsmooth initial field.
+    h = .6/(n-1)
+    z, y, x = np.meshgrid(*([np.linspace(-.3, .3, n)]*3), indexing="ij")
+    q = np.hypot(x[0]-.013, y[0]+.017)-.09
+    phi = np.maximum(q[None], -z)
+    valid = q < .015
+    exact_floor = -.08-np.sqrt(.02**2-np.maximum(q[valid], 0)**2)
+    errors = []
+    for order in [1, 2]:
+        actual, _ = evolve_hamilton_jacobi(phi, h, .02, (-.08, 0, 0), 1, order=order)
+        columns = actual[:, valid]
+        assert np.all(np.any(columns <= 0, axis=0))
+        iz = np.argmax(columns <= 0, axis=0)
+        assert np.all(iz > 0)
+        j = np.arange(len(iz))
+        f0, f1 = columns[iz-1, j], columns[iz, j]
+        roots = -.3+(iz-1)*h-h*f0/(f1-f0)
+        errors.append(np.sqrt(np.mean((roots-exact_floor)**2)))
+    assert errors[1] < .6*errors[0]
