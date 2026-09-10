@@ -1,5 +1,11 @@
 """Level-set geometry kernel."""
 
+from .adaptive import (
+    AdaptiveMaterialState,
+    AdaptivePatch,
+    RefinementBox,
+    tiled_refinement_boxes,
+)
 from .grid import UniformGrid2D, UniformGrid3D
 from .material_state import MaterialState, signed_distance_from_inside
 from .multimaterial import (
@@ -19,6 +25,10 @@ from .level_set import (
 from .processes import conformal_deposition, directional_trench_etch, mixed_trench_etch
 
 __all__ = [
+    "AdaptiveMaterialState",
+    "AdaptivePatch",
+    "RefinementBox",
+    "tiled_refinement_boxes",
     "UniformGrid2D",
     "UniformGrid3D",
     "MaterialState",

@@ -30,6 +30,7 @@ macOS `.app` 必须在 macOS 上构建，仓库中的 `Desktop builds` GitHub Ac
 ## 已实现的 MVP
 
 - 多材料 3D 状态、确定性的材料覆盖优先级与独立显示/隐藏
+- 两级块状自适应网格：全局粗网格配合局部 Level Set 细网格，细化块会重新执行工艺而非插值放大
 - Level Set 干法刻蚀、方向性/各向同性混合刻蚀、简化湿法刻蚀
 - 等厚保形沉积、方向性图形沉积/填充、理想平面 CMP
 - Recipe 中定义材料速率、选择比和 stop layer；步骤可覆盖 Recipe 字段
@@ -83,14 +84,18 @@ python examples\build_1t1c_demo.py --output-dir ..\process-studio-1t1c-demo
 
 示例包含 9 个步骤：电容沟槽刻蚀、Al2O3/TiN 保形沉积、W 填充、CMP、层间介质、垂直沟道、栅介质和 TiN 字线。输出中包含可直接打开的工程数据库、9 个步骤快照、Quick Sketch、最终材料状态、日志、Excel Recipe 模板和总览图。
 
-从保存的 Level Set 状态生成无体素降采样的平滑高精度曲面图：
+从保存的 Level Set 状态重新运行 4× 局部细化，并生成统一材料标签的自适应网格曲面图：
 
 ```powershell
 python -m pip install -e ".[render]"
-python examples\render_1t1c_accurate.py `
+python examples\render_1t1c_adaptive.py `
   ..\process-studio-1t1c-demo\final-state.npz `
-  --output docs\assets\1t1c-demo.png
+  --adaptive-dir ..\process-studio-1t1c-demo\adaptive-state `
+  --output docs\assets\1t1c-demo.png `
+  --factor 4
 ```
+
+该示例的全局网格间距为 25 nm，圆孔、沟道和栅环所在的四个单元块使用 6.25 nm 网格；约 275 万个局部节点由同一套 9 步 Recipe 重新计算。截面与 Top View 从一个统一的材料标签场合成，因此不同材料的独立等值面不会再产生假的白色缝隙。
 
 ## 验证
 
@@ -105,7 +110,8 @@ python -m process_studio --smoke-test --workspace work\ui-smoke
 
 - 湿法刻蚀目前是各向同性近似，不含晶向与晶面速率。
 - CMP 是理想平面截断，不含 dishing、erosion、pattern-density 或 pad/slurry 模型。
-- GDS 会栅格化到均匀笛卡尔网格；最小特征应至少覆盖 3–5 个网格单元。
+- GDS/Quick Sketch 会栅格化到笛卡尔网格；重要的最小特征应在局部细化后至少覆盖约 3–5 个网格单元。
+- 当前自适应实现是两级、特征区域驱动的块状 AMR，尚不是随界面每一步自动移动和重新分块的动态八叉树 AMR。
 - 方向性通量沿垂直方向，不含角分布、shadowing、microloading、mask erosion 或 sidewall passivation。
 - 多材料选择性刻蚀采用逐材料 Level Set 响应，适合流程可视化；复杂界面反应仍需后续物理模型。
 - 当前是单机单用户桌面原型；按需求未加入多人协作、工艺报告和演化动画。
