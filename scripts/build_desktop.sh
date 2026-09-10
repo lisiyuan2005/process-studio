@@ -25,6 +25,10 @@ echo '{"kind":"request","id":1,"method":"describe"}' | "$WORKER" | grep -q '"pro
 cd desktop
 npm ci
 npm run test
-npm run tauri build
+if [ "$(uname)" = "Darwin" ]; then
+  npm run tauri build -- --bundles app
+else
+  npm run tauri build -- --no-bundle
+fi
 
-echo "Built desktop/src-tauri/target/release/bundle"
+echo "Built desktop/src-tauri/target/release"

@@ -27,7 +27,7 @@ if ($LASTEXITCODE -ne 0 -or -not ($Response -match '"protocolVersion"')) {
 Set-Location (Join-Path $ProjectRoot "desktop")
 npm ci
 npm run test
-npm run tauri build
+npm run tauri build -- --no-bundle
 if ($LASTEXITCODE -ne 0) { throw "Tauri failed to build the desktop shell." }
 
-Write-Host "Built desktop/src-tauri/target/release/bundle"
+Write-Host "Built desktop/src-tauri/target/release/process-studio-desktop.exe"

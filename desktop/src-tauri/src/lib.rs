@@ -1,6 +1,6 @@
 use serde_json::{json, Map, Value};
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use tauri::{AppHandle, Emitter, Manager};
@@ -79,26 +79,47 @@ fn development_worker_command() -> Command {
     command
 }
 
+const WORKER_RELATIVE_PATH: &str = if cfg!(target_os = "windows") {
+    "resources/worker/process-studio-worker.exe"
+} else {
+    "resources/worker/process-studio-worker"
+};
+
+/// Where a packaged worker can live, in the order they are tried.
+///
+/// The platform resource directory is the installed location: `Contents/
+/// Resources` in a .app, `/usr/lib/<product>` for a Linux package. An
+/// unpacked build instead keeps the worker beside the executable, which is
+/// also where the Windows build looks first, so both layouts run.
+fn packaged_worker_candidates(app: &AppHandle) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(resources) = app.path().resource_dir() {
+        candidates.push(resources.join(WORKER_RELATIVE_PATH));
+    }
+    if let Some(directory) = std::env::current_exe().ok().and_then(|path| {
+        path.parent().map(Path::to_path_buf)
+    }) {
+        candidates.push(directory.join(WORKER_RELATIVE_PATH));
+    }
+    candidates
+}
+
 fn packaged_worker_command(app: &AppHandle) -> Result<Command, String> {
     if let Ok(explicit) = std::env::var("PROCESS_STUDIO_WORKER") {
         return Ok(Command::new(explicit));
     }
-    let resource_directory = app
-        .path()
-        .resource_dir()
-        .map_err(|error| format!("Cannot resolve application resources: {error}"))?;
-    let executable = if cfg!(target_os = "windows") {
-        resource_directory.join("resources/worker/process-studio-worker.exe")
-    } else {
-        resource_directory.join("resources/worker/process-studio-worker")
-    };
-    if !executable.is_file() {
-        return Err(format!(
-            "The packaged process worker is missing at {}",
-            executable.display()
-        ));
+    let candidates = packaged_worker_candidates(app);
+    if let Some(executable) = candidates.iter().find(|path| path.is_file()) {
+        return Ok(Command::new(executable));
     }
-    Ok(Command::new(executable))
+    Err(format!(
+        "The packaged process worker was not found. Looked in: {}",
+        candidates
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
 }
 
 fn worker_command(app: &AppHandle) -> Result<Command, String> {
