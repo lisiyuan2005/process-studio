@@ -31,15 +31,14 @@ process-studio
 
 ### 桌面安装产物
 
-发布版本就是 Tauri 外壳。`Desktop builds` GitHub Actions 在推送 `v*` tag 或手动触发时构建，产出：
+发布版本就是 Tauri 外壳，只提供应用本身，不做安装包和 DMG。`Desktop builds` GitHub Actions 在推送 `v*` tag 或手动触发时构建，产出：
 
 | 产物 | 内容 |
 | --- | --- |
-| `ProcessStudio-Windows-installer` | NSIS 安装包和 MSI |
-| `ProcessStudio-Windows-portable` | 免安装 zip，`ProcessStudio.exe` 与 `resources/` 同级 |
-| `ProcessStudio-macOS` | `.app` 压缩包和 DMG |
+| `ProcessStudio-Windows` | `ProcessStudio.exe` 与同级的 `resources/` |
+| `ProcessStudio-macOS` | `Process Studio.app` 的压缩包 |
 
-免安装 zip 必须整包解压：exe 会在自己同级的 `resources/worker` 下找 worker，单独拷出 exe 无法运行。
+Windows 产物必须整个目录一起用：exe 会在自己同级的 `resources/worker` 下找 worker，单独拷出 exe 无法运行。
 
 本地构建：
 
