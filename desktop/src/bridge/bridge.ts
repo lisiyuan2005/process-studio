@@ -1,6 +1,6 @@
 import type {
   GdsImportResult,
-  GridDefinition,
+  GridPlan,
   QuickSketch,
   RunResult,
   SectionDocument,
@@ -30,7 +30,8 @@ export interface DesktopBridge {
   createWorkspace(name: string): Promise<WorkspaceDocument | null>;
   openWorkspace(): Promise<WorkspaceDocument | null>;
   saveDocument(document: WorkspaceDocument): Promise<WorkspaceDocument>;
-  setGrid(root: string, grid: GridDefinition): Promise<WorkspaceDocument>;
+  planGrid(root: string, targetSpacingNm: number): Promise<GridPlan>;
+  setGrid(root: string, targetSpacingNm: number): Promise<WorkspaceDocument>;
   saveSketch(root: string, sketch: QuickSketch): Promise<WorkspaceDocument>;
   runFlow(root: string, options: RunOptions): Promise<RunResult>;
   getSurfaces(root: string, request: ViewRequest): Promise<SurfaceDocument>;

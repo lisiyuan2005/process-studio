@@ -7,6 +7,10 @@ from math import prod
 
 from .kernel.grid import UniformGrid3D
 
+# A desktop safety ceiling, not a physical limit: one double-precision field
+# per material plus solver temporaries has to fit in memory.
+MAXIMUM_NODES = 20_000_000
+
 
 @dataclass(frozen=True)
 class GridEstimate:

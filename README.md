@@ -8,26 +8,20 @@
 
 ## 一分钟启动
 
-仓库现在有两个桌面前端，读写同一个工作目录，可以随时来回切换。
-
-**Tauri + React 外壳**（新，与 ProcessFlow-Emulator 同一套界面语言）：
+桌面应用是 Tauri + React 外壳，工艺内核跑在一个 Python worker 进程里。开发运行：
 
 ```bash
+python -m pip install -e ".[render]"
 cd desktop
 npm install
 npm run tauri dev
 ```
 
-**Tkinter 界面**（原有）：Windows 下双击 `启动 Process Studio.bat`，或者
+不想装开发环境就直接用打包产物，见下一节。工程数据保存在工作目录下的 SQLite 文件及快照目录中，不需要安装或维护 SQL 服务。
 
-```powershell
-python -m pip install -e .
-process-studio
-```
+前端只负责界面，不做任何数值计算。三列布局是流程、视口、参数：视口有 3D 表面、任意位置截面和俯视图；顶栏可以改网格、导入 GDS、编辑材料与 Recipe 库。每一步的结果按摘要缓存，改哪一步就只重算那一步之后的部分。协议、缓存规则和打包见[桌面前端说明](docs/DESKTOP_SHELL.md)。
 
-首次启动若缺少 Python 依赖，`.bat` 启动器会自动安装本项目及依赖。打开已经计算好的 2×2 1T1C 示例，可双击 `打开 1T1C 示例.bat`。工程数据保存在工作目录下的 SQLite 文件及快照目录中，不需要安装或维护 SQL 服务。
-
-新外壳把工艺内核放在一个 JSON-line RPC worker 里，前端只负责界面。三列布局是流程、视口、参数：视口有 3D 表面、任意位置截面和俯视图；顶栏可以改网格、导入 GDS、编辑材料与 Recipe 库。每一步的结果按摘要缓存，改哪一步就只重算那一步之后的部分。协议、缓存规则和打包见[桌面前端说明](docs/DESKTOP_SHELL.md)。
+网格在顶栏的间距按钮里改：填目标间距（nm）或选 Draft 25 nm、Standard 12.5 nm、Accurate 6.25 nm 预设，worker 会找出能整除三个方向跨度的最近格子，并实时给出节点数、状态体积和运行所需内存，超过 2000 万节点会拒绝。改网格会丢弃全部已存结果，流程从裸片按新网格重放，不插值旧结果。
 
 ### 桌面安装产物
 
@@ -52,7 +46,7 @@ Windows 产物必须整个目录一起用：exe 会在自己同级的 `resources
 
 脚本先用 PyInstaller 把 worker 打成独立可执行文件，跑一次 `describe` 冒烟测试，再执行 `npm run tauri build`。
 
-原来的 Tkinter EXE 不再由 CI 构建，`./scripts/build_windows.ps1` 仍可在本地生成。macOS 产物未签名或 notarize，首次打开可能需要在 Finder 中右键选择 **Open**。
+macOS 产物未签名或 notarize，首次打开可能需要在 Finder 中右键选择 **Open**。
 
 ## 已实现的 MVP
 
@@ -133,9 +127,9 @@ python examples\render_1t1c_adaptive.py `
 
 ## 验证
 
-```powershell
+```bash
 python -m pytest -q
-python -m process_studio --smoke-test --workspace work\ui-smoke
+cd desktop && npm run test
 ```
 
 数值验证覆盖平面前沿、圆形沉积/刻蚀、Level Set 重初始化、3D 沟槽、干/湿混合刻蚀、保形膜厚与 pinch-off、多材料优先级、选择性刻蚀、CMP、Quick Sketch、GDS、Excel、SQLite 分支与快照以及完整 Process Engine。

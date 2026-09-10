@@ -4,7 +4,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import type { DesktopBridge, RunOptions, ViewRequest } from "./bridge";
 import type {
   GdsImportResult,
-  GridDefinition,
+  GridPlan,
   QuickSketch,
   RunResult,
   SectionDocument,
@@ -60,8 +60,12 @@ export class TauriBridge implements DesktopBridge {
     return call<WorkspaceDocument>("save_document", { root: document.root, document });
   }
 
-  setGrid(root: string, grid: GridDefinition): Promise<WorkspaceDocument> {
-    return call<WorkspaceDocument>("set_grid", { root, grid });
+  planGrid(root: string, targetSpacingNm: number): Promise<GridPlan> {
+    return call<GridPlan>("plan_grid", { root, targetSpacingNm });
+  }
+
+  setGrid(root: string, targetSpacingNm: number): Promise<WorkspaceDocument> {
+    return call<WorkspaceDocument>("set_grid", { root, targetSpacingNm });
   }
 
   saveSketch(root: string, sketch: QuickSketch): Promise<WorkspaceDocument> {

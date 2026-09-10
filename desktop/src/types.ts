@@ -19,6 +19,24 @@ export interface GridDefinition {
   nodeCount: number;
 }
 
+export interface GridEstimate {
+  spacingNm: number;
+  shape: [number, number, number];
+  nodeCount: number;
+  /** Bytes for the saved state: one double-precision field per material. */
+  stateBytes: number;
+  /** Bytes to run comfortably, including solver temporaries. */
+  recommendedBytes: number;
+}
+
+export interface GridPlan {
+  grid: GridDefinition;
+  estimate: GridEstimate;
+  maximumNodes: number;
+  withinLimit: boolean;
+  unchanged: boolean;
+}
+
 export interface MaterialDefinition {
   id: string;
   name: string;
@@ -193,6 +211,8 @@ export interface WorkerCapabilities {
     solverOrders: number[];
     refinementFactors: number[];
     defaultMaxNodes: number;
+    maximumNodes: number;
+    spacingPresetsNm: number[];
   };
   limits: { interpolationIsDisplayOnly: boolean; calibrated: boolean };
 }

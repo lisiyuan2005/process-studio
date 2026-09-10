@@ -1,6 +1,6 @@
 # 桌面前端：Tauri + React 外壳
 
-新的桌面前端与 [ProcessFlow-Emulator](https://github.com/lisiyuan2005/ProcessFlow-Emulator) 使用同一套架构和视觉语言：Tauri 外壳、React 前端、Python worker，三者通过 JSON-line RPC 通信。原有的 Tkinter 界面保留，两者读写同一个工作目录。
+桌面前端与 [ProcessFlow-Emulator](https://github.com/lisiyuan2005/ProcessFlow-Emulator) 使用同一套架构和视觉语言：Tauri 外壳、React 前端、Python worker，三者通过 JSON-line RPC 通信。这是唯一的界面；原先的 Tkinter 界面已删除。
 
 ## 分层
 
@@ -11,7 +11,7 @@ src/process_studio/worker   Python worker：RPC 分发、执行、几何导出
 src/process_studio/kernel   Level Set 内核，未改动
 ```
 
-前端不做任何数值计算，也不保存自己的工程格式。工程仍然是 `process_studio.sqlite3` 加快照目录，Tkinter 界面打开的是同一份数据。
+前端不做任何数值计算，也不保存自己的工程格式。工程仍然是 `process_studio.sqlite3` 加快照目录，格式与旧版本一致。
 
 ## 工作目录
 
@@ -33,7 +33,8 @@ src/process_studio/kernel   Level Set 内核，未改动
 | `ping` / `describe` | 版本与能力（求解器阶数、可用插值上限、是否支持表面提取） |
 | `create_workspace` / `open_workspace` | 建立或打开工作目录，返回完整 document |
 | `save_document` | 写回工程、分支、步骤、Recipe、材料 |
-| `set_grid` | 更换网格，同时作废全部已存结果 |
+| `plan_grid` | 给出目标间距对应的格子形状、节点数与内存估计 |
+| `set_grid` | 按目标间距或显式格子更换网格，同时作废全部已存结果 |
 | `save_sketch` | 写入 Quick Sketch |
 | `run_flow` | 执行分支，可指定 `throughStepId` 或 `force` |
 | `get_surfaces` | 每种材料的 marching cubes 三角面，base64 传输 |
@@ -58,7 +59,7 @@ worker 为每一步计算一个链式摘要，内容包括该步自带的工艺�
 
 界面上有两处，含义完全不同：
 
-- **Simulation grid**（顶栏网格按钮）：改的是真实计算精度。对话框实时显示 x/y/z 间距、节点总数和每个材料场的内存占用，并拒绝三向间距不等的网格。应用后会丢弃全部已存结果。
+- **Simulation grid**（顶栏间距按钮）：改的是真实计算精度。填目标间距（nm）或选预设，worker 用 `grid_for_target_spacing` 搜索能整除三个方向跨度的最近格子，因此三向间距永远相等，不需要手填 nx/ny/nz。对话框实时显示提议的格子形状、节点数、状态体积和运行所需内存，超过 `MAXIMUM_NODES`（2000 万）会拒绝。应用后会丢弃全部已存结果。
 - **Sampling**（视口底栏）：只影响显示。它对 level-set 场做线性插值后再提取零等值面或标签，不改变内核算出的结果。俯视图不提供该选项，因为它取的是每列最上层的标签，插值会凭空造出覆盖。
 
 刻蚀步骤的求解器阶数和分块大小都是按需参数，分别写入该 Step 的 `solver_order` 与 `tile_shape`。分块只影响内存占用，不影响结果。
@@ -92,11 +93,10 @@ npm run tauri dev      # 需要本机能 import process_studio
 
 worker 的查找顺序是先平台资源目录（`.app` 里的 `Contents/Resources`、Linux 包的 `/usr/lib/<产品名>`），再退回可执行文件所在目录。免安装布局靠的是第二条，`PROCESS_STUDIO_WORKER` 仍可覆盖两者。
 
-原有的 Tkinter EXE 构建（`scripts/build_windows.ps1`）已从 CI 移除，脚本保留，可在本地构建。
 
 ## 尚未实现
 
 - 前端还没有图形化的 Quick Sketch 编辑器，只能选择已有 sketch；`save_sketch` 接口已经就绪。
 - 细化执行（`run_refined_branch`）还没有接到界面，仍需从 API 或示例脚本调用。
-- 分支创建、重命名、删除只在 Tkinter 界面里有，前端目前只能切换分支。
+- 分支只能切换，创建、重命名和删除还没有界面入口；`storage.create_branch` 已经就绪。
 - 前端不显示 CMP dishing、晶向湿蚀等未实现的物理，因为内核本身没有实现它们。

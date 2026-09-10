@@ -2,7 +2,7 @@ import type { DesktopBridge, RunOptions, ViewRequest } from "./bridge";
 import type {
   GdsImportResult,
   ProcessStep,
-  GridDefinition,
+  GridPlan,
   QuickSketch,
   RunResult,
   SectionDocument,
@@ -42,6 +42,8 @@ export class BrowserBridge implements DesktopBridge {
         solverOrders: [1, 2],
         refinementFactors: [2, 4, 8],
         defaultMaxNodes: 20_000_000,
+        maximumNodes: 20_000_000,
+        spacingPresetsNm: [25, 12.5, 6.25],
       },
       limits: { interpolationIsDisplayOnly: true, calibrated: false },
     };
@@ -61,12 +63,14 @@ export class BrowserBridge implements DesktopBridge {
     return document;
   }
 
-  async setGrid(_root: string, grid: GridDefinition): Promise<WorkspaceDocument> {
-    this.document = {
-      ...this.document,
-      project: { ...this.document.project, grid },
-    };
-    return this.document;
+  async planGrid(): Promise<GridPlan> {
+    // Matching a spacing to the project bounds is the kernel's search, not a
+    // rounding rule the preview could fake.
+    throw new Error(NO_KERNEL);
+  }
+
+  async setGrid(): Promise<WorkspaceDocument> {
+    throw new Error(NO_KERNEL);
   }
 
   async saveSketch(_root: string, sketch: QuickSketch): Promise<WorkspaceDocument> {

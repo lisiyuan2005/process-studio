@@ -45,7 +45,6 @@ import {
   upsertRecipe,
 } from "./domain/project";
 import type {
-  GridDefinition,
   ParameterValue,
   SectionDocument,
   SurfaceDocument,
@@ -309,23 +308,32 @@ export default function App() {
     }
   };
 
-  const handleApplyGrid = async (grid: GridDefinition) => {
+  const planGrid = useCallback(
+    (targetSpacingNm: number) => {
+      if (!document) return Promise.reject(new Error("No workspace is open."));
+      return bridge.planGrid(document.root, targetSpacingNm);
+    },
+    [document?.root],
+  );
+
+  const handleApplyGrid = async (targetSpacingNm: number) => {
     if (!document || busy) return;
     setBusy(true);
     try {
       const saved = await bridge.saveDocument(document);
-      const updated = await bridge.setGrid(saved.root, grid);
+      const updated = await bridge.setGrid(saved.root, targetSpacingNm);
       skipNextAutosave.current = true;
       setDocumentState(updated);
       setSaveState("saved");
       setShowGrid(false);
+      const grid = updated.project.grid;
       setEvents((current) => [
         ...current,
         {
           kind: "log",
           message: `Grid set to ${grid.nx}×${grid.ny}×${grid.nz} (${(
             grid.spacingUm * 1000
-          ).toFixed(2)} nm). Stored results were discarded.`,
+          ).toFixed(3)} nm). Stored results were discarded.`,
         },
       ]);
     } catch (reason) {
@@ -608,7 +616,10 @@ export default function App() {
       {showGrid && (
         <GridEditor
           grid={document.project.grid}
+          presetsNm={capabilities?.numerics.spacingPresetsNm ?? [25, 12.5, 6.25]}
+          maximumNodes={capabilities?.numerics.maximumNodes ?? 20_000_000}
           busy={busy}
+          onPlan={planGrid}
           onApply={handleApplyGrid}
           onClose={() => setShowGrid(false)}
         />

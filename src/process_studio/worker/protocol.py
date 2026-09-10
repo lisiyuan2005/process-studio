@@ -19,12 +19,14 @@ from ..kernel.grid import UniformGrid3D
 from ..layout.gds import available_gds_layers
 from ..libraries import RecipeLibrary
 from ..models import ProcessType
+from ..simulation_settings import MAXIMUM_NODES, estimate_grid, grid_for_target_spacing
 from .errors import InvalidRequest, WorkerError, WorkspaceError
 from .render import MAXIMUM_INTERPOLATION, MESHES_AVAILABLE, material_surfaces, section_image, top_view_image
 from .runner import apply_grid, build_document, run_flow, state_for_step
 from .serialize import (
     branch_from_json,
     grid_from_json,
+    grid_to_json,
     material_from_json,
     project_from_json,
     recipe_from_json,
@@ -70,7 +72,9 @@ def _describe() -> dict[str, Any]:
         "numerics": {
             "solverOrders": [1, 2],
             "refinementFactors": [2, 4, 8],
-            "defaultMaxNodes": 20_000_000,
+            "defaultMaxNodes": MAXIMUM_NODES,
+            "maximumNodes": MAXIMUM_NODES,
+            "spacingPresetsNm": [25.0, 12.5, 6.25],
         },
         "limits": {
             "interpolationIsDisplayOnly": True,
@@ -148,11 +152,67 @@ def _persist_document(parameters: Mapping[str, Any]) -> dict[str, Any]:
     return build_document(root, repository, load_project(repository, project.id))
 
 
-def _set_grid(parameters: Mapping[str, Any]) -> dict[str, Any]:
+def _target_spacing(parameters: Mapping[str, Any]) -> float:
+    value = parameters.get("targetSpacingNm")
+    try:
+        spacing = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError) as error:
+        raise InvalidRequest("targetSpacingNm must be a number") from error
+    if not 0.1 <= spacing <= 1000.0:
+        raise InvalidRequest("targetSpacingNm must be between 0.1 and 1000")
+    return spacing
+
+
+def _plan_grid(parameters: Mapping[str, Any]) -> dict[str, Any]:
+    """Report the grid a target spacing would produce, and what it would cost.
+
+    The spacing has to divide every project extent, so the requested value is
+    matched to the nearest lattice that does rather than rounded per axis.
+    """
     root = _root(parameters)
-    grid = grid_from_json(parameters.get("grid", {}))
     repository = open_repository(root)
     project = load_project(repository, parameters.get("projectId"))
+    current = UniformGrid3D(**project.grid)
+    try:
+        proposed = grid_for_target_spacing(current, _target_spacing(parameters))
+    except ValueError as error:
+        raise InvalidRequest(str(error)) from error
+    estimate = estimate_grid(proposed, len(repository.load_materials()))
+    return {
+        "grid": grid_to_json(proposed),
+        "estimate": {
+            "spacingNm": estimate.spacing_nm,
+            "shape": list(estimate.shape),
+            "nodeCount": estimate.node_count,
+            "stateBytes": estimate.state_bytes,
+            "recommendedBytes": estimate.recommended_bytes,
+        },
+        "maximumNodes": MAXIMUM_NODES,
+        "withinLimit": estimate.node_count <= MAXIMUM_NODES,
+        "unchanged": proposed == current,
+    }
+
+
+def _set_grid(parameters: Mapping[str, Any]) -> dict[str, Any]:
+    """Apply a grid by target spacing, or by an explicit lattice."""
+    root = _root(parameters)
+    repository = open_repository(root)
+    project = load_project(repository, parameters.get("projectId"))
+    if parameters.get("targetSpacingNm") is not None:
+        try:
+            grid = grid_for_target_spacing(
+                UniformGrid3D(**project.grid), _target_spacing(parameters)
+            )
+        except ValueError as error:
+            raise InvalidRequest(str(error)) from error
+    else:
+        grid = grid_from_json(parameters.get("grid", {}))
+    node_count = grid.nx * grid.ny * grid.nz
+    if node_count > MAXIMUM_NODES:
+        raise InvalidRequest(
+            f"That grid needs {node_count:,} nodes; the desktop ceiling is "
+            f"{MAXIMUM_NODES:,}. Use a coarser spacing or smaller project bounds."
+        )
     apply_grid(repository, project, grid)
     return build_document(root, repository, project)
 
@@ -261,6 +321,8 @@ def dispatch(request: Mapping[str, Any], output: IO[str]) -> Any:
         return _open(parameters)
     if method == "save_document":
         return _persist_document(parameters)
+    if method == "plan_grid":
+        return _plan_grid(parameters)
     if method == "set_grid":
         return _set_grid(parameters)
     if method == "save_sketch":

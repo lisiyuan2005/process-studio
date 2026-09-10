@@ -1,8 +1,8 @@
 """Workspace discovery, sketch resolution and step cache bookkeeping.
 
 A workspace is a directory holding ``process_studio.sqlite3``, its snapshot
-directory and the Quick Sketch files. The Tkinter shell already uses this
-layout, so both front ends open the same projects.
+directory and the Quick Sketch files. The layout is unchanged from earlier
+versions, so existing workspaces open as they are.
 """
 
 from __future__ import annotations

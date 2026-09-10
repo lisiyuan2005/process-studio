@@ -6,8 +6,8 @@ on:
     tags:
       - "v*"
 
-# The Tauri shell is the shipping desktop application. The Tkinter EXE is no
-# longer built here; scripts/build_windows.ps1 still builds it locally.
+# The Tauri shell is the desktop application; the artifacts are the
+# executable and the .app, with no installer or disk image.
 jobs:
   windows:
     runs-on: windows-latest

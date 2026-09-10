@@ -1,79 +1,78 @@
-import { TriangleAlert, X } from "lucide-react";
-import { useState } from "react";
-import type { GridDefinition } from "../types";
+import { LoaderCircle, TriangleAlert, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import type { GridDefinition, GridPlan } from "../types";
 
 interface GridEditorProps {
   grid: GridDefinition;
+  presetsNm: number[];
+  maximumNodes: number;
   busy: boolean;
-  onApply: (grid: GridDefinition) => void;
+  onPlan: (targetSpacingNm: number) => Promise<GridPlan>;
+  onApply: (targetSpacingNm: number) => void;
   onClose: () => void;
 }
 
-type Editable = Omit<GridDefinition, "spacingUm" | "nodeCount">;
+const PRESET_LABELS: Record<number, string> = {
+  25: "Draft",
+  12.5: "Standard",
+  6.25: "Accurate",
+};
 
-const BOUNDS: Array<[keyof Editable, string]> = [
-  ["xMin", "x min"],
-  ["xMax", "x max"],
-  ["yMin", "y min"],
-  ["yMax", "y max"],
-  ["zMin", "z min"],
-  ["zMax", "z max"],
-];
-
-const COUNTS: Array<[keyof Editable, string]> = [
-  ["nx", "nx"],
-  ["ny", "ny"],
-  ["nz", "nz"],
-];
-
-function spacing(value: Editable) {
-  return {
-    dx: (value.xMax - value.xMin) / Math.max(1, value.nx - 1),
-    dy: (value.yMax - value.yMin) / Math.max(1, value.ny - 1),
-    dz: (value.zMax - value.zMin) / Math.max(1, value.nz - 1),
-  };
+function gigabytes(bytes: number) {
+  return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
 }
 
-export function GridEditor({ grid, busy, onApply, onClose }: GridEditorProps) {
-  const [draft, setDraft] = useState<Editable>({
-    xMin: grid.xMin,
-    xMax: grid.xMax,
-    yMin: grid.yMin,
-    yMax: grid.yMax,
-    zMin: grid.zMin,
-    zMax: grid.zMax,
-    nx: grid.nx,
-    ny: grid.ny,
-    nz: grid.nz,
-  });
+export function GridEditor({
+  grid,
+  presetsNm,
+  maximumNodes,
+  busy,
+  onPlan,
+  onApply,
+  onClose,
+}: GridEditorProps) {
+  const currentNm = grid.spacingUm * 1000;
+  const [spacing, setSpacing] = useState(String(Number(currentNm.toFixed(4))));
+  const [plan, setPlan] = useState<GridPlan>();
+  const [planning, setPlanning] = useState(false);
+  const [error, setError] = useState<string>();
 
-  const { dx, dy, dz } = spacing(draft);
-  const nodes = draft.nx * draft.ny * draft.nz;
-  const equalSpacing =
-    Math.abs(dx - dy) < 1e-9 && Math.abs(dx - dz) < 1e-9 && Number.isFinite(dx) && dx > 0;
-  const validCounts = draft.nx >= 3 && draft.ny >= 3 && draft.nz >= 3;
-  const validBounds = draft.xMax > draft.xMin && draft.yMax > draft.yMin && draft.zMax > draft.zMin;
-  const valid = equalSpacing && validCounts && validBounds;
+  // The spacing has to divide every project extent, so the worker searches for
+  // the nearest lattice that does. Ask it on every edit instead of guessing.
+  useEffect(() => {
+    const value = Number(spacing);
+    if (!Number.isFinite(value) || value <= 0) {
+      setPlan(undefined);
+      setError("Enter a spacing in nanometres.");
+      return;
+    }
+    let cancelled = false;
+    const handle = window.setTimeout(async () => {
+      setPlanning(true);
+      try {
+        const result = await onPlan(value);
+        if (cancelled) return;
+        setPlan(result);
+        setError(undefined);
+      } catch (reason) {
+        if (cancelled) return;
+        setPlan(undefined);
+        setError(reason instanceof Error ? reason.message : String(reason));
+      } finally {
+        if (!cancelled) setPlanning(false);
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [spacing, onPlan]);
 
-  const field = (key: keyof Editable, label: string, integer: boolean) => (
-    <label className="field-row" key={key}>
-      <span>{label}</span>
-      <input
-        type="number"
-        step={integer ? 1 : 0.01}
-        value={draft[key]}
-        onChange={(event) => {
-          const value = Number(event.target.value);
-          if (Number.isFinite(value)) {
-            setDraft({ ...draft, [key]: integer ? Math.round(value) : value });
-          }
-        }}
-      />
-    </label>
-  );
+  const estimate = plan?.estimate;
+  const applicable = !!plan && plan.withinLimit && !plan.unchanged && !busy;
 
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Grid">
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Simulation grid">
       <div className="modal-card grid-modal">
         <header className="modal-header">
           <div>
@@ -86,68 +85,99 @@ export function GridEditor({ grid, busy, onApply, onClose }: GridEditorProps) {
         </header>
 
         <div className="modal-body">
-          <span className="section-label">DOMAIN (µm)</span>
-          <div className="grid-grid">{BOUNDS.map(([key, label]) => field(key, label, false))}</div>
-          <span className="section-label" style={{ marginTop: 16 }}>
-            NODES
-          </span>
-          <div className="grid-grid">{COUNTS.map(([key, label]) => field(key, label, true))}</div>
+          <span className="section-label">TARGET SPACING</span>
+          <div className="chip-row">
+            {presetsNm.map((preset) => (
+              <button
+                key={preset}
+                type="button"
+                className={Number(spacing) === preset ? "active" : ""}
+                onClick={() => setSpacing(String(preset))}
+              >
+                {PRESET_LABELS[preset] ?? "Preset"} — {preset} nm
+              </button>
+            ))}
+          </div>
+
+          <label className="field-row">
+            <span>Spacing</span>
+            <span className="number-input-wrap">
+              <input
+                autoFocus
+                type="text"
+                inputMode="decimal"
+                value={spacing}
+                onChange={(event) => setSpacing(event.target.value)}
+              />
+              <span>nm</span>
+            </span>
+            <small>
+              Project bounds are preserved, so the closest spacing that divides every extent is
+              used. This is the solver grid, not image resolution.
+            </small>
+          </label>
 
           <dl className="grid-summary">
-            <dt>Spacing x / y / z</dt>
+            <dt>Current</dt>
             <dd>
-              {(dx * 1000).toFixed(2)} / {(dy * 1000).toFixed(2)} / {(dz * 1000).toFixed(2)} nm
+              {currentNm.toFixed(3)} nm · {grid.nx}×{grid.ny}×{grid.nz}
             </dd>
-            <dt>Total nodes</dt>
-            <dd>{nodes.toLocaleString()}</dd>
-            <dt>Memory per material field</dt>
-            <dd>{((nodes * 8) / 1024 ** 2).toFixed(1)} MiB</dd>
+            <dt>Proposed</dt>
+            <dd>
+              {planning ? (
+                <LoaderCircle className="spin" size={11} />
+              ) : estimate ? (
+                `${estimate.spacingNm.toFixed(3)} nm · ${estimate.shape.join("×")}`
+              ) : (
+                "—"
+              )}
+            </dd>
+            <dt>Nodes</dt>
+            <dd>{estimate ? estimate.nodeCount.toLocaleString() : "—"}</dd>
+            <dt>Saved state</dt>
+            <dd>{estimate ? gigabytes(estimate.stateBytes) : "—"}</dd>
+            <dt>Memory to run</dt>
+            <dd>{estimate ? gigabytes(estimate.recommendedBytes) : "—"}</dd>
           </dl>
 
-          {!equalSpacing && (
+          {error && (
+            <div className="error-box">
+              <TriangleAlert size={13} />
+              <span>{error}</span>
+            </div>
+          )}
+
+          {plan && !plan.withinLimit && (
             <div className="error-box">
               <TriangleAlert size={13} />
               <span>
-                The kernel requires equal x, y and z spacing. Adjust the bounds or node counts
-                until the three match.
+                This grid needs {plan.estimate.nodeCount.toLocaleString()} nodes; the ceiling is{" "}
+                {maximumNodes.toLocaleString()}. Use a coarser spacing or smaller project bounds.
               </span>
             </div>
           )}
-          {!validCounts && (
-            <div className="error-box">
-              <TriangleAlert size={13} />
-              <span>Each axis needs at least three nodes.</span>
-            </div>
-          )}
-          {!validBounds && (
-            <div className="error-box">
-              <TriangleAlert size={13} />
-              <span>Every axis needs a positive extent.</span>
-            </div>
-          )}
+
+          {plan?.unchanged && <p className="numerics-note">This is the grid already in use.</p>}
 
           <div className="warning-box">
             <TriangleAlert size={13} />
             <span>
               Changing the grid discards every stored result: the flow is replayed from the bare
-              wafer on the new grid rather than interpolating the old one. A finer grid costs
-              memory for one double-precision field per material plus solver temporaries.
+              wafer on the new grid rather than interpolating the old one.
             </span>
           </div>
         </div>
 
         <div className="modal-actions">
-          <span>{valid ? "Ready to apply" : "Fix the highlighted values first"}</span>
+          <span>{applicable ? "Ready to apply" : "Pick a spacing that fits"}</span>
           <button type="button" className="secondary-button" onClick={onClose}>
             Cancel
           </button>
           <button
             type="button"
             className="primary-button modal-save"
-            disabled={!valid || busy}
-            onClick={() =>
-              onApply({ ...draft, spacingUm: dx, nodeCount: nodes })
-            }
+            disabled={!applicable}
+            onClick={() => onApply(Number(spacing))}
           >
             Apply grid
           </button>

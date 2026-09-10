@@ -389,3 +389,49 @@ def test_running_to_a_step_keeps_later_valid_results(workspace):
     result = call("run_flow", root=str(workspace), throughStepId=branch["steps"][1]["id"])
     assert result["executedStepIds"] == []
     assert set(result["stepStatuses"].values()) == {"clean"}
+
+
+def test_plan_grid_reports_the_lattice_and_its_cost(workspace):
+    plan = call("plan_grid", root=str(workspace), targetSpacingNm=25.0)
+    estimate = plan["estimate"]
+    assert estimate["spacingNm"] == pytest.approx(25.0)
+    # Every extent has to divide by one spacing, so the shape is searched, not rounded.
+    assert plan["grid"]["nx"] == estimate["shape"][0]
+    assert estimate["nodeCount"] == estimate["shape"][0] * estimate["shape"][1] * estimate["shape"][2]
+    assert estimate["recommendedBytes"] > estimate["stateBytes"]
+    assert plan["withinLimit"] is True
+    assert plan["unchanged"] is False
+
+
+def test_plan_grid_flags_a_grid_over_the_ceiling(workspace):
+    plan = call("plan_grid", root=str(workspace), targetSpacingNm=2.0)
+    assert plan["withinLimit"] is False
+    assert plan["estimate"]["nodeCount"] > plan["maximumNodes"]
+
+
+def test_plan_grid_rejects_a_spacing_outside_the_supported_range(workspace):
+    for spacing in (0.05, 2000.0, "coarse"):
+        with pytest.raises(InvalidRequest):
+            call("plan_grid", root=str(workspace), targetSpacingNm=spacing)
+
+
+def test_set_grid_by_target_spacing_applies_and_invalidates(workspace):
+    call("run_flow", root=str(workspace))
+    updated = call("set_grid", root=str(workspace), targetSpacingNm=25.0)
+    grid = updated["project"]["grid"]
+    assert grid["spacingUm"] == pytest.approx(0.025)
+    assert grid["nx"] == 65 and grid["ny"] == 65 and grid["nz"] == 49
+    assert set(updated["stepStatuses"][updated["branches"][0]["id"]].values()) == {"dirty"}
+
+
+def test_set_grid_refuses_to_exceed_the_node_ceiling(workspace):
+    with pytest.raises(InvalidRequest, match="ceiling"):
+        call("set_grid", root=str(workspace), targetSpacingNm=2.0)
+    unchanged = call("open_workspace", root=str(workspace))
+    assert unchanged["project"]["grid"]["nx"] == 41
+
+
+def test_describe_reports_the_node_ceiling_and_presets():
+    numerics = call("describe")["numerics"]
+    assert numerics["maximumNodes"] == 20_000_000
+    assert numerics["spacingPresetsNm"] == [25.0, 12.5, 6.25]

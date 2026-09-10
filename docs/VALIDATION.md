@@ -52,9 +52,9 @@ cd desktop && npm run test
 
 Engine 测试同时检查二阶选项能从步骤传入刻蚀内核，且局部细化规划器会扩大影响范围以覆盖全部 RK 子步；还增加了非光滑柱体初始场的混合运动解析对照。完整测试共 **93 项**。详见 [方案和原始数值](SYNCHRONIZED_SOLVER.md)。
 
-## UI 冒烟测试
+## 打包冒烟测试
 
-`python -m process_studio --smoke-test --workspace work\ui-smoke` 会完整创建窗口、布局、数据库、默认工程和三种视图，然后正常退出。它用于捕捉打包、导入和 UI 初始化错误。
+`scripts/build_desktop.sh` 和 `build_desktop.ps1` 在打包 worker 之后立即向它发一次 `describe` 并检查响应。它用于捕捉 PyInstaller 漏收依赖、入口导入错误这类只在打包版暴露的问题。
 
 ## 端到端示例
 
