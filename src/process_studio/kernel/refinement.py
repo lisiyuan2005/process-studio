@@ -13,6 +13,7 @@ from scipy.ndimage import find_objects, label
 
 from .adaptive import RefinementBox
 from .material_state import MaterialState
+from .transport import stencil_reach_per_step
 from process_studio.models import ProcessType
 
 
@@ -82,6 +83,7 @@ def plan_refinement(engine, grid, project, branch, *, factor=4, max_nodes=20_000
             elif p.get("base_z") is None:
                 reasons.append(f"{step.name}: automatic global deposition base height")
         elif kind is ProcessType.ETCH:
+            reach = stencil_reach_per_step(p.get("solver_order", 1))
             if p.get("target") == 0:
                 continue
             if p.get("surface_z") is None:
@@ -94,9 +96,9 @@ def plan_refinement(engine, grid, project, branch, *, factor=4, max_nodes=20_000
                 if not 0 <= fraction <= 1 or not np.isfinite(depth) or depth < 0:
                     raise ValueError("invalid etch depth or directional fraction")
                 # Exact pure directional path has no neighbor stencil.
-                # Mixed HJ is explicit Euler, one grid neighbor per iteration.
+                # Include all spatial neighbors and all RK substages.
                 if fraction < 1 and depth > 0:
-                    stencil_steps += math.ceil(
+                    stencil_steps += reach * math.ceil(
                         depth * (fraction + (1-fraction)*math.sqrt(3)) / (0.35*h)
                     )
         else:

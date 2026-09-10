@@ -15,6 +15,7 @@ from .level_set import (
     upwind_advection_term,
 )
 from .masks import signed_distance as mask_signed_distance
+from .transport import evolve_hamilton_jacobi, stencil_reach_per_step
 
 
 def directional_trench_etch(
@@ -76,6 +77,8 @@ def mixed_trench_etch(
     surface_z: float = 0.0,
     cfl: float = 0.35,
     exposure_sdf: np.ndarray | None = None,
+    solver_order: int = 1,
+    tile_shape: int | tuple[int, ...] | None = None,
 ) -> tuple[np.ndarray, int]:
     """Etch with independently controlled directional and isotropic rates.
 
@@ -85,6 +88,7 @@ def mixed_trench_etch(
     Subtracting the evolved void from the input material naturally produces
     undercut without nucleating disconnected cavities inside the substrate.
     """
+    stencil_reach_per_step(solver_order)
     if phi.ndim != 3:
         raise ValueError("mixed trench etch requires a 3D level set")
     if exposure_mask.shape != phi.shape[1:]:
@@ -131,7 +135,12 @@ def mixed_trench_etch(
     ).copy()
     vertical_velocity = -directional_rate
 
-    for _ in range(steps):
+    if solver_order == 2 or tile_shape is not None:
+        void_phi, steps = evolve_hamilton_jacobi(
+            void_phi, spacing, isotropic_rate, (vertical_velocity, 0.0, 0.0),
+            total_time, order=solver_order, tile_shape=tile_shape, cfl=cfl,
+        )
+    for _ in range(steps if solver_order == 1 and tile_shape is None else 0):
         directional_term = upwind_advection_term(
             void_phi,
             spacing,

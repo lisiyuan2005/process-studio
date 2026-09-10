@@ -81,6 +81,8 @@ def selective_etch(
     directional_fraction: float = 1.0,
     surface_z: float = 0.0,
     exposure_sdf: np.ndarray | None = None,
+    solver_order: int = 1,
+    tile_shape: int | tuple[int, ...] | None = None,
 ) -> MaterialState:
     """Apply a rate-scaled etch volume only to materials with nonzero response."""
     if not 0.0 <= directional_fraction <= 1.0:
@@ -108,6 +110,8 @@ def selective_etch(
             isotropic_rate=max(rate * (1.0 - directional_fraction), 0.0),
             surface_z=surface_z,
             exposure_sdf=exposure_sdf,
+            solver_order=solver_order,
+            tile_shape=tile_shape,
         )
         result.fields[name] = np.maximum(state.fields[name], etched_union)
     return result

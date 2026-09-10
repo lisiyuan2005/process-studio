@@ -88,9 +88,15 @@ def simulate_adaptive(
     array_count: int,
     pitch: float,
     factor: int,
+    solver_order: int = 1,
+    tile_size: int | None = None,
     logger=print,
 ) -> AdaptiveMaterialState:
     recipes = make_recipes()
+    for recipe in recipes:
+        if recipe.process_type.value == "etch":
+            recipe.parameters["solver_order"] = solver_order
+            recipe.parameters["tile_shape"] = tile_size
     flow = make_flow(recipes)
     engine = ProcessEngine(
         {recipe.id: recipe for recipe in recipes},
@@ -324,10 +330,13 @@ def main() -> None:
     parser.add_argument("--array", type=int, default=2)
     parser.add_argument("--pitch", type=float, default=0.45)
     parser.add_argument("--factor", type=int, default=4)
+    parser.add_argument("--solver-order", type=int, choices=[1, 2], default=1)
+    parser.add_argument("--tile-size", type=int)
     parser.add_argument("--reuse", action="store_true")
     args = parser.parse_args()
 
     if args.reuse and (args.adaptive_dir / "adaptive-state.json").exists():
+        print("REUSE: no simulation; solver-order, factor and tile-size do not alter saved data.")
         adaptive = AdaptiveMaterialState.load(args.adaptive_dir)
         print(f"loaded {args.adaptive_dir}")
     else:
@@ -336,6 +345,8 @@ def main() -> None:
             array_count=args.array,
             pitch=args.pitch,
             factor=args.factor,
+            solver_order=args.solver_order,
+            tile_size=args.tile_size,
         )
         adaptive.save(args.adaptive_dir)
         print(f"saved {args.adaptive_dir}")

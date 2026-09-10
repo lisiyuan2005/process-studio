@@ -33,7 +33,13 @@
 
 旧的大幅局部不对称显著减小，但上部拐角仍有约 1.5–2.1 nm 的离散误差，不能宣称每处都更精确或已经零误差。这里测量的是对称性，不是绝对工艺尺寸准确度。原始数字在 `assets/symmetry-before.json`、`assets/symmetry-after.json`，测量脚本为 `examples/measure_section_symmetry.py`。
 
-## UI 冒烟测试运行方法
+## 同步分块与二阶推进回归
+
+`tests/test_synchronized_transport.py` 验证一阶/二阶方案在二维和三维中的分块/全域逐点一致性，含尺寸不整除、很小的块、逆序遍历和非法参数；还验证偏移圆扩张/收缩、偏移球扩张、非圆图形斜向移动的解析误差及网格收敛。
+
+Engine 测试同时检查二阶选项能从步骤传入刻蚀内核，且局部细化规划器会扩大影响范围以覆盖全部 RK 子步。当前完整测试共 **90 项通过**。详见 [方案和原始数值](SYNCHRONIZED_SOLVER.md)。
+
+## UI 冒烟测试
 
 `python -m process_studio --smoke-test --workspace work\ui-smoke` 会完整创建窗口、布局、数据库、默认工程和三种视图，然后正常退出。它用于捕捉打包、导入和 UI 初始化错误。
 

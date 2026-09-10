@@ -181,6 +181,10 @@ class ProcessEngine:
                     if occupied.size
                     else 0.0
                 )
+            self.logger(
+                f"ETCH numerics: order={parameters.get('solver_order', 1)}, "
+                f"tile_shape={parameters.get('tile_shape')}"
+            )
             result = selective_etch(
                 state,
                 mask,
@@ -189,6 +193,8 @@ class ProcessEngine:
                 directional_fraction=float(parameters.get("directional_fraction", 1.0)),
                 surface_z=surface_z,
                 exposure_sdf=mask_level_set,
+                solver_order=parameters.get("solver_order", 1),
+                tile_shape=parameters.get("tile_shape"),
             )
         elif recipe.process_type is ProcessType.CMP:
             selected = parameters.get("materials")

@@ -1,0 +1,142 @@
+{
+  "description": "Raw signed-field error in a fixed 30 nm band about analytic circles/spheres; not fab accuracy.",
+  "analytic_checks": [
+    {
+      "case": "offset_circle_expansion",
+      "grid_spacing_nm": 25.0,
+      "order": 1,
+      "near_interface_field_rms_nm": 0.8141489956883262,
+      "elapsed_seconds": 0.0005652999971061945
+    },
+    {
+      "case": "offset_circle_expansion",
+      "grid_spacing_nm": 25.0,
+      "order": 2,
+      "near_interface_field_rms_nm": 0.05459244321182601,
+      "elapsed_seconds": 0.0015050999936647713
+    },
+    {
+      "case": "offset_circle_expansion",
+      "grid_spacing_nm": 12.5,
+      "order": 1,
+      "near_interface_field_rms_nm": 0.3925995939718387,
+      "elapsed_seconds": 0.001226299995323643
+    },
+    {
+      "case": "offset_circle_expansion",
+      "grid_spacing_nm": 12.5,
+      "order": 2,
+      "near_interface_field_rms_nm": 0.013313749170318636,
+      "elapsed_seconds": 0.004542999988188967
+    },
+    {
+      "case": "offset_circle_expansion",
+      "grid_spacing_nm": 6.25,
+      "order": 1,
+      "near_interface_field_rms_nm": 0.1944758694662747,
+      "elapsed_seconds": 0.015810900018550456
+    },
+    {
+      "case": "offset_circle_expansion",
+      "grid_spacing_nm": 6.25,
+      "order": 2,
+      "near_interface_field_rms_nm": 0.0033193749945172727,
+      "elapsed_seconds": 0.05647579999640584
+    },
+    {
+      "case": "offset_circle_contraction",
+      "grid_spacing_nm": 25.0,
+      "order": 1,
+      "near_interface_field_rms_nm": 0.8309212097796286,
+      "elapsed_seconds": 0.0005084000003989786
+    },
+    {
+      "case": "offset_circle_contraction",
+      "grid_spacing_nm": 25.0,
+      "order": 2,
+      "near_interface_field_rms_nm": 0.11442679154738768,
+      "elapsed_seconds": 0.0014579000126104802
+    },
+    {
+      "case": "offset_circle_contraction",
+      "grid_spacing_nm": 12.5,
+      "order": 1,
+      "near_interface_field_rms_nm": 0.4302766488120132,
+      "elapsed_seconds": 0.0011488000163808465
+    },
+    {
+      "case": "offset_circle_contraction",
+      "grid_spacing_nm": 12.5,
+      "order": 2,
+      "near_interface_field_rms_nm": 0.031957828922840804,
+      "elapsed_seconds": 0.004454399982932955
+    },
+    {
+      "case": "offset_circle_contraction",
+      "grid_spacing_nm": 6.25,
+      "order": 1,
+      "near_interface_field_rms_nm": 0.21837183244718436,
+      "elapsed_seconds": 0.015605399996275082
+    },
+    {
+      "case": "offset_circle_contraction",
+      "grid_spacing_nm": 6.25,
+      "order": 2,
+      "near_interface_field_rms_nm": 0.008379943402595152,
+      "elapsed_seconds": 0.0564621000085026
+    },
+    {
+      "case": "offset_sphere_expansion",
+      "grid_spacing_nm": 33.333333333333336,
+      "order": 1,
+      "near_interface_field_rms_nm": 1.7350027046532879,
+      "elapsed_seconds": 0.00554559999727644
+    },
+    {
+      "case": "offset_sphere_expansion",
+      "grid_spacing_nm": 33.333333333333336,
+      "order": 2,
+      "near_interface_field_rms_nm": 0.13255718542593592,
+      "elapsed_seconds": 0.048115700017660856
+    },
+    {
+      "case": "offset_sphere_expansion",
+      "grid_spacing_nm": 25.0,
+      "order": 1,
+      "near_interface_field_rms_nm": 1.2932514903892292,
+      "elapsed_seconds": 0.028675500012468547
+    },
+    {
+      "case": "offset_sphere_expansion",
+      "grid_spacing_nm": 25.0,
+      "order": 2,
+      "near_interface_field_rms_nm": 0.07496934479751531,
+      "elapsed_seconds": 0.1576317999861203
+    },
+    {
+      "case": "offset_sphere_expansion",
+      "grid_spacing_nm": 16.666666666666668,
+      "order": 1,
+      "near_interface_field_rms_nm": 0.8550852996659933,
+      "elapsed_seconds": 0.1596144000068307
+    },
+    {
+      "case": "offset_sphere_expansion",
+      "grid_spacing_nm": 16.666666666666668,
+      "order": 2,
+      "near_interface_field_rms_nm": 0.033283926287527146,
+      "elapsed_seconds": 0.9281512000015937
+    }
+  ],
+  "synchronized_tiles": {
+    "order": 2,
+    "steps": 4,
+    "stages_per_step": 2,
+    "tiles": 27,
+    "ghost_nodes": 2,
+    "max_tile_work_nodes": 3315,
+    "global_nodes": 19251,
+    "storage": "dense-uniform",
+    "dense_max_abs_difference": 0.0
+  }
+}

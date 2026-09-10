@@ -107,6 +107,32 @@ def test_boolean_hole_and_inversion_use_the_same_continuous_boundary():
     np.testing.assert_array_equal(engine.resolve_mask_level_set(state, branch.steps[0], project), -phi)
 
 
+def test_second_order_engine_updates_local_support_and_uses_synchronized_tiles():
+    engine, grid, project, branch = setup([
+        SketchShape("circle", parameters={"center": (.013, -.017), "radius": .07})
+    ], depth=.008, fraction=.8)
+    order1 = engine.plan_refinement(grid, project, branch, factor=2)
+    branch.steps[0].overrides.update({"solver_order": 2, "tile_shape": [9, 11, 13]})
+    order2 = engine.plan_refinement(grid, project, branch, factor=2)
+    assert order2.node_count > order1.node_count
+    adaptive, _ = engine.run_refined_branch(initial, project, branch, factor=2)
+    from process_studio.kernel.adaptive import RefinementBox
+    full = RefinementBox("full", -.6, .6, -.6, .6, -.2, .2, 2).make_grid(grid)
+    branch.steps[0].overrides["tile_shape"] = None
+    reference = engine.run_branch(initial(full), project, branch)
+    patch = adaptive.patches[0]
+    g = patch.state.grid
+    x0, x1, y0, y1 = patch.box.core_bounds
+    xs = (g.x >= x0-1e-12) & (g.x <= x1+1e-12)
+    ys = (g.y >= y0-1e-12) & (g.y <= y1+1e-12)
+    ix = np.rint((g.x[xs]-full.x_min)/full.dx).astype(int)
+    iy = np.rint((g.y[ys]-full.y_min)/full.dy).astype(int)
+    np.testing.assert_allclose(
+        patch.state.fields["Si"][:, ys][:, :, xs],
+        reference.fields["Si"][:, iy][:, :, ix], atol=2e-12, rtol=0,
+    )
+
+
 def test_separated_regions_remain_separate_and_use_project_grid_origin():
     shapes = [SketchShape("circle", parameters={"center": (x, 0.013), "radius": 0.045})
               for x in [-0.403, 0.397]]

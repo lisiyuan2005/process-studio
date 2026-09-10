@@ -32,6 +32,7 @@ macOS `.app` 必须在 macOS 上构建，仓库中的 `Desktop builds` GitHub Ac
 - 多材料 3D 状态、确定性的材料覆盖优先级与独立显示/隐藏
 - 流程驱动的细化执行 API：可证明数值影响范围时局部重算；全局依赖时统一细网格重算；不是动态 AMR
 - Level Set 干法刻蚀、方向性/各向同性混合刻蚀、简化湿法刻蚀
+- 可选二阶 HJ + SSP-RK2，同层分块每个时间子步同步边界；[配置和验证](docs/SYNCHRONIZED_SOLVER.md)
 - 等厚保形沉积、方向性图形沉积/填充、理想平面 CMP
 - Recipe 中定义材料速率、选择比和 stop layer；步骤可覆盖 Recipe 字段
 - 可按时间运行，也可直接输入目标厚度或目标深度

@@ -1,0 +1,9 @@
+{
+  "binary": "release/windows-second-order/ProcessStudio.exe",
+  "size_bytes": 125374749,
+  "sha256": "931c20c72d953f81394d20bd776f1b18fd6c0d0df95d5d56491a4a711392d104",
+  "python": "3.13.7",
+  "pyinstaller": "6.22.2",
+  "startup_smoke_test_exit_code": 0,
+  "notes": "Local Windows build. Startup test is not a full numerical solver validation. Binary not uploaded; previous release binary retained."
+}
