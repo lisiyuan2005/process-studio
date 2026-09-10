@@ -91,7 +91,7 @@ npm run tauri dev      # 需要本机能 import process_studio
 
 `Desktop builds` 工作流跑的就是这两个脚本，构建前先执行 `python -m pytest -q`，前端测试由脚本里的 `npm run test` 负责。构建只产出应用本身：Windows 用 `--no-bundle`，交付 `ProcessStudio.exe` 加同级的 `resources/`；macOS 用 `--bundles app`，交付 `Process Studio.app`。不生成 NSIS、MSI 或 DMG。
 
-macOS 侧在打包前做一次 ad-hoc 签名（`codesign --force --deep --sign -`）。这不能绕过 Gatekeeper，但能让 bundle 自洽，用户看到的是「未识别的开发者」而不是「应用已损坏」。下载后仍需清一次隔离标记：`xattr -dr com.apple.quarantine "/Applications/Process Studio.app"`。
+macOS 构建固定在 `macos-14` 运行器上，与 ProcessFlow-Emulator 一致，且不做任何显式签名，只依赖链接器留下的 ad-hoc 签名。首次打开需要在访达里右键选打开信任一次。若系统报「应用已损坏」，清一次隔离标记：`xattr -dr com.apple.quarantine "/Applications/Process Studio.app"`。
 
 worker 的查找顺序是先平台资源目录（`.app` 里的 `Contents/Resources`、Linux 包的 `/usr/lib/<产品名>`），再退回可执行文件所在目录。免安装布局靠的是第二条，`PROCESS_STUDIO_WORKER` 仍可覆盖两者。
 

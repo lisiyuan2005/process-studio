@@ -46,9 +46,9 @@ Windows 产物必须整个目录一起用：exe 会在自己同级的 `resources
 
 脚本先用 PyInstaller 把 worker 打成独立可执行文件，跑一次 `describe` 冒烟测试，再执行 `npm run tauri build`。
 
-macOS 产物只有 ad-hoc 签名，没有 Developer ID 也没有 notarize。**优先用 DMG 安装**：磁盘映像按字节复制 bundle，权限、符号链接和扩展属性都保留，签名不会被破坏，首次打开在访达里右键选**打开**信任一次即可。
+macOS 产物没有 Developer ID 签名，也没有 notarize，首次打开需要在访达里右键选**打开**信任一次。macOS 构建固定在 `macos-14` 运行器上。
 
-压缩包走的是另一条路径，中间任何一次解压改动都会让签名失效，那时 macOS 报的是「应用已损坏」而不是「未识别的开发者」。真遇到了执行一次即可：
+如果系统报「应用已损坏」而不是「未识别的开发者」，那是隔离标记加签名校验失败，执行一次即可：
 
 ```bash
 xattr -dr com.apple.quarantine "/Applications/Process Studio.app"
