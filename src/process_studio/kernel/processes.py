@@ -74,6 +74,7 @@ def mixed_trench_etch(
     isotropic_rate: float,
     surface_z: float = 0.0,
     cfl: float = 0.35,
+    exposure_sdf: np.ndarray | None = None,
 ) -> tuple[np.ndarray, int]:
     """Etch with independently controlled directional and isotropic rates.
 
@@ -113,7 +114,12 @@ def mixed_trench_etch(
     material = np.asarray(phi, dtype=float).copy()
     z_3d = np.broadcast_to(z[:, None, None], material.shape)
     mask_3d = np.broadcast_to(mask[None, :, :], material.shape)
-    mask_phi = mask_signed_distance(mask, spacing)
+    if exposure_sdf is None:
+        mask_phi = mask_signed_distance(mask, spacing)
+    else:
+        mask_phi = np.asarray(exposure_sdf, dtype=float)
+        if mask_phi.shape != mask.shape:
+            raise ValueError("exposure_sdf shape must match the mask y/x plane")
     void_phi = np.maximum(
         np.broadcast_to(mask_phi[None, :, :], material.shape),
         surface_z - z_3d,

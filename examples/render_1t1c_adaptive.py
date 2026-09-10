@@ -11,7 +11,7 @@ import numpy as np
 from matplotlib.colors import to_rgb
 from matplotlib.patches import Patch
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-from scipy.ndimage import map_coordinates
+from scipy.ndimage import binary_dilation, label, map_coordinates
 from scipy.sparse import coo_matrix
 from skimage.measure import marching_cubes
 
@@ -37,6 +37,28 @@ def _labels_to_rgb(labels: np.ndarray, names: list[str]) -> np.ndarray:
     for index, name in enumerate(names):
         rgb[labels == index] = to_rgb(COLORS.get(name, "#87929D"))
     return rgb
+
+
+def _remove_small_label_islands(labels: np.ndarray, minimum_pixels: int = 32) -> np.ndarray:
+    """Suppress sub-pixel phase specks without moving resolved interfaces."""
+    result = labels.copy()
+    structure = np.ones((3, 3), dtype=bool)
+    for value in range(-1, int(labels.max()) + 1):
+        components, count = label(result == value)
+        if count == 0:
+            continue
+        sizes = np.bincount(components.ravel())
+        for component_id in np.flatnonzero(
+            (sizes < minimum_pixels) & (np.arange(len(sizes)) > 0)
+        ):
+            island = components == component_id
+            ring = binary_dilation(island, structure=structure) & ~island
+            neighbors = result[ring]
+            neighbors = neighbors[neighbors != value]
+            if neighbors.size:
+                choices, frequencies = np.unique(neighbors, return_counts=True)
+                result[island] = choices[np.argmax(frequencies)]
+    return result
 
 
 def _sample_field_section(
@@ -353,6 +375,8 @@ def render(
     section_y = 0.225
     section, names = continuous_adaptive_section(adaptive, section_y, x, z)
     top, top_names = continuous_adaptive_top(adaptive, x, y)
+    section = _remove_small_label_islands(section)
+    top = _remove_small_label_islands(top)
     if top_names != names:
         raise RuntimeError("adaptive views produced inconsistent material order")
 

@@ -66,6 +66,20 @@ class ProcessEngine:
             )
         return invert(mask) if step.keep == "outside" else mask
 
+    def resolve_mask_level_set(
+        self,
+        state: MaterialState,
+        step: ProcessStep,
+    ) -> np.ndarray | None:
+        """Return an analytic mask SDF when the source can provide one."""
+        if step.mask_source != "quick_sketch":
+            return None
+        sketch_id = str(step.overrides.get("sketch_id", "default"))
+        if sketch_id not in self.sketches:
+            raise KeyError(f"quick sketch {sketch_id!r} was not found")
+        phi = self.sketches[sketch_id].signed_distance(*state.grid.mesh_xy)
+        return -phi if step.keep == "outside" else phi
+
     def run_step(
         self,
         state: MaterialState,
@@ -81,6 +95,7 @@ class ProcessEngine:
         recipe = self.recipes[step.recipe_id]
         parameters = recipe.resolved_parameters(step.overrides)
         mask = self.resolve_mask(state, step, project)
+        mask_level_set = self.resolve_mask_level_set(state, step)
         started = time.perf_counter()
         self.logger(f"RUN {step.name} [{recipe.process_type.value}]")
 
@@ -101,6 +116,7 @@ class ProcessEngine:
                         if parameters.get("base_z") is None
                         else float(parameters["base_z"])
                     ),
+                    exposure_sdf=mask_level_set,
                 )
             else:
                 result = deposit_material(state, material, thickness, rate=rate)
@@ -150,6 +166,7 @@ class ProcessEngine:
                 rates,
                 directional_fraction=float(parameters.get("directional_fraction", 1.0)),
                 surface_z=surface_z,
+                exposure_sdf=mask_level_set,
             )
         elif recipe.process_type is ProcessType.CMP:
             selected = parameters.get("materials")

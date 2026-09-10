@@ -10,7 +10,14 @@ from typing import Any
 import numpy as np
 from matplotlib.path import Path as MplPath
 
-from process_studio.kernel.masks import circle, intersect, merge, rectangle, subtract
+from process_studio.kernel.masks import (
+    circle,
+    intersect,
+    merge,
+    rectangle,
+    signed_distance as raster_signed_distance,
+    subtract,
+)
 
 
 @dataclass
@@ -53,6 +60,78 @@ class QuickSketch:
             else:
                 result = intersect(result, shape_mask)
         return np.zeros(xx.shape, dtype=bool) if result is None else result
+
+    def signed_distance(self, xx: np.ndarray, yy: np.ndarray) -> np.ndarray:
+        """Return a continuous mask Level Set, negative in exposed regions.
+
+        Circles and rectangles retain their analytic sub-cell boundary instead
+        of first becoming a binary pixel mask.  Polygon/path fallbacks are
+        reinitialized from their raster mask because they do not yet have a
+        dedicated exact distance implementation.
+        """
+        if xx.shape != yy.shape:
+            raise ValueError("xx and yy must have matching shapes")
+        result: np.ndarray | None = None
+        for shape in self.shapes:
+            shape_phi = self._sdf_array(shape, xx, yy)
+            if result is None:
+                result = shape_phi.copy() if shape.operation != "subtract" else -shape_phi
+            elif shape.operation == "merge":
+                result = np.minimum(result, shape_phi)
+            elif shape.operation == "subtract":
+                result = np.maximum(result, -shape_phi)
+            else:
+                result = np.maximum(result, shape_phi)
+        if result is None:
+            return np.full(xx.shape, np.inf)
+        return result
+
+    def _sdf_array(
+        self,
+        shape: SketchShape,
+        xx: np.ndarray,
+        yy: np.ndarray,
+    ) -> np.ndarray:
+        nx, ny, pitch_x, pitch_y = shape.array
+        instances = []
+        for iy in range(ny):
+            for ix in range(nx):
+                offset_x = (ix - (nx - 1) / 2.0) * pitch_x
+                offset_y = (iy - (ny - 1) / 2.0) * pitch_y
+                instances.append(self._sdf_one(shape, xx, yy, offset_x, offset_y))
+        return np.minimum.reduce(instances)
+
+    def _sdf_one(
+        self,
+        shape: SketchShape,
+        xx: np.ndarray,
+        yy: np.ndarray,
+        offset_x: float,
+        offset_y: float,
+    ) -> np.ndarray:
+        params = shape.parameters
+        if shape.kind == "circle":
+            cx, cy = params.get("center", (0.0, 0.0))
+            return np.hypot(xx - cx - offset_x, yy - cy - offset_y) - float(
+                params["radius"]
+            )
+        if shape.kind == "rectangle":
+            cx, cy = params.get("center", (0.0, 0.0))
+            width, height = tuple(params["size"])
+            qx = np.abs(xx - cx - offset_x) - width / 2.0
+            qy = np.abs(yy - cy - offset_y) - height / 2.0
+            outside = np.hypot(np.maximum(qx, 0.0), np.maximum(qy, 0.0))
+            inside = np.minimum(np.maximum(qx, qy), 0.0)
+            return outside + inside
+
+        mask = self._render_one(shape, xx, yy, offset_x, offset_y)
+        if xx.shape[1] > 1:
+            spacing = float(np.abs(xx[0, 1] - xx[0, 0]))
+        elif yy.shape[0] > 1:
+            spacing = float(np.abs(yy[1, 0] - yy[0, 0]))
+        else:
+            raise ValueError("cannot infer raster spacing")
+        return raster_signed_distance(mask, spacing)
 
     def _render_array(
         self, shape: SketchShape, xx: np.ndarray, yy: np.ndarray
