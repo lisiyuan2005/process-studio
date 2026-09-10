@@ -46,15 +46,15 @@ Windows 产物必须整个目录一起用：exe 会在自己同级的 `resources
 
 脚本先用 PyInstaller 把 worker 打成独立可执行文件，跑一次 `describe` 冒烟测试，再执行 `npm run tauri build`。
 
-macOS 产物用 ad-hoc 身份签名（`signingIdentity: "-"`），没有 Developer ID 也没有 notarize，首次打开需要在访达里右键选**打开**信任一次。构建固定在 `macos-14` 运行器上，并在打包前校验 bundle 已封存资源，否则构建失败。
+macOS 产物用 ad-hoc 身份签名（`signingIdentity: "-"`），没有 Developer ID 也没有 notarize。构建固定在 `macos-14` 运行器上，并在打包前校验 bundle 已封存资源，否则构建失败。
 
-如果系统报「应用已损坏」而不是「未识别的开发者」，那是隔离标记加签名校验失败，执行一次即可：
+首次打开会提示「Apple 无法验证此 App」。macOS 15 起右键**打开**不再绕过这一步，要到**系统设置 → 隐私与安全性**，在安全性一段点**仍要打开**。或者直接清掉隔离标记：
 
 ```bash
 xattr -dr com.apple.quarantine "/Applications/Process Studio.app"
 ```
 
-要彻底免掉信任这一步，需要付费的 Developer ID 签名并 notarize。
+若提示的是「应用已损坏」而不是「无法验证」，那是 bundle 签名本身有问题，不是公证问题。要彻底免掉这一步，需要付费的 Developer ID 签名并 notarize。
 
 ## 已实现的 MVP
 

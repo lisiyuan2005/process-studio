@@ -95,7 +95,7 @@ macOS 构建固定在 `macos-14` 运行器上，`tauri.conf.json` 里 `signingId
 
 只靠链接器留下的签名是不够的：那只覆盖可执行文件，bundle 没有 `_CodeSignature/CodeResources`，Info.plist 也未绑定，`spctl` 会报 `code has no resources but signature indicates they must be present`，内核在启动时直接 SIGKILL。CI 因此在打包前检查该文件存在并跑 `codesign --verify --strict`，不通过就让构建失败。
 
-首次打开仍需在访达里右键选打开信任一次。
+首次打开会提示「Apple 无法验证此 App」，这是公证检查，不是签名失败。macOS 15 起右键打开不再绕过它，需到系统设置的隐私与安全性里点「仍要打开」，或执行 `xattr -dr com.apple.quarantine "/Applications/Process Studio.app"` 清掉隔离标记。
 
 worker 的查找顺序是先平台资源目录（`.app` 里的 `Contents/Resources`、Linux 包的 `/usr/lib/<产品名>`），再退回可执行文件所在目录。免安装布局靠的是第二条，`PROCESS_STUDIO_WORKER` 仍可覆盖两者。
 
