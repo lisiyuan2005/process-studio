@@ -189,8 +189,6 @@ def step_digest(
         "previous": previous,
         "grid": dict(grid),
         "step": {
-            "recipeId": step.recipe_id,
-            "overrides": step.overrides,
             "maskSource": step.mask_source,
             "layer": step.layer,
             "datatype": step.datatype,
@@ -228,11 +226,12 @@ def branch_digests(
     digests: list[str] = []
     previous = "genesis"
     for step in branch.steps:
-        sketch_id = str(step.overrides.get("sketch_id", "default"))
+        recipe = step.effective_recipe(recipes)
+        sketch_id = str(recipe.parameters.get("sketch_id", "default"))
         previous = step_digest(
             previous,
             step,
-            recipes.get(step.recipe_id),
+            recipe,
             sketches.get(sketch_id) if step.mask_source == "quick_sketch" else None,
             grid,
         )

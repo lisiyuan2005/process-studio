@@ -55,7 +55,8 @@ class ProcessEngine:
             # 'No mask' always means blanket exposure, regardless of stale keep.
             return np.full((grid.ny, grid.nx), -np.inf)
         if step.mask_source == "quick_sketch":
-            sketch_id = str(step.overrides.get("sketch_id", "default"))
+            parameters = step.effective_recipe(self.recipes).parameters
+            sketch_id = str(parameters.get("sketch_id", "default"))
             if sketch_id not in self.sketches:
                 raise KeyError(f"quick sketch {sketch_id!r} was not found")
             phi = self.sketches[sketch_id].signed_distance(*grid.mesh_xy)
@@ -112,10 +113,8 @@ class ProcessEngine:
         if not step.enabled:
             self.logger(f"SKIP {step.name}: disabled")
             return state.clone()
-        if step.recipe_id not in self.recipes:
-            raise KeyError(f"recipe {step.recipe_id!r} was not found")
-        recipe = self.recipes[step.recipe_id]
-        parameters = recipe.resolved_parameters(step.overrides)
+        recipe = step.effective_recipe(self.recipes)
+        parameters = dict(recipe.parameters)
         mask_level_set = self.resolve_mask_level_set(state, step, project)
         mask = mask_level_set <= 0
         started = time.perf_counter()

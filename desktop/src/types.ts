@@ -2,7 +2,7 @@ export type ProcessType = "deposit" | "etch" | "cmp" | "no_geometry";
 export type MaskSource = "none" | "quick_sketch" | "gds";
 export type MaskKeep = "inside" | "outside";
 export type StepStatus = "clean" | "dirty" | "running" | "failed";
-export type ParameterValue = string | number | boolean | null;
+export type ParameterValue = string | number | boolean | null | number[];
 
 export interface GridDefinition {
   xMin: number;
@@ -46,8 +46,11 @@ export interface Recipe {
 export interface ProcessStep {
   id: string;
   name: string;
-  recipeId: string;
-  overrides: Record<string, ParameterValue>;
+  processType: ProcessType;
+  tool: string;
+  outputMaterial: string | null;
+  parameters: Record<string, ParameterValue>;
+  materialResponses: Record<string, MaterialResponse>;
   maskSource: MaskSource;
   layer: number | null;
   datatype: number | null;

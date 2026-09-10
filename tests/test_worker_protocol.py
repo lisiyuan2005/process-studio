@@ -36,7 +36,7 @@ def workspace(tmp_path):
 
 def test_describe_reports_capabilities_without_hard_coding_them():
     described = call("describe")
-    assert described["protocolVersion"] == 1
+    assert described["protocolVersion"] == 2
     assert "etch" in described["processTypes"]
     assert described["maskSources"] == ["none", "quick_sketch", "gds"]
     assert described["numerics"]["solverOrders"] == [1, 2]
@@ -94,7 +94,7 @@ def test_editing_a_step_invalidates_it_and_everything_after(workspace):
     call("run_flow", root=str(workspace))
     document = call("open_workspace", root=str(workspace))
     branch = document["branches"][0]
-    branch["steps"][1]["overrides"] = {"sketch_id": "default", "target": 0.2}
+    branch["steps"][1]["parameters"]["target"] = 0.2
     saved = call("save_document", root=str(workspace), document=document)
     statuses = saved["stepStatuses"][branch["id"]]
     assert statuses[branch["steps"][0]["id"]] == "clean"
@@ -342,13 +342,43 @@ def test_load_project_prefers_the_default_project(workspace):
     assert load_project(repository).id == "default-project"
 
 
-def test_a_recipe_in_use_cannot_be_deleted(workspace):
+def test_a_library_recipe_can_be_deleted_without_changing_existing_steps(workspace):
     document = call("open_workspace", root=str(workspace))
+    etch = document["branches"][0]["steps"][1]
+    original_definition = {
+        key: etch[key]
+        for key in ("processType", "tool", "outputMaterial", "parameters", "materialResponses")
+    }
     document["recipes"] = [
         recipe for recipe in document["recipes"] if recipe["id"] != "recipe-si-trench"
     ]
-    with pytest.raises(InvalidRequest, match="still used by a step"):
-        call("save_document", root=str(workspace), document=document)
+    saved = call("save_document", root=str(workspace), document=document)
+    saved_etch = saved["branches"][0]["steps"][1]
+    assert all(recipe["id"] != "recipe-si-trench" for recipe in saved["recipes"])
+    assert {
+        key: saved_etch[key]
+        for key in ("processType", "tool", "outputMaterial", "parameters", "materialResponses")
+    } == original_definition
+
+
+def test_opening_a_legacy_workspace_detaches_steps_from_library(workspace):
+    repository = open_repository(workspace)
+    stored = repository.load_branch("default-main")
+    legacy = stored.steps[1]
+    legacy.recipe_id = "recipe-si-trench"
+    legacy.overrides = {"target": 0.27, "sketch_id": "default"}
+    legacy.process_type = None
+    legacy.tool = ""
+    legacy.output_material = None
+    legacy.parameters = {}
+    legacy.material_responses = {}
+    repository.save_branch("default-project", stored)
+
+    document = call("open_workspace", root=str(workspace))
+    assert all("recipeId" not in step for step in document["branches"][0]["steps"])
+    migrated = repository.load_branch("default-main")
+    assert all(step.recipe_id is None and step.process_type is not None for step in migrated.steps)
+    assert migrated.steps[1].parameters["target"] == 0.27
 
 
 def test_running_to_a_step_keeps_later_valid_results(workspace):

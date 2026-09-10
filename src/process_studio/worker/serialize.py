@@ -17,6 +17,7 @@ from ..models import (
     ProcessType,
     ProjectDefinition,
     Recipe,
+    new_id,
 )
 from .errors import InvalidRequest
 
@@ -88,7 +89,7 @@ def material_from_json(payload: Mapping[str, Any]) -> MaterialDefinition:
             str(payload.get("category", "Other")),
             str(payload.get("color", "#7c83a0")),
             float(payload.get("opacity", 1.0)),
-            id=str(payload.get("id") or MaterialDefinition("tmp").id),
+            id=str(payload.get("id") or new_id()),
         )
     except KeyError as error:
         raise InvalidRequest(f"material is missing {error.args[0]}") from error
@@ -159,16 +160,23 @@ def recipe_from_json(payload: Mapping[str, Any]) -> Recipe:
         material_responses={
             str(key): response_from_json(value) for key, value in responses.items()
         },
-        id=str(payload.get("id") or Recipe(name, process_type).id),
+        id=str(payload.get("id") or new_id()),
     )
 
 
-def step_to_json(step: ProcessStep) -> dict[str, Any]:
+def step_to_json(step: ProcessStep, recipes: Mapping[str, Recipe]) -> dict[str, Any]:
+    definition = step.effective_recipe(recipes)
     return {
         "id": step.id,
         "name": step.name,
-        "recipeId": step.recipe_id,
-        "overrides": dict(step.overrides),
+        "processType": definition.process_type.value,
+        "tool": definition.tool,
+        "outputMaterial": definition.output_material,
+        "parameters": dict(definition.parameters),
+        "materialResponses": {
+            name: response_to_json(response)
+            for name, response in definition.material_responses.items()
+        },
         "maskSource": step.mask_source,
         "layer": step.layer,
         "datatype": step.datatype,
@@ -178,22 +186,58 @@ def step_to_json(step: ProcessStep) -> dict[str, Any]:
 
 
 def step_from_json(payload: Mapping[str, Any]) -> ProcessStep:
-    overrides = payload.get("overrides", {})
-    if not isinstance(overrides, Mapping):
-        raise InvalidRequest("step overrides must be an object")
     layer = payload.get("layer")
     datatype = payload.get("datatype")
+    # Legacy clients send recipeId + overrides. Keep accepting that shape so an
+    # existing workspace can be opened and migrated by the next save.
+    if "processType" not in payload:
+        overrides = payload.get("overrides", {})
+        if not isinstance(overrides, Mapping):
+            raise InvalidRequest("step overrides must be an object")
+        try:
+            return ProcessStep(
+                str(payload.get("name", "")).strip() or "Step",
+                str(payload["recipeId"]),
+                dict(overrides),
+                str(payload.get("maskSource", "none")),
+                None if layer is None else int(layer),
+                None if datatype is None else int(datatype),
+                str(payload.get("keep", "inside")),
+                bool(payload.get("enabled", True)),
+                id=str(payload.get("id") or new_id()),
+            )
+        except KeyError as error:
+            raise InvalidRequest(f"step is missing {error.args[0]}") from error
+        except (TypeError, ValueError) as error:
+            raise InvalidRequest(f"step is invalid: {error}") from error
+
+    parameters = payload.get("parameters", {})
+    responses = payload.get("materialResponses", {})
+    if not isinstance(parameters, Mapping):
+        raise InvalidRequest("step parameters must be an object")
+    if not isinstance(responses, Mapping):
+        raise InvalidRequest("step materialResponses must be an object")
     try:
         return ProcessStep(
             str(payload.get("name", "")).strip() or "Step",
-            str(payload["recipeId"]),
-            dict(overrides),
-            str(payload.get("maskSource", "none")),
-            None if layer is None else int(layer),
-            None if datatype is None else int(datatype),
-            str(payload.get("keep", "inside")),
-            bool(payload.get("enabled", True)),
-            id=str(payload.get("id") or ProcessStep("tmp", "tmp").id),
+            mask_source=str(payload.get("maskSource", "none")),
+            layer=None if layer is None else int(layer),
+            datatype=None if datatype is None else int(datatype),
+            keep=str(payload.get("keep", "inside")),
+            enabled=bool(payload.get("enabled", True)),
+            id=str(payload.get("id") or new_id()),
+            process_type=ProcessType(str(payload["processType"])),
+            tool=str(payload.get("tool", "")),
+            output_material=(
+                None
+                if payload.get("outputMaterial") in (None, "")
+                else str(payload["outputMaterial"])
+            ),
+            parameters=dict(parameters),
+            material_responses={
+                str(name): response_from_json(response)
+                for name, response in responses.items()
+            },
         )
     except KeyError as error:
         raise InvalidRequest(f"step is missing {error.args[0]}") from error
@@ -201,13 +245,13 @@ def step_from_json(payload: Mapping[str, Any]) -> ProcessStep:
         raise InvalidRequest(f"step is invalid: {error}") from error
 
 
-def branch_to_json(branch: FlowBranch) -> dict[str, Any]:
+def branch_to_json(branch: FlowBranch, recipes: Mapping[str, Recipe]) -> dict[str, Any]:
     return {
         "id": branch.id,
         "name": branch.name,
         "parentBranchId": branch.parent_branch_id,
         "parentStepId": branch.parent_step_id,
-        "steps": [step_to_json(step) for step in branch.steps],
+        "steps": [step_to_json(step, recipes) for step in branch.steps],
     }
 
 
@@ -220,7 +264,7 @@ def branch_from_json(payload: Mapping[str, Any]) -> FlowBranch:
         [step_from_json(step) for step in steps],
         payload.get("parentBranchId"),
         payload.get("parentStepId"),
-        id=str(payload.get("id") or FlowBranch("main").id),
+        id=str(payload.get("id") or new_id()),
     )
 
 

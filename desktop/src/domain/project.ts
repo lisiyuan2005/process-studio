@@ -2,6 +2,7 @@ import type {
   FlowBranch,
   MaterialDefinition,
   ParameterValue,
+  ProcessType,
   ProcessStep,
   Recipe,
   StepStatus,
@@ -33,18 +34,21 @@ export function hasDirtySteps(document: WorkspaceDocument): boolean {
   return getSteps(document).some((step) => stepStatus(document, step.id) !== "clean");
 }
 
-export function recipeFor(document: WorkspaceDocument, step: ProcessStep | undefined) {
-  if (!step) return undefined;
-  return document.recipes.find((recipe) => recipe.id === step.recipeId);
+const STEP_DEFAULTS: Record<ProcessType, { name: string; parameters: Record<string, ParameterValue> }> = {
+  deposit: { name: "New deposition", parameters: { target: 0.05 } },
+  etch: { name: "New etch", parameters: { target: 0.1, directional_fraction: 1 } },
+  cmp: { name: "New CMP", parameters: { target_z: 0 } },
+  no_geometry: { name: "New process note", parameters: {} },
+};
+
+function copyResponses(responses: Recipe["materialResponses"]) {
+  return Object.fromEntries(
+    Object.entries(responses).map(([material, response]) => [material, { ...response }]),
+  );
 }
 
-/** Recipe values with the step's overrides applied, matching Recipe.resolved_parameters. */
-export function resolvedParameters(
-  document: WorkspaceDocument,
-  step: ProcessStep,
-): Record<string, ParameterValue> {
-  const recipe = recipeFor(document, step);
-  return { ...(recipe?.parameters ?? {}), ...step.overrides };
+function processParameters(parameters: Record<string, ParameterValue>) {
+  return Object.fromEntries(Object.entries(parameters).filter(([key]) => key !== "sketch_id"));
 }
 
 function withBranch(document: WorkspaceDocument, branch: FlowBranch): WorkspaceDocument {
@@ -78,14 +82,18 @@ export function setActiveBranch(document: WorkspaceDocument, branchId: string): 
 
 export function addStep(
   document: WorkspaceDocument,
-  recipe: Recipe,
+  processType: ProcessType,
   afterStepId?: string,
 ): { document: WorkspaceDocument; step: ProcessStep } {
+  const defaults = STEP_DEFAULTS[processType];
   const step: ProcessStep = {
     id: newId("step"),
-    name: recipe.name,
-    recipeId: recipe.id,
-    overrides: {},
+    name: defaults.name,
+    processType,
+    tool: "",
+    outputMaterial: null,
+    parameters: { ...defaults.parameters },
+    materialResponses: {},
     maskSource: "none",
     layer: null,
     datatype: null,
@@ -152,19 +160,65 @@ export function updateStep(
   return invalidateFrom(updated, stepId);
 }
 
-export function updateStepOverrides(
+export function updateStepParameters(
   document: WorkspaceDocument,
   stepId: string,
-  overrides: Record<string, ParameterValue>,
+  parameters: Record<string, ParameterValue>,
 ): WorkspaceDocument {
   const step = getSteps(document).find((item) => item.id === stepId);
   if (!step) return document;
-  const merged: Record<string, ParameterValue> = { ...step.overrides, ...overrides };
-  for (const [key, value] of Object.entries(overrides)) {
-    // An empty field means "use the recipe value", not "override with blank".
+  const merged: Record<string, ParameterValue> = { ...step.parameters, ...parameters };
+  for (const [key, value] of Object.entries(parameters)) {
     if (value === null || value === "") delete merged[key];
   }
-  return updateStep(document, stepId, { overrides: merged });
+  return updateStep(document, stepId, { parameters: merged });
+}
+
+export function setStepProcessType(
+  document: WorkspaceDocument,
+  stepId: string,
+  processType: ProcessType,
+): WorkspaceDocument {
+  return updateStep(document, stepId, {
+    processType,
+    tool: "",
+    outputMaterial: null,
+    parameters: { ...STEP_DEFAULTS[processType].parameters },
+    materialResponses: {},
+  });
+}
+
+/** Copy a library template into a step. There is deliberately no retained recipe id. */
+export function loadRecipeIntoStep(
+  document: WorkspaceDocument,
+  stepId: string,
+  recipe: Recipe,
+): WorkspaceDocument {
+  const sketchId = document.branches
+    .flatMap((branch) => branch.steps)
+    .find((step) => step.id === stepId)?.parameters.sketch_id;
+  return updateStep(document, stepId, {
+    processType: recipe.processType,
+    tool: recipe.tool,
+    outputMaterial: recipe.outputMaterial,
+    parameters: {
+      ...processParameters(recipe.parameters),
+      ...(sketchId == null ? {} : { sketch_id: sketchId }),
+    },
+    materialResponses: copyResponses(recipe.materialResponses),
+  });
+}
+
+export function recipeFromStep(step: ProcessStep, name: string): Recipe {
+  return {
+    id: newId("recipe"),
+    name: name.trim() || step.name,
+    processType: step.processType,
+    tool: step.tool,
+    outputMaterial: step.outputMaterial,
+    parameters: processParameters(step.parameters),
+    materialResponses: copyResponses(step.materialResponses),
+  };
 }
 
 export function reorderSteps(
@@ -207,13 +261,10 @@ export function upsertRecipe(document: WorkspaceDocument, recipe: Recipe): Works
   const recipes = exists
     ? document.recipes.map((item) => (item.id === recipe.id ? recipe : item))
     : [...document.recipes, recipe];
-  const usedBy = getSteps(document).filter((step) => step.recipeId === recipe.id);
-  const updated = { ...document, recipes };
-  return usedBy.reduce((current, step) => invalidateFrom(current, step.id), updated);
+  return { ...document, recipes };
 }
 
 export function removeRecipe(document: WorkspaceDocument, recipeId: string): WorkspaceDocument {
-  if (getSteps(document).some((step) => step.recipeId === recipeId)) return document;
   return { ...document, recipes: document.recipes.filter((item) => item.id !== recipeId) };
 }
 
@@ -246,10 +297,8 @@ export function materialColor(document: WorkspaceDocument, name: string): string
 
 /** Materials a step can produce or consume, used to colour the flow list. */
 export function stepAccentColor(document: WorkspaceDocument, step: ProcessStep): string {
-  const recipe = recipeFor(document, step);
-  if (!recipe) return "#98a5b1";
-  if (recipe.outputMaterial) return materialColor(document, recipe.outputMaterial);
-  const first = Object.keys(recipe.materialResponses)[0];
+  if (step.outputMaterial) return materialColor(document, step.outputMaterial);
+  const first = Object.keys(step.materialResponses)[0];
   return first ? materialColor(document, first) : "#98a5b1";
 }
 

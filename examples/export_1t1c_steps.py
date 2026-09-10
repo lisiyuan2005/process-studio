@@ -98,9 +98,8 @@ def main() -> None:
         state = engine.run_step(state, step, project=project)
         elapsed = time.perf_counter() - started
         state.save(state_path)
-        recipe = engine.recipes[step.recipe_id]
+        recipe = step.effective_recipe(engine.recipes)
         resolved = dict(recipe.parameters)
-        resolved.update(step.overrides)
         metadata["steps"].append(
             {
                 "number": index,

@@ -65,6 +65,13 @@ def build_document(
         active_id = branches[0].id
     loaded = [repository.load_branch(branch.id) for branch in branches]
     recipes = repository.load_recipes()
+    recipes_by_id = {recipe.id: recipe for recipe in recipes}
+    for branch in loaded:
+        migrated = False
+        for step in branch.steps:
+            migrated = step.detach_from_library(recipes_by_id) or migrated
+        if migrated:
+            repository.save_branch(project.id, branch)
     sketches = load_sketches(root)
     statuses = {
         branch.id: step_statuses(repository, branch, recipes, sketches, project)
@@ -73,7 +80,7 @@ def build_document(
     return {
         "root": str(root),
         "project": {**project_to_json(project), "activeBranchId": active_id},
-        "branches": [branch_to_json(branch) for branch in loaded],
+        "branches": [branch_to_json(branch, recipes_by_id) for branch in loaded],
         "recipes": [recipe_to_json(recipe) for recipe in recipes],
         "materials": [material_to_json(material) for material in repository.load_materials()],
         "sketches": [

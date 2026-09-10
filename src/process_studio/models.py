@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Mapping
 from uuid import uuid4
 
 
@@ -65,7 +65,9 @@ class Recipe:
 @dataclass
 class ProcessStep:
     name: str
-    recipe_id: str
+    # recipe_id/overrides are retained only to open projects made before the
+    # step-owned process definition was introduced. New clients leave them empty.
+    recipe_id: str | None = None
     overrides: dict[str, Any] = field(default_factory=dict)
     mask_source: str = "none"
     layer: int | None = None
@@ -73,12 +75,95 @@ class ProcessStep:
     keep: str = "inside"
     enabled: bool = True
     id: str = field(default_factory=new_id)
+    process_type: ProcessType | None = None
+    tool: str = ""
+    output_material: str | None = None
+    parameters: dict[str, Any] = field(default_factory=dict)
+    material_responses: dict[str, MaterialResponse] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        if self.process_type is not None and not isinstance(self.process_type, ProcessType):
+            self.process_type = ProcessType(self.process_type)
+        self.material_responses = {
+            name: (
+                response
+                if isinstance(response, MaterialResponse)
+                else MaterialResponse(**response)
+            )
+            for name, response in self.material_responses.items()
+        }
         if self.mask_source not in {"none", "quick_sketch", "gds"}:
             raise ValueError("mask_source must be none, quick_sketch, or gds")
         if self.keep not in {"inside", "outside"}:
             raise ValueError("keep must be inside or outside")
+
+    @classmethod
+    def from_recipe(
+        cls,
+        name: str,
+        recipe: Recipe,
+        *,
+        parameters: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> "ProcessStep":
+        """Copy a library recipe into an independent process step."""
+        return cls(
+            name,
+            process_type=recipe.process_type,
+            tool=recipe.tool,
+            output_material=recipe.output_material,
+            parameters=dict(recipe.parameters if parameters is None else parameters),
+            material_responses={
+                material: MaterialResponse(
+                    response.material,
+                    response.rate_um_per_min,
+                    response.stop_layer,
+                )
+                for material, response in recipe.material_responses.items()
+            },
+            **kwargs,
+        )
+
+    def effective_recipe(self, recipes: Mapping[str, Recipe]) -> Recipe:
+        """Return this step's private definition, migrating legacy references lazily."""
+        if self.process_type is not None:
+            parameters = dict(self.parameters)
+            parameters.update(self.overrides)
+            return Recipe(
+                self.name,
+                self.process_type,
+                tool=self.tool,
+                output_material=self.output_material,
+                parameters=parameters,
+                material_responses=dict(self.material_responses),
+                id=f"step-definition-{self.id}",
+            )
+        if not self.recipe_id or self.recipe_id not in recipes:
+            raise KeyError(f"step {self.name!r} has no process definition")
+        source = recipes[self.recipe_id]
+        return Recipe(
+            self.name,
+            source.process_type,
+            tool=source.tool,
+            output_material=source.output_material,
+            parameters=source.resolved_parameters(self.overrides),
+            material_responses=dict(source.material_responses),
+            id=f"step-definition-{self.id}",
+        )
+
+    def detach_from_library(self, recipes: Mapping[str, Recipe]) -> bool:
+        """Materialize a legacy recipe reference into this step once."""
+        if self.process_type is not None:
+            return False
+        definition = self.effective_recipe(recipes)
+        self.recipe_id = None
+        self.overrides = {}
+        self.process_type = definition.process_type
+        self.tool = definition.tool
+        self.output_material = definition.output_material
+        self.parameters = dict(definition.parameters)
+        self.material_responses = dict(definition.material_responses)
+        return True
 
 
 @dataclass

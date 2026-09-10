@@ -62,7 +62,7 @@ Windows 产物必须整个目录一起用：exe 会在自己同级的 `resources
 - 可选二阶 HJ + SSP-RK2，同层分块每个时间子步同步边界；[配置和验证](docs/SYNCHRONIZED_SOLVER.md)
 - Windows 桌面版可在 `Project → Simulation Settings…` 选择 25/12.5/6.25 nm 或自定义真实网格间距；应用前显示节点数和内存估计，换精度会清除不兼容快照并要求重新运行
 - 等厚保形沉积、方向性图形沉积/填充、理想平面 CMP
-- Recipe 中定义材料速率、选择比和 stop layer；步骤可覆盖 Recipe 字段
+- Step 自带工艺类型和参数；Recipe Library 只用于加载模板或保存可复用模板
 - 可按时间运行，也可直接输入目标厚度或目标深度
 - 每个项目一个 GDS；步骤选择 layer/datatype、保留图形内或图形外
 - 未选择 mask 时默认整片暴露
@@ -78,7 +78,7 @@ Windows 产物必须整个目录一起用：exe 会在自己同级的 `resources
 ## 界面工作流
 
 1. 在左侧 Process Flow 添加或选择步骤。
-2. 在右侧选择 Recipe，并按需要覆盖材料、厚度/深度、时间、温度、mask、GDS layer/datatype 等字段。
+2. 在右侧选择工艺类型；可加载已有 Recipe，也可只添加当前工艺需要的参数并另存为新 Recipe。
 3. 若不用 GDS，在 Top View 直接画矩形、圆、多边形或路径；也可以编辑 JSON 设置精确尺寸与阵列参数。
 4. 点击 **Run to Selected** 检查单步结果，或点击 **Run All** 计算整个流程。
 5. 在中间切换 3D、Top View 和 AA–BB Section；在 3D 页隐藏材料以检查内部结构。

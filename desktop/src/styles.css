@@ -136,6 +136,56 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .field-row input:hover, .field-row select:hover { border-color: #3e4c59; }
 .field-row input:focus, .field-row select:focus { border-color: #558ed1; background: #141b22; }
 .field-row small { color: #65727f; font-size: 9px; line-height: 1.45; }
+.recipe-template-section .numerics-note { margin: -3px 0 10px; }
+.recipe-load-row, .add-parameter-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.recipe-load-row input, .recipe-load-row select, .add-parameter-row select,
+.form-section > select {
+  min-width: 0;
+  width: 100%;
+  height: 33px;
+  padding: 0 8px;
+  border: 1px solid #ccd6de;
+  border-radius: 6px;
+  background: #f8fafb;
+  color: var(--text);
+  font-size: 10px;
+}
+.recipe-load-row .secondary-button { min-width: 66px; padding: 0 8px; white-space: nowrap; }
+.save-recipe-row .secondary-button { min-width: 112px; }
+.add-parameter-row { margin-top: 2px; }
+.add-parameter-row button {
+  min-width: 48px;
+  height: 33px;
+  padding: 0 9px;
+  border: 1px solid #b9c7d2;
+  border-radius: 6px;
+  background: #eef5fb;
+  color: #316b9f;
+  cursor: pointer;
+  font-size: 9.5px;
+}
+.add-parameter-row button:disabled { opacity: 0.45; cursor: default; }
+.parameter-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.parameter-heading button {
+  width: 22px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #98a5b1;
+  cursor: pointer;
+}
+.parameter-heading button:hover { background: #f9e9eb; color: var(--red); }
+.invalid-input { border-color: var(--red) !important; background: #fff7f7 !important; }
+.field-hint { display: block; margin-top: 7px; color: #65727f; font-size: 9px; line-height: 1.45; }
 .number-input-wrap { position: relative; }
 .number-input-wrap input { padding-right: 45px; }
 .number-input-wrap span { position: absolute; top: 0; right: 9px; height: 33px; display: flex; align-items: center; color: #5f6e7b; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 9px; pointer-events: none; }

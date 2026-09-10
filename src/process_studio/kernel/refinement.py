@@ -66,8 +66,8 @@ def plan_refinement(engine, grid, project, branch, *, factor=4, max_nodes=20_000
     for step in branch.steps:
         if not step.enabled:
             continue
-        recipe = engine.recipes[step.recipe_id]
-        p = recipe.resolved_parameters(step.overrides)
+        recipe = step.effective_recipe(engine.recipes)
+        p = dict(recipe.parameters)
         kind = recipe.process_type
         if kind is ProcessType.NO_GEOMETRY:
             continue

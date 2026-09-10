@@ -109,19 +109,10 @@ def _persist_document(parameters: Mapping[str, Any]) -> dict[str, Any]:
         keep = {recipe.id for recipe in incoming}
         for recipe in incoming:
             repository.save_recipe(recipe)
-        referenced = {
-            step.recipe_id
-            for branch in repository.list_branches(project.id)
-            for step in branch.steps
-        }
         with repository.connect() as connection:
             for row in connection.execute("SELECT id FROM recipes").fetchall():
                 if row["id"] in keep:
                     continue
-                if row["id"] in referenced:
-                    raise InvalidRequest(
-                        f"Recipe {row['id']!r} is still used by a step in this project."
-                    )
                 connection.execute("DELETE FROM recipes WHERE id=?", (row["id"],))
 
     materials = document.get("materials")

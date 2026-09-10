@@ -1,7 +1,6 @@
 import type { DesktopBridge, RunOptions, ViewRequest } from "./bridge";
 import type {
   GdsImportResult,
-  ParameterValue,
   ProcessStep,
   GridDefinition,
   QuickSketch,
@@ -31,7 +30,7 @@ export class BrowserBridge implements DesktopBridge {
   async describe(): Promise<WorkerCapabilities> {
     return {
       workerVersion: "preview",
-      protocolVersion: 1,
+      protocolVersion: 2,
       processTypes: ["deposit", "etch", "cmp", "no_geometry"],
       maskSources: ["none", "quick_sketch", "gds"],
       sketch: {
@@ -114,12 +113,29 @@ export class BrowserBridge implements DesktopBridge {
 /** Mirrors process_studio.defaults so the preview matches a fresh workspace. */
 export function demoDocument(): WorkspaceDocument {
   const branchId = "default-main";
-  const steps = [
-    { id: "step-litho", name: "Lithography", recipeId: "recipe-litho", mask: "quick_sketch" },
-    { id: "step-etch", name: "Trench Etch", recipeId: "recipe-si-trench", mask: "quick_sketch" },
-    { id: "step-strip", name: "Resist Strip", recipeId: "recipe-strip", mask: "none" },
-    { id: "step-ald", name: "Conformal Al2O3", recipeId: "recipe-ald-al2o3", mask: "none" },
-  ] as const;
+  const steps: ProcessStep[] = [
+    {
+      id: "step-litho", name: "Lithography", processType: "no_geometry", tool: "Stepper",
+      outputMaterial: null, parameters: { sketch_id: "default" }, materialResponses: {},
+      maskSource: "quick_sketch", layer: null, datatype: null, keep: "inside", enabled: true,
+    },
+    {
+      id: "step-etch", name: "Trench Etch", processType: "etch", tool: "ICP-RIE",
+      outputMaterial: null, parameters: { sketch_id: "default", target: 0.32, directional_fraction: 0.9 },
+      materialResponses: { Si: { material: "Si", rateUmPerMin: 0.12, stopLayer: false } },
+      maskSource: "quick_sketch", layer: null, datatype: null, keep: "inside", enabled: true,
+    },
+    {
+      id: "step-strip", name: "Resist Strip", processType: "no_geometry", tool: "Ash",
+      outputMaterial: null, parameters: {}, materialResponses: {}, maskSource: "none",
+      layer: null, datatype: null, keep: "inside", enabled: true,
+    },
+    {
+      id: "step-ald", name: "Conformal Al2O3", processType: "deposit", tool: "ALD",
+      outputMaterial: "Al2O3", parameters: { target: 0.04, temperature_c: 250, rate: 0.002 },
+      materialResponses: {}, maskSource: "none", layer: null, datatype: null, keep: "inside", enabled: true,
+    },
+  ];
   return {
     root: "(browser preview)",
     project: {
@@ -147,20 +163,7 @@ export function demoDocument(): WorkspaceDocument {
         name: "main",
         parentBranchId: null,
         parentStepId: null,
-        steps: steps.map<ProcessStep>((step) => ({
-          id: step.id,
-          name: step.name,
-          recipeId: step.recipeId,
-          overrides:
-            step.mask === "quick_sketch"
-              ? ({ sketch_id: "default" } as Record<string, ParameterValue>)
-              : {},
-          maskSource: step.mask,
-          layer: null,
-          datatype: null,
-          keep: "inside" as const,
-          enabled: true,
-        })),
+        steps,
       },
     ],
     recipes: [

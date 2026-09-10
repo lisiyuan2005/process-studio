@@ -29,16 +29,15 @@ import {
   Scissors,
   Sparkles,
 } from "lucide-react";
-import type { ProcessType, ProcessStep, Recipe, StepStatus } from "../types";
+import type { ProcessType, ProcessStep, StepStatus } from "../types";
 
 interface StepListProps {
   steps: ProcessStep[];
-  recipes: Recipe[];
   statuses: Record<string, StepStatus>;
   accentFor: (step: ProcessStep) => string;
   selectedStepId: string;
   onSelect: (stepId: string) => void;
-  onAdd: (recipeId: string) => void;
+  onAdd: (processType: ProcessType) => void;
   onToggle: (stepId: string) => void;
   onReorder: (activeId: string, overId: string) => void;
 }
@@ -68,7 +67,6 @@ function StatusIcon({ status }: { status: StepStatus }) {
 function SortableStep({
   step,
   index,
-  recipe,
   status,
   accent,
   selected,
@@ -77,7 +75,6 @@ function SortableStep({
 }: {
   step: ProcessStep;
   index: number;
-  recipe: Recipe | undefined;
   status: StepStatus;
   accent: string;
   selected: boolean;
@@ -114,13 +111,13 @@ function SortableStep({
       <div className="step-copy">
         <div className="step-title-row">
           <span className="step-kind-icon">
-            <ProcessIcon type={recipe?.processType} />
+            <ProcessIcon type={step.processType} />
           </span>
           <span className="step-title">{step.name}</span>
           <span className="step-index">{index + 1}</span>
         </div>
         <div className="step-subtitle">
-          {recipe ? `${recipe.name} · ${mask}` : "Recipe missing"}
+          {step.processType.replace("_", " ")} · {mask}
         </div>
       </div>
       <button
@@ -145,7 +142,6 @@ function SortableStep({
 
 export function StepList({
   steps,
-  recipes,
   statuses,
   accentFor,
   selectedStepId,
@@ -182,7 +178,6 @@ export function StepList({
                   key={step.id}
                   step={step}
                   index={index}
-                  recipe={recipes.find((recipe) => recipe.id === step.recipeId)}
                   status={statuses[step.id] ?? "dirty"}
                   accent={accentFor(step)}
                   selected={step.id === selectedStepId}
@@ -206,16 +201,22 @@ export function StepList({
             aria-label="Add a process step"
             value=""
             onChange={(event) => {
-              if (event.target.value) onAdd(event.target.value);
+              if (event.target.value) onAdd(event.target.value as ProcessType);
               event.target.value = "";
             }}
           >
             <option value="" disabled>
-              Choose a recipe…
+              Choose a process type…
             </option>
-            {recipes.map((recipe) => (
-              <option key={recipe.id} value={recipe.id}>
-                {recipe.name} ({recipe.processType})
+            {(["deposit", "etch", "cmp", "no_geometry"] as ProcessType[]).map((type) => (
+              <option key={type} value={type}>
+                {type === "deposit"
+                  ? "Deposition"
+                  : type === "etch"
+                    ? "Etch"
+                    : type === "cmp"
+                      ? "CMP"
+                      : "No geometry change"}
               </option>
             ))}
           </select>

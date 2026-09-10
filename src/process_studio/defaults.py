@@ -84,23 +84,27 @@ def default_recipes() -> list[Recipe]:
 
 
 def default_branch() -> FlowBranch:
+    recipes = {recipe.id: recipe for recipe in default_recipes()}
     return FlowBranch(
         "main",
         [
-            ProcessStep(
+            ProcessStep.from_recipe(
                 "Lithography",
-                "recipe-litho",
+                recipes["recipe-litho"],
                 mask_source="quick_sketch",
-                overrides={"sketch_id": "default"},
+                parameters={"sketch_id": "default"},
             ),
-            ProcessStep(
+            ProcessStep.from_recipe(
                 "Trench Etch",
-                "recipe-si-trench",
+                recipes["recipe-si-trench"],
                 mask_source="quick_sketch",
-                overrides={"sketch_id": "default"},
+                parameters={
+                    **recipes["recipe-si-trench"].parameters,
+                    "sketch_id": "default",
+                },
             ),
-            ProcessStep("Resist Strip", "recipe-strip"),
-            ProcessStep("Conformal Al2O3", "recipe-ald-al2o3"),
+            ProcessStep.from_recipe("Resist Strip", recipes["recipe-strip"]),
+            ProcessStep.from_recipe("Conformal Al2O3", recipes["recipe-ald-al2o3"]),
         ],
         id="default-main",
     )

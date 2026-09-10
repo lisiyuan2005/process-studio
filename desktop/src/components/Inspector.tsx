@@ -1,10 +1,13 @@
-import { CircleAlert, FileCode2, Layers, Play, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { BookDown, CircleAlert, Layers, Play, Save, Trash2, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import type {
   MaskKeep,
   MaskSource,
+  MaterialDefinition,
+  MaterialResponse,
   ParameterValue,
   ProcessStep,
+  ProcessType,
   QuickSketch,
   Recipe,
   StepStatus,
@@ -12,16 +15,21 @@ import type {
 
 interface InspectorProps {
   step: ProcessStep | undefined;
-  recipe: Recipe | undefined;
+  recipes: Recipe[];
+  materials: MaterialDefinition[];
   status: StepStatus;
   sketches: QuickSketch[];
   gdsPath: string | null;
   solverOrders: number[];
-  resolved: Record<string, ParameterValue>;
   busy: boolean;
   onRename: (name: string) => void;
-  onOverride: (patch: Record<string, ParameterValue>) => void;
-  onReplaceOverrides: (overrides: Record<string, ParameterValue>) => void;
+  onProcessTypeChange: (type: ProcessType) => void;
+  onDefinitionChange: (
+    patch: Partial<Pick<ProcessStep, "tool" | "outputMaterial" | "materialResponses">>,
+  ) => void;
+  onParameter: (patch: Record<string, ParameterValue>) => void;
+  onLoadRecipe: (recipe: Recipe) => void;
+  onSaveRecipe: (name: string) => void;
   onMaskChange: (patch: {
     maskSource?: MaskSource;
     layer?: number | null;
@@ -32,196 +40,266 @@ interface InspectorProps {
   onRemove: () => void;
 }
 
-/** Fields the dedicated inputs own; anything else stays editable as raw JSON. */
-const MANAGED_KEYS = new Set([
-  "target",
-  "thickness",
-  "rate",
-  "time_min",
-  "temperature_c",
-  "directional_fraction",
-  "target_z",
-  "removal_amount",
-  "materials",
-  "material",
-  "mode",
-  "base_z",
-  "surface_z",
-  "stop_materials",
-  "solver_order",
-  "tile_shape",
-  "sketch_id",
-]);
-
-function NumberField({
-  label,
-  unit,
-  hint,
-  value,
-  recipeValue,
-  onCommit,
-}: {
+interface ParameterSpec {
+  key: string;
   label: string;
   unit?: string;
+  kind?: "number" | "text" | "mode" | "solver";
+  initial: ParameterValue;
   hint?: string;
-  value: ParameterValue | undefined;
-  recipeValue: ParameterValue | undefined;
-  onCommit: (value: number | null) => void;
-}) {
-  const [draft, setDraft] = useState(value === undefined || value === null ? "" : String(value));
-  useEffect(() => {
-    setDraft(value === undefined || value === null ? "" : String(value));
-  }, [value]);
-
-  const commit = () => {
-    const text = draft.trim();
-    if (!text) {
-      onCommit(null);
-      return;
-    }
-    const parsed = Number(text);
-    if (Number.isFinite(parsed)) onCommit(parsed);
-    else setDraft(value === undefined || value === null ? "" : String(value));
-  };
-
-  return (
-    <label className="field-row">
-      <span>{label}</span>
-      <span className="number-input-wrap">
-        <input
-          type="text"
-          inputMode="decimal"
-          value={draft}
-          placeholder={
-            recipeValue === undefined || recipeValue === null ? "not set" : `${recipeValue}`
-          }
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={commit}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") event.currentTarget.blur();
-          }}
-        />
-        {unit && <span>{unit}</span>}
-      </span>
-      {hint && <small>{hint}</small>}
-    </label>
-  );
 }
 
-function TextField({
-  label,
-  hint,
+const PARAMETER_SPECS: Record<ProcessType, ParameterSpec[]> = {
+  deposit: [
+    { key: "target", label: "Target thickness", unit: "µm", initial: 0.05 },
+    { key: "rate", label: "Deposition rate", unit: "µm/min", initial: 0.01 },
+    { key: "time_min", label: "Time", unit: "min", initial: 1 },
+    { key: "temperature_c", label: "Temperature", unit: "°C", initial: 25 },
+    { key: "mode", label: "Deposition mode", kind: "mode", initial: "conformal" },
+    {
+      key: "base_z",
+      label: "Base height",
+      unit: "µm",
+      initial: 0,
+      hint: "Used by directional, evaporation and fill modes.",
+    },
+  ],
+  etch: [
+    { key: "target", label: "Target depth", unit: "µm", initial: 0.1 },
+    { key: "time_min", label: "Time", unit: "min", initial: 1 },
+    { key: "temperature_c", label: "Temperature", unit: "°C", initial: 25 },
+    {
+      key: "directional_fraction",
+      label: "Directional fraction",
+      initial: 1,
+      hint: "1 is vertical; 0 is isotropic.",
+    },
+    { key: "surface_z", label: "Surface height", unit: "µm", initial: 0 },
+    { key: "solver_order", label: "Solver order", kind: "solver", initial: 1 },
+    {
+      key: "tile_shape",
+      label: "Tile size",
+      unit: "nodes",
+      initial: [24, 24, 24],
+      hint: "Execution tiling changes memory use, not spatial resolution.",
+    },
+  ],
+  cmp: [
+    { key: "target_z", label: "Planarize to z", unit: "µm", initial: 0 },
+    { key: "removal_amount", label: "Removal amount", unit: "µm", initial: 0.05 },
+    { key: "materials", label: "Materials", kind: "text", initial: "" },
+  ],
+  no_geometry: [
+    { key: "time_min", label: "Time", unit: "min", initial: 1 },
+    { key: "temperature_c", label: "Temperature", unit: "°C", initial: 25 },
+  ],
+};
+
+const TYPE_LABELS: Record<ProcessType, string> = {
+  deposit: "Deposition",
+  etch: "Etch",
+  cmp: "CMP",
+  no_geometry: "No geometry change",
+};
+
+function NumberInput({
   value,
-  placeholder,
+  unit,
   onCommit,
 }: {
-  label: string;
-  hint?: string;
   value: ParameterValue | undefined;
-  placeholder?: string;
-  onCommit: (value: string | null) => void;
+  unit?: string;
+  onCommit: (value: number) => void;
 }) {
-  const [draft, setDraft] = useState(value === undefined || value === null ? "" : String(value));
+  const scalar = Array.isArray(value) ? value[0] : value;
+  const [draft, setDraft] = useState(scalar === undefined || scalar === null ? "" : String(scalar));
   useEffect(() => {
-    setDraft(value === undefined || value === null ? "" : String(value));
-  }, [value]);
+    setDraft(scalar === undefined || scalar === null ? "" : String(scalar));
+  }, [JSON.stringify(value)]);
+  const commit = () => {
+    const parsed = Number(draft);
+    if (Number.isFinite(parsed)) onCommit(parsed);
+    else setDraft(scalar === undefined || scalar === null ? "" : String(scalar));
+  };
   return (
-    <label className="field-row">
-      <span>{label}</span>
+    <span className="number-input-wrap">
       <input
         type="text"
+        inputMode="decimal"
         value={draft}
-        placeholder={placeholder}
         onChange={(event) => setDraft(event.target.value)}
-        onBlur={() => onCommit(draft.trim() ? draft.trim() : null)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") event.currentTarget.blur();
-        }}
+        onBlur={commit}
+        onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()}
       />
-      {hint && <small>{hint}</small>}
-    </label>
+      {unit && <span>{unit}</span>}
+    </span>
   );
 }
 
-function ExtraOverrides({
-  overrides,
-  onReplace,
+function ParameterRow({
+  spec,
+  value,
+  solverOrders,
+  onChange,
+  onRemove,
 }: {
-  overrides: Record<string, ParameterValue>;
-  onReplace: (value: Record<string, ParameterValue>) => void;
+  spec: ParameterSpec;
+  value: ParameterValue;
+  solverOrders: number[];
+  onChange: (value: ParameterValue) => void;
+  onRemove: () => void;
 }) {
-  const extra = Object.fromEntries(
-    Object.entries(overrides).filter(([key]) => !MANAGED_KEYS.has(key)),
-  );
-  const [draft, setDraft] = useState(JSON.stringify(extra, null, 2));
-  const [error, setError] = useState<string>();
-  useEffect(() => {
-    setDraft(JSON.stringify(extra, null, 2));
-    setError(undefined);
-    // Re-seed only when the step's own extra keys change.
-  }, [JSON.stringify(extra)]);
-
-  const commit = () => {
-    try {
-      const parsed = draft.trim() ? JSON.parse(draft) : {};
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-        throw new Error("Overrides must be a JSON object.");
-      }
-      const managed = Object.fromEntries(
-        Object.entries(overrides).filter(([key]) => MANAGED_KEYS.has(key)),
-      );
-      setError(undefined);
-      onReplace({ ...managed, ...(parsed as Record<string, ParameterValue>) });
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    }
-  };
-
   return (
-    <label className="field-row json-field">
-      <span>Extra overrides (JSON)</span>
-      <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onBlur={commit} />
-      <small>Anything the recipe accepts. The fields above own the keys they show.</small>
-      {error && (
-        <div className="error-box">
-          <CircleAlert size={13} />
-          <span>{error}</span>
-        </div>
+    <div className="field-row parameter-row">
+      <div className="parameter-heading">
+        {spec.label}
+        <button type="button" title={`Remove ${spec.label}`} onClick={onRemove}>
+          <X size={11} />
+        </button>
+      </div>
+      {spec.kind === "mode" ? (
+        <select value={String(value)} onChange={(event) => onChange(event.target.value)}>
+          <option value="conformal">Conformal</option>
+          <option value="directional">Directional prism</option>
+          <option value="evaporation">Evaporation</option>
+          <option value="fill">Fill</option>
+        </select>
+      ) : spec.kind === "solver" ? (
+        <select value={String(value)} onChange={(event) => onChange(Number(event.target.value))}>
+          {solverOrders.map((order) => (
+            <option key={order} value={order}>
+              {order === 1 ? "1 — upwind" : "2 — minmod + SSP-RK2"}
+            </option>
+          ))}
+        </select>
+      ) : spec.kind === "text" ? (
+        <input value={String(value)} onChange={(event) => onChange(event.target.value)} />
+      ) : (
+        <NumberInput
+          value={value}
+          unit={spec.unit}
+          onCommit={(next) => onChange(spec.key === "tile_shape" ? [next, next, next] : next)}
+        />
       )}
-    </label>
+      {spec.hint && <small>{spec.hint}</small>}
+    </div>
+  );
+}
+
+function UnknownParameterRow({
+  name,
+  value,
+  onChange,
+  onRemove,
+}: {
+  name: string;
+  value: ParameterValue;
+  onChange: (value: ParameterValue) => void;
+  onRemove: () => void;
+}) {
+  const [draft, setDraft] = useState(JSON.stringify(value));
+  const [error, setError] = useState(false);
+  useEffect(() => setDraft(JSON.stringify(value)), [JSON.stringify(value)]);
+  return (
+    <div className="field-row parameter-row">
+      <div className="parameter-heading">
+        {name}
+        <button type="button" title={`Remove ${name}`} onClick={onRemove}>
+          <X size={11} />
+        </button>
+      </div>
+      <input
+        className={error ? "invalid-input" : ""}
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => {
+          try {
+            onChange(JSON.parse(draft) as ParameterValue);
+            setError(false);
+          } catch {
+            setError(true);
+          }
+        }}
+      />
+      {error && <small>Use JSON syntax: 1, true, "text", or [24,24,24].</small>}
+    </div>
   );
 }
 
 export function Inspector({
   step,
-  recipe,
+  recipes,
+  materials,
   status,
   sketches,
   gdsPath,
   solverOrders,
-  resolved,
   busy,
   onRename,
-  onOverride,
-  onReplaceOverrides,
+  onProcessTypeChange,
+  onDefinitionChange,
+  onParameter,
+  onLoadRecipe,
+  onSaveRecipe,
   onMaskChange,
   onRunToHere,
   onRemove,
 }: InspectorProps) {
   const [name, setName] = useState(step?.name ?? "");
-  useEffect(() => setName(step?.name ?? ""), [step?.id, step?.name]);
+  const [libraryRecipeId, setLibraryRecipeId] = useState("");
+  const [saveName, setSaveName] = useState(step?.name ?? "");
+  const [parameterToAdd, setParameterToAdd] = useState("");
+  useEffect(() => {
+    setName(step?.name ?? "");
+    setSaveName(step?.name ?? "");
+    setLibraryRecipeId("");
+    setParameterToAdd("");
+  }, [step?.id]);
+
+  const matchingRecipes = useMemo(
+    () => recipes.filter((recipe) => recipe.processType === step?.processType),
+    [recipes, step?.processType],
+  );
 
   if (!step) {
     return (
       <aside className="inspector-panel empty-inspector">
         <Layers size={22} />
-        <span>Select a step to edit its recipe values.</span>
+        <span>Select a step to define its process.</span>
       </aside>
     );
   }
 
-  const type = recipe?.processType;
-  const number = (key: string) => (value: number | null) => onOverride({ [key]: value });
+  const specs = PARAMETER_SPECS[step.processType];
+  const knownKeys = new Set(specs.map((spec) => spec.key));
+  const activeSpecs = specs.filter((spec) => spec.key in step.parameters);
+  const missingSpecs = specs.filter((spec) => !(spec.key in step.parameters));
+  const unknownParameters = Object.entries(step.parameters).filter(
+    ([key]) => !knownKeys.has(key) && key !== "sketch_id",
+  );
+  const unusedResponseMaterials = materials.filter(
+    (material) => !(material.name in step.materialResponses),
+  );
+
+  const setResponse = (material: string, patch: Partial<MaterialResponse>) => {
+    const current = step.materialResponses[material] ?? {
+      material,
+      rateUmPerMin: 0,
+      stopLayer: false,
+    };
+    onDefinitionChange({
+      materialResponses: {
+        ...step.materialResponses,
+        [material]: { ...current, ...patch },
+      },
+    });
+  };
+
+  const removeResponse = (material: string) => {
+    const next = { ...step.materialResponses };
+    delete next[material];
+    onDefinitionChange({ materialResponses: next });
+  };
 
   return (
     <aside className="inspector-panel">
@@ -234,210 +312,183 @@ export function Inspector({
       </div>
 
       <div className="inspector-scroll">
-        <p className="definition-copy">
-          {recipe
-            ? `${recipe.name} · ${recipe.processType} · ${recipe.tool || "no tool"}`
-            : "This step points at a recipe that no longer exists."}
-        </p>
-
         <label className="field-row">
           <span>Step name</span>
           <input
             value={name}
             onChange={(event) => setName(event.target.value)}
             onBlur={() => onRename(name)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") event.currentTarget.blur();
-            }}
+            onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()}
           />
+          <small>The name is free text and is never taken from the Recipe Library.</small>
         </label>
 
-        <div className="form-section">
-          <span className="section-label">PROCESS</span>
-          {type === "deposit" && (
-            <>
-              <TextField
-                label="Material"
-                value={step.overrides.material}
-                placeholder={recipe?.outputMaterial ?? "recipe output"}
-                hint="Overrides the recipe's output material for this step."
-                onCommit={(value) => onOverride({ material: value })}
-              />
-              <NumberField
-                label="Target thickness"
-                unit="µm"
-                value={step.overrides.target}
-                recipeValue={recipe?.parameters.target}
-                onCommit={number("target")}
-              />
-              <NumberField
-                label="Rate"
-                unit="µm/min"
-                value={step.overrides.rate}
-                recipeValue={recipe?.parameters.rate}
-                onCommit={number("rate")}
-              />
-              <label className="field-row">
-                <span>Mode</span>
-                <select
-                  value={String(resolved.mode ?? "conformal")}
-                  onChange={(event) =>
-                    onOverride({
-                      mode: event.target.value === "conformal" ? null : event.target.value,
-                    })
-                  }
-                >
-                  <option value="conformal">Conformal (equal thickness)</option>
-                  <option value="directional">Directional prism</option>
-                  <option value="evaporation">Evaporation</option>
-                  <option value="fill">Fill</option>
-                </select>
-                <small>
-                  Conformal grows off every surface. The other modes extrude the mask upward from
-                  the base height.
-                </small>
-              </label>
-              {resolved.mode !== undefined && resolved.mode !== "conformal" && (
-                <NumberField
-                  label="Base height"
-                  unit="µm"
-                  value={step.overrides.base_z}
-                  recipeValue={recipe?.parameters.base_z}
-                  hint="Empty means the current top surface."
-                  onCommit={number("base_z")}
-                />
-              )}
-            </>
-          )}
+        <label className="field-row">
+          <span>Process type</span>
+          <select
+            value={step.processType}
+            onChange={(event) => onProcessTypeChange(event.target.value as ProcessType)}
+          >
+            {(Object.keys(TYPE_LABELS) as ProcessType[]).map((type) => (
+              <option key={type} value={type}>{TYPE_LABELS[type]}</option>
+            ))}
+          </select>
+        </label>
 
-          {type === "etch" && (
-            <>
-              <NumberField
-                label="Target depth"
-                unit="µm"
-                value={step.overrides.target}
-                recipeValue={recipe?.parameters.target}
-                onCommit={number("target")}
-              />
-              <NumberField
-                label="Time"
-                unit="min"
-                value={step.overrides.time_min}
-                recipeValue={recipe?.parameters.time_min}
-                hint="Used when no target depth is given; depth is time × the fastest rate."
-                onCommit={number("time_min")}
-              />
-              <NumberField
-                label="Directional fraction"
-                value={step.overrides.directional_fraction}
-                recipeValue={recipe?.parameters.directional_fraction}
-                hint="1.0 is fully vertical, 0.0 is fully isotropic."
-                onCommit={number("directional_fraction")}
-              />
-              <NumberField
-                label="Surface height"
-                unit="µm"
-                value={step.overrides.surface_z}
-                recipeValue={recipe?.parameters.surface_z}
-                hint="Empty means the highest occupied node."
-                onCommit={number("surface_z")}
-              />
-              <TextField
-                label="Stop materials"
-                value={step.overrides.stop_materials}
-                placeholder="comma separated"
-                hint="Forces these materials to a zero etch rate for this step."
-                onCommit={(value) => onOverride({ stop_materials: value })}
-              />
-            </>
-          )}
-
-          {type === "cmp" && (
-            <>
-              <NumberField
-                label="Planarize to z"
-                unit="µm"
-                value={step.overrides.target_z}
-                recipeValue={recipe?.parameters.target_z}
-                onCommit={number("target_z")}
-              />
-              <NumberField
-                label="Removal amount"
-                unit="µm"
-                value={step.overrides.removal_amount}
-                recipeValue={recipe?.parameters.removal_amount}
-                hint="Used when no target height is given."
-                onCommit={number("removal_amount")}
-              />
-              <TextField
-                label="Materials"
-                value={step.overrides.materials}
-                placeholder={String(recipe?.parameters.materials ?? "all materials")}
-                hint="Comma separated. Only these are removed."
-                onCommit={(value) => onOverride({ materials: value })}
-              />
-            </>
-          )}
-
-          {type === "no_geometry" && (
-            <div className="empty-result">
-              <FileCode2 size={14} />
-              <span>
-                This recipe records a process step without changing geometry. It still takes part
-                in the flow so the list matches the real run sheet.
-              </span>
-            </div>
-          )}
-
-          <NumberField
-            label="Temperature"
-            unit="°C"
-            value={step.overrides.temperature_c}
-            recipeValue={recipe?.parameters.temperature_c}
-            onCommit={number("temperature_c")}
-          />
+        <div className="form-section recipe-template-section">
+          <span className="section-label">RECIPE TEMPLATE</span>
+          <p className="numerics-note">
+            Loading copies values into this step. The step is not linked to the library afterward.
+          </p>
+          <div className="recipe-load-row">
+            <select
+              value={libraryRecipeId}
+              onChange={(event) => setLibraryRecipeId(event.target.value)}
+            >
+              <option value="">Choose an existing {TYPE_LABELS[step.processType]} recipe…</option>
+              {matchingRecipes.map((recipe) => (
+                <option key={recipe.id} value={recipe.id}>{recipe.name}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={!libraryRecipeId}
+              onClick={() => {
+                const recipe = matchingRecipes.find((item) => item.id === libraryRecipeId);
+                if (recipe) onLoadRecipe(recipe);
+              }}
+            >
+              <BookDown size={13} /> Load
+            </button>
+          </div>
+          <div className="recipe-load-row save-recipe-row">
+            <input value={saveName} onChange={(event) => setSaveName(event.target.value)} />
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={!saveName.trim()}
+              onClick={() => onSaveRecipe(saveName)}
+            >
+              <Save size={13} /> Save as recipe
+            </button>
+          </div>
         </div>
 
-        {type === "etch" && (
-          <div className="form-section">
-            <span className="section-label">NUMERICS</span>
+        <div className="form-section">
+          <span className="section-label">PROCESS DEFINITION</span>
+          <label className="field-row">
+            <span>Tool</span>
+            <input
+              value={step.tool}
+              placeholder="optional"
+              onChange={(event) => onDefinitionChange({ tool: event.target.value })}
+            />
+          </label>
+          {step.processType === "deposit" && (
             <label className="field-row">
-              <span>Solver order</span>
+              <span>Output material</span>
               <select
-                value={String(resolved.solver_order ?? 1)}
+                value={step.outputMaterial ?? ""}
                 onChange={(event) =>
-                  onOverride({
-                    solver_order: Number(event.target.value) === 1 ? null : Number(event.target.value),
-                  })
+                  onDefinitionChange({ outputMaterial: event.target.value || null })
                 }
               >
-                {solverOrders.map((order) => (
-                  <option key={order} value={order}>
-                    {order === 1 ? "1 — Godunov upwind + Euler" : "2 — minmod + SSP-RK2"}
-                  </option>
+                <option value="">Choose material…</option>
+                {materials.map((material) => (
+                  <option key={material.id} value={material.name}>{material.name}</option>
                 ))}
               </select>
             </label>
-            <NumberField
-              label="Tile size"
-              unit="nodes"
-              value={
-                Array.isArray(step.overrides.tile_shape)
-                  ? (step.overrides.tile_shape as unknown as number[])[0]
-                  : step.overrides.tile_shape
-              }
-              recipeValue={undefined}
-              hint="Splits the solve into synchronised tiles. Empty solves the whole grid at once; tiling changes memory use, not the result."
-              onCommit={(value) =>
-                onOverride({
-                  tile_shape: value === null ? null : (([value, value, value] as unknown) as ParameterValue),
-                })
-              }
+          )}
+
+          {activeSpecs.map((spec) => (
+            <ParameterRow
+              key={spec.key}
+              spec={spec}
+              value={step.parameters[spec.key]}
+              solverOrders={solverOrders}
+              onChange={(value) => onParameter({ [spec.key]: value })}
+              onRemove={() => onParameter({ [spec.key]: null })}
             />
-            <p className="numerics-note">
-              Second order lowers discretisation error near smooth interfaces. The limiter drops
-              back to first order at corners, so it is not uniformly more accurate.
-            </p>
+          ))}
+          {unknownParameters.map(([key, value]) => (
+            <UnknownParameterRow
+              key={key}
+              name={key}
+              value={value}
+              onChange={(next) => onParameter({ [key]: next })}
+              onRemove={() => onParameter({ [key]: null })}
+            />
+          ))}
+          {missingSpecs.length > 0 && (
+            <div className="add-parameter-row">
+              <select value={parameterToAdd} onChange={(event) => setParameterToAdd(event.target.value)}>
+                <option value="">Add a parameter…</option>
+                {missingSpecs.map((spec) => (
+                  <option key={spec.key} value={spec.key}>{spec.label}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={!parameterToAdd}
+                onClick={() => {
+                  const spec = missingSpecs.find((item) => item.key === parameterToAdd);
+                  if (spec) onParameter({ [spec.key]: spec.initial });
+                  setParameterToAdd("");
+                }}
+              >Add</button>
+            </div>
+          )}
+          {activeSpecs.length === 0 && unknownParameters.length === 0 && (
+            <div className="empty-result">
+              <CircleAlert size={14} />
+              <span>This step currently has no process parameters.</span>
+            </div>
+          )}
+        </div>
+
+        {step.processType === "etch" && (
+          <div className="form-section">
+            <span className="section-label">MATERIAL ETCH RESPONSES</span>
+            {Object.values(step.materialResponses).map((response) => (
+              <div className="response-row" key={response.material}>
+                <input value={response.material} readOnly />
+                <input
+                  type="number"
+                  min="0"
+                  step="0.001"
+                  value={response.rateUmPerMin}
+                  onChange={(event) =>
+                    setResponse(response.material, {
+                      rateUmPerMin: Math.max(0, Number(event.target.value) || 0),
+                    })
+                  }
+                />
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={response.stopLayer}
+                    onChange={(event) =>
+                      setResponse(response.material, { stopLayer: event.target.checked })
+                    }
+                  /> stop
+                </label>
+                <button type="button" onClick={() => removeResponse(response.material)}>
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))}
+            <select
+              value=""
+              onChange={(event) => event.target.value && setResponse(event.target.value, {})}
+            >
+              <option value="">Add material response…</option>
+              {unusedResponseMaterials.map((material) => (
+                <option key={material.id} value={material.name}>{material.name}</option>
+              ))}
+            </select>
+            <small className="field-hint">Rates are µm/min. A stop layer is stored as zero rate.</small>
           </div>
         )}
 
@@ -454,52 +505,38 @@ export function Inspector({
               <option value="gds">GDSII layer</option>
             </select>
           </label>
-
           {step.maskSource === "quick_sketch" && (
             <label className="field-row">
               <span>Sketch</span>
               <select
-                value={String(resolved.sketch_id ?? "default")}
-                onChange={(event) => onOverride({ sketch_id: event.target.value })}
+                value={String(step.parameters.sketch_id ?? "default")}
+                onChange={(event) => onParameter({ sketch_id: event.target.value })}
               >
                 {sketches.map((sketch) => (
                   <option key={sketch.id} value={sketch.id}>
                     {sketch.id} ({sketch.shapes.length} shapes)
                   </option>
                 ))}
-                {sketches.length === 0 && <option value="default">default</option>}
               </select>
             </label>
           )}
-
           {step.maskSource === "gds" && (
             <>
               <div className="layout-summary">
-                {gdsPath ? (
-                  <>
-                    Layout: <strong>{gdsPath.split(/[\\/]/).pop()}</strong>
-                  </>
-                ) : (
-                  "This project has no GDS file yet. Import one from the top bar."
-                )}
+                {gdsPath ? `Layout: ${gdsPath.split(/[\\/]/).pop()}` : "Import a project GDS first."}
               </div>
               <div className="placement-grid">
-                <NumberField
-                  label="Layer"
-                  value={step.layer}
-                  recipeValue={null}
-                  onCommit={(value) => onMaskChange({ layer: value })}
-                />
-                <NumberField
-                  label="Datatype"
-                  value={step.datatype}
-                  recipeValue={null}
-                  onCommit={(value) => onMaskChange({ datatype: value })}
-                />
+                <label className="field-row">
+                  <span>Layer</span>
+                  <NumberInput value={step.layer} onCommit={(value) => onMaskChange({ layer: value })} />
+                </label>
+                <label className="field-row">
+                  <span>Datatype</span>
+                  <NumberInput value={step.datatype} onCommit={(value) => onMaskChange({ datatype: value })} />
+                </label>
               </div>
             </>
           )}
-
           {step.maskSource !== "none" && (
             <label className="field-row">
               <span>Keep</span>
@@ -513,21 +550,14 @@ export function Inspector({
             </label>
           )}
         </div>
-
-        <div className="form-section">
-          <span className="section-label">ADVANCED</span>
-          <ExtraOverrides overrides={step.overrides} onReplace={onReplaceOverrides} />
-        </div>
       </div>
 
       <div className="inspector-actions">
         <button type="button" className="secondary-button" disabled={busy} onClick={onRunToHere}>
-          <Play size={13} />
-          Run to here
+          <Play size={13} /> Run to here
         </button>
         <button type="button" className="danger-button" disabled={busy} onClick={onRemove}>
-          <Trash2 size={13} />
-          Delete step
+          <Trash2 size={13} /> Delete step
         </button>
       </div>
     </aside>

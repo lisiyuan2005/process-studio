@@ -6,7 +6,6 @@ import type { MaterialDefinition, ParameterValue, ProcessType, Recipe } from "..
 interface RecipeEditorProps {
   recipes: Recipe[];
   materials: MaterialDefinition[];
-  usedRecipeIds: Set<string>;
   busy: boolean;
   onSave: (recipe: Recipe) => void;
   onDelete: (recipeId: string) => void;
@@ -67,7 +66,6 @@ function ParameterField({
 export function RecipeEditor({
   recipes,
   materials,
-  usedRecipeIds,
   busy,
   onSave,
   onDelete,
@@ -148,7 +146,6 @@ export function RecipeEditor({
                     {recipe.processType} · {recipe.tool || "no tool"}
                   </small>
                 </span>
-                {usedRecipeIds.has(recipe.id) && <small>in use</small>}
               </button>
             ))}
             <button type="button" className="add-material" onClick={addRecipe}>
@@ -260,12 +257,7 @@ export function RecipeEditor({
                 <button
                   type="button"
                   className="danger-button"
-                  disabled={usedRecipeIds.has(selected.id)}
-                  title={
-                    usedRecipeIds.has(selected.id)
-                      ? "A step in this project still uses this recipe."
-                      : "Delete this recipe"
-                  }
+                  title="Delete this library recipe. Existing steps keep their copied values."
                   onClick={() => {
                     onDelete(selected.id);
                     setSelectedId(recipes.find((item) => item.id !== selected.id)?.id ?? "");

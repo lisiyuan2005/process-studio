@@ -25,21 +25,22 @@ import {
   getActiveBranch,
   getSteps,
   hasDirtySteps,
+  loadRecipeIntoStep,
   markStep,
-  recipeFor,
+  recipeFromStep,
   removeMaterial,
   removeRecipe,
   removeStep,
   renameStep,
   reorderSteps,
-  resolvedParameters,
   setActiveBranch,
+  setStepProcessType,
   setStepStatuses,
   stepAccentColor,
   stepStatus,
   toggleStep,
   updateStep,
-  updateStepOverrides,
+  updateStepParameters,
   upsertMaterial,
   upsertRecipe,
 } from "./domain/project";
@@ -90,7 +91,6 @@ export default function App() {
   const branch = document ? getActiveBranch(document) : undefined;
   const steps = document ? getSteps(document) : [];
   const selectedStep = steps.find((step) => step.id === selectedStepId);
-  const selectedRecipe = document ? recipeFor(document, selectedStep) : undefined;
   const statuses = useMemo(
     () => (document && branch ? document.stepStatuses[branch.id] ?? {} : {}),
     [document, branch],
@@ -345,13 +345,12 @@ export default function App() {
       if (recipe.outputMaterial) names.add(recipe.outputMaterial);
       Object.keys(recipe.materialResponses).forEach((name) => names.add(name));
     });
+    document?.branches.forEach((item) => item.steps.forEach((step) => {
+      if (step.outputMaterial) names.add(step.outputMaterial);
+      Object.keys(step.materialResponses).forEach((name) => names.add(name));
+    }));
     return names;
-  }, [document?.recipes]);
-
-  const usedRecipeIds = useMemo(
-    () => new Set(document?.branches.flatMap((item) => item.steps.map((step) => step.recipeId))),
-    [document?.branches],
-  );
+  }, [document?.recipes, document?.branches]);
 
   if (!document || !branch) {
     return (
@@ -469,15 +468,12 @@ export default function App() {
       <div className="workspace-grid">
         <StepList
           steps={steps}
-          recipes={document.recipes}
           statuses={statuses}
           accentFor={(step) => stepAccentColor(document, step)}
           selectedStepId={selectedStepId}
           onSelect={setSelectedStepId}
-          onAdd={(recipeId) => {
-            const recipe = document.recipes.find((item) => item.id === recipeId);
-            if (!recipe) return;
-            const { document: next, step } = addStep(document, recipe, selectedStepId);
+          onAdd={(processType) => {
+            const { document: next, step } = addStep(document, processType, selectedStepId);
             setDocument(next);
             setSelectedStepId(step.id);
           }}
@@ -512,20 +508,35 @@ export default function App() {
         />
         <Inspector
           step={selectedStep}
-          recipe={selectedRecipe}
+          recipes={document.recipes}
+          materials={document.materials}
           status={selectedStep ? stepStatus(document, selectedStep.id) : "dirty"}
           sketches={document.sketches}
           gdsPath={document.project.gdsPath}
           solverOrders={capabilities?.numerics.solverOrders ?? [1, 2]}
-          resolved={selectedStep ? resolvedParameters(document, selectedStep) : {}}
           busy={busy}
           onRename={(name) => selectedStep && setDocument(renameStep(document, selectedStep.id, name))}
-          onOverride={(patch: Record<string, ParameterValue>) =>
-            selectedStep && setDocument(updateStepOverrides(document, selectedStep.id, patch))
+          onProcessTypeChange={(processType) =>
+            selectedStep && setDocument(setStepProcessType(document, selectedStep.id, processType))
           }
-          onReplaceOverrides={(overrides) =>
-            selectedStep && setDocument(updateStep(document, selectedStep.id, { overrides }))
+          onDefinitionChange={(patch) =>
+            selectedStep && setDocument(updateStep(document, selectedStep.id, patch))
           }
+          onParameter={(patch: Record<string, ParameterValue>) =>
+            selectedStep && setDocument(updateStepParameters(document, selectedStep.id, patch))
+          }
+          onLoadRecipe={(recipe) =>
+            selectedStep && setDocument(loadRecipeIntoStep(document, selectedStep.id, recipe))
+          }
+          onSaveRecipe={(name) => {
+            if (!selectedStep) return;
+            const recipe = recipeFromStep(selectedStep, name);
+            setDocument(upsertRecipe(document, recipe));
+            setEvents((current) => [
+              ...current,
+              { kind: "log", message: `Saved ${recipe.name} to the Recipe Library.` },
+            ]);
+          }}
           onMaskChange={(patch) =>
             selectedStep && setDocument(updateStep(document, selectedStep.id, patch))
           }
@@ -555,7 +566,6 @@ export default function App() {
         <RecipeEditor
           recipes={document.recipes}
           materials={document.materials}
-          usedRecipeIds={usedRecipeIds}
           busy={busy}
           onSave={(recipe) => setDocument(upsertRecipe(document, recipe))}
           onDelete={(recipeId) => setDocument(removeRecipe(document, recipeId))}
