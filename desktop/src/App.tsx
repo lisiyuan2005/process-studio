@@ -175,11 +175,11 @@ export default function App() {
     setSectionIndex(null);
   };
 
-  const handleCreate = async () => {
+  const handleCreate = async (name: string) => {
     setBusy(true);
     setHomeError(undefined);
     try {
-      const created = await bridge.createWorkspace();
+      const created = await bridge.createWorkspace(name);
       if (created) openDocument(created);
     } catch (reason) {
       setHomeError(errorMessage(reason));

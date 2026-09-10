@@ -27,7 +27,7 @@ export interface ViewRequest {
 export interface DesktopBridge {
   readonly runtime: "tauri" | "browser";
   describe(): Promise<WorkerCapabilities>;
-  createWorkspace(): Promise<WorkspaceDocument | null>;
+  createWorkspace(name: string): Promise<WorkspaceDocument | null>;
   openWorkspace(): Promise<WorkspaceDocument | null>;
   saveDocument(document: WorkspaceDocument): Promise<WorkspaceDocument>;
   setGrid(root: string, grid: GridDefinition): Promise<WorkspaceDocument>;

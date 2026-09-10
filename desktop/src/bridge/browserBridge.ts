@@ -48,8 +48,8 @@ export class BrowserBridge implements DesktopBridge {
     };
   }
 
-  async createWorkspace(): Promise<WorkspaceDocument | null> {
-    this.document = demoDocument();
+  async createWorkspace(name: string): Promise<WorkspaceDocument | null> {
+    this.document = { ...demoDocument(), project: { ...demoDocument().project, name } };
     return this.document;
   }
 

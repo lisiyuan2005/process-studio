@@ -32,17 +32,18 @@ export class TauriBridge implements DesktopBridge {
     return call<WorkerCapabilities>("describe");
   }
 
-  async createWorkspace(): Promise<WorkspaceDocument | null> {
+  async createWorkspace(name: string): Promise<WorkspaceDocument | null> {
+    const trimmed = name.trim();
+    if (!trimmed) return null;
     const parent = await open({
       directory: true,
       multiple: false,
       title: "Choose where the workspace directory is created",
     });
     if (!parent || Array.isArray(parent)) return null;
-    const name = window.prompt("Workspace name", "Process Studio Project");
-    if (!name) return null;
-    const root = `${parent}/${safeFileName(name)}`;
-    return call<WorkspaceDocument>("create_workspace", { root, name });
+    const separator = parent.includes("\\") ? "\\" : "/";
+    const root = `${parent}${separator}${safeFileName(trimmed)}`;
+    return call<WorkspaceDocument>("create_workspace", { root, name: trimmed });
   }
 
   async openWorkspace(): Promise<WorkspaceDocument | null> {

@@ -1,14 +1,17 @@
 import { ArrowRight, Boxes, FolderOpen, Layers3, Plus } from "lucide-react";
+import { useState } from "react";
 
 interface ProjectHomeProps {
   runtime: "tauri" | "browser";
   busy: boolean;
   error?: string;
-  onCreate: () => void;
+  onCreate: (name: string) => void;
   onOpen: () => void;
 }
 
 export function ProjectHome({ runtime, busy, error, onCreate, onOpen }: ProjectHomeProps) {
+  const [name, setName] = useState("Process Studio Project");
+
   return (
     <div className="home-shell">
       <header className="home-header">
@@ -53,11 +56,21 @@ export function ProjectHome({ runtime, busy, error, onCreate, onOpen }: ProjectH
               <p>Creates a directory holding the project database and its snapshots.</p>
             </div>
           </div>
+          <label className="home-field">
+            <span>Workspace name</span>
+            <input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && name.trim() && !busy) onCreate(name.trim());
+              }}
+            />
+          </label>
           <button
             type="button"
             className="primary-button home-primary"
-            disabled={busy}
-            onClick={onCreate}
+            disabled={busy || !name.trim()}
+            onClick={() => onCreate(name.trim())}
           >
             Create workspace <ArrowRight size={15} />
           </button>
