@@ -10,3 +10,11 @@ release/
 dist/
 *.spec.bak
 .DS_Store
+
+# Desktop shell
+node_modules/
+desktop/dist/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/src-tauri/resources/worker/*
+!desktop/src-tauri/resources/worker/.gitkeep

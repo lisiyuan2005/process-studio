@@ -8,22 +8,37 @@
 
 ## 一分钟启动
 
-Windows 下双击 `启动 Process Studio.bat`。首次启动若缺少 Python 依赖，启动器会自动安装本项目及依赖。也可以在 PowerShell 中运行：
+仓库现在有两个桌面前端，读写同一个工作目录，可以随时来回切换。
+
+**Tauri + React 外壳**（新，与 ProcessFlow-Emulator 同一套界面语言）：
+
+```bash
+cd desktop
+npm install
+npm run tauri dev
+```
+
+**Tkinter 界面**（原有）：Windows 下双击 `启动 Process Studio.bat`，或者
 
 ```powershell
 python -m pip install -e .
 process-studio
 ```
 
-打开已经计算好的 2×2 1T1C 示例，可双击 `打开 1T1C 示例.bat`。工程数据保存在工作目录下的 SQLite 文件及快照目录中，不需要安装或维护 SQL 服务。
+首次启动若缺少 Python 依赖，`.bat` 启动器会自动安装本项目及依赖。打开已经计算好的 2×2 1T1C 示例，可双击 `打开 1T1C 示例.bat`。工程数据保存在工作目录下的 SQLite 文件及快照目录中，不需要安装或维护 SQL 服务。
+
+新外壳把工艺内核放在一个 JSON-line RPC worker 里，前端只负责界面。三列布局是流程、视口、参数：视口有 3D 表面、任意位置截面和俯视图；顶栏可以改网格、导入 GDS、编辑材料与 Recipe 库。每一步的结果按摘要缓存，改哪一步就只重算那一步之后的部分。协议、缓存规则和打包见[桌面前端说明](docs/DESKTOP_SHELL.md)。
 
 ### 桌面安装产物
 
 无需 Python 的 Windows 版本可直接运行 `ProcessStudio.exe`。本地重新构建：
 
 ```powershell
-./scripts/build_windows.ps1
+./scripts/build_windows.ps1     # Tkinter 版 EXE
+./scripts/build_desktop.ps1     # Tauri 外壳，内含打包好的 worker
 ```
+
+`build_desktop.ps1` 先用 PyInstaller 把 worker 打成独立可执行文件，冒烟测试后再执行 `npm run tauri build`。macOS/Linux 用 `./scripts/build_desktop.sh`。
 
 macOS `.app` 必须在 macOS 上构建，仓库中的 `Desktop builds` GitHub Actions 会在推送 `v*` tag 或手动触发时同时生成 Windows EXE 和 `ProcessStudio.app` 压缩包。macOS 产物当前未签名或 notarize，首次打开可能需要在 Finder 中右键选择 **Open**。
 
@@ -45,6 +60,7 @@ macOS `.app` 必须在 macOS 上构建，仓库中的 `Desktop builds` GitHub Ac
 - Material Library、Process/Recipe Library、简化 Excel 导入导出
 - 底部 Process Log 记录每步耗时和错误信息
 - 嵌入式 SQLite 持久化；无需数据库服务器
+- Tauri + React 外壳：三列布局、拖拽排序、按摘要缓存的增量执行、three.js 表面视图
 
 ## 界面工作流
 

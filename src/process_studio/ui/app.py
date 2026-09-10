@@ -32,6 +32,12 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 from matplotlib.colors import ListedColormap
 from matplotlib.figure import Figure
 
+from process_studio.defaults import (
+    default_branch,
+    default_grid,
+    default_materials,
+    default_recipes,
+)
 from process_studio.engine import ProcessEngine
 from process_studio.kernel.grid import UniformGrid3D
 from process_studio.kernel.material_state import MaterialState
@@ -41,7 +47,6 @@ from process_studio.libraries import MaterialLibrary, RecipeLibrary
 from process_studio.models import (
     FlowBranch,
     MaterialDefinition,
-    MaterialResponse,
     ProcessStep,
     ProcessType,
     ProjectDefinition,
@@ -89,9 +94,7 @@ class ProcessStudioApp:
                     self.project.active_branch_id or self.repository.list_branches(self.project.id)[0].id
                 )
             else:
-                self.grid = UniformGrid3D(
-                    -0.8, 0.8, -0.8, 0.8, -0.8, 0.4, 41, 41, 31
-                )
+                self.grid = default_grid()
                 self.project = ProjectDefinition(
                     "3D Integration Demo", dict(self.grid.__dict__), id="default-project"
                 )
@@ -148,85 +151,17 @@ class ProcessStudioApp:
 
     @staticmethod
     def _default_materials() -> MaterialLibrary:
-        return MaterialLibrary(
-            [
-                MaterialDefinition("Si", "Semiconductor", "#7b68b8", 1.0, id="material-si"),
-                MaterialDefinition("SiO2", "Dielectric", "#e8c46a", 0.9, id="material-sio2"),
-                MaterialDefinition("Al2O3", "Dielectric", "#ef9b35", 0.9, id="material-al2o3"),
-                MaterialDefinition("SiN", "Dielectric", "#42a5a5", 0.9, id="material-sin"),
-                MaterialDefinition("TiN", "Metal", "#b9a43b", 1.0, id="material-tin"),
-                MaterialDefinition("W", "Metal", "#7f8790", 1.0, id="material-w"),
-                MaterialDefinition("Photoresist", "Mask", "#d95c76", 0.65, id="material-pr"),
-            ]
-        )
+        return MaterialLibrary(default_materials())
 
     @staticmethod
     def _default_recipes() -> RecipeLibrary:
-        dry = Recipe(
-            "Si Directional Trench Etch",
-            ProcessType.ETCH,
-            tool="ICP-RIE",
-            parameters={"target": 0.32, "directional_fraction": 0.9},
-            material_responses={"Si": MaterialResponse("Si", 0.12)},
-            id="recipe-si-trench",
-        )
-        wet = Recipe(
-            "BOE Oxide Etch",
-            ProcessType.ETCH,
-            tool="Wet Bench",
-            parameters={"time_min": 1.0, "temperature_c": 25.0, "directional_fraction": 0.0},
-            material_responses={
-                "SiO2": MaterialResponse("SiO2", 0.08),
-                "Si": MaterialResponse("Si", 0.0, stop_layer=True),
-            },
-            id="recipe-boe",
-        )
-        deposit = Recipe(
-            "Conformal Al2O3",
-            ProcessType.DEPOSIT,
-            tool="ALD",
-            output_material="Al2O3",
-            parameters={"target": 0.04, "temperature_c": 250.0, "rate": 0.002},
-            id="recipe-ald-al2o3",
-        )
-        metal = Recipe(
-            "Conformal TiN",
-            ProcessType.DEPOSIT,
-            tool="ALD",
-            output_material="TiN",
-            parameters={"target": 0.04, "temperature_c": 300.0, "rate": 0.003},
-            id="recipe-ald-tin",
-        )
-        cmp = Recipe(
-            "Ideal CMP",
-            ProcessType.CMP,
-            tool="CMP-01",
-            parameters={"target_z": 0.0, "materials": "Al2O3,TiN,W"},
-            material_responses={"Si": MaterialResponse("Si", 0.0, stop_layer=True)},
-            id="recipe-cmp",
-        )
-        litho = Recipe("Lithography", ProcessType.NO_GEOMETRY, tool="Stepper", id="recipe-litho")
-        strip = Recipe("Resist Strip", ProcessType.NO_GEOMETRY, tool="Ash", id="recipe-strip")
-        return RecipeLibrary([dry, wet, deposit, metal, cmp, litho, strip])
+        return RecipeLibrary(default_recipes())
 
     def _recipe_named(self, name: str) -> Recipe:
         return next(recipe for recipe in self.recipe_library.recipes.values() if recipe.name == name)
 
     def _default_branch(self) -> FlowBranch:
-        litho = self._recipe_named("Lithography")
-        etch = self._recipe_named("Si Directional Trench Etch")
-        strip = self._recipe_named("Resist Strip")
-        deposit = self._recipe_named("Conformal Al2O3")
-        return FlowBranch(
-            "main",
-            [
-                ProcessStep("Lithography", litho.id, mask_source="quick_sketch", overrides={"sketch_id": "default"}),
-                ProcessStep("Trench Etch", etch.id, mask_source="quick_sketch", overrides={"sketch_id": "default"}),
-                ProcessStep("Resist Strip", strip.id),
-                ProcessStep("Conformal Al2O3", deposit.id),
-            ],
-            id="default-main",
-        )
+        return default_branch()
 
     def _build_window(self) -> None:
         self.root.title("Process Studio — 3D Integration Process Modeling")

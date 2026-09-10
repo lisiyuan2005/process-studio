@@ -13,6 +13,19 @@
 - Persistence：项目、分支、共享快照、级联失效和无引用文件删除。
 - Engine：Recipe + Step override、mask 解析、多步运行和快照记录。
 
+## 桌面前端与 worker
+
+`tests/test_worker_protocol.py` 在 RPC 层覆盖：能力上报、工作目录创建与打开、document 往返、Recipe 与材料删除、网格更换与非法网格拒绝、按摘要缓存（改一步只重算其后、改名不失效、删步同时清快照和摘要）、运行到指定步、表面/截面/俯视图的数组长度与索引范围、GDS 导入、Excel 往返，以及逐行服务和错误码。
+
+前端的纯函数在 `desktop/src/domain/project.test.ts` 里用 vitest 覆盖：override 解析、清空 override 回退到 Recipe 值、编辑与重排的失效范围、重命名不失效、步骤增删和配色。
+
+```bash
+python -m pytest -q
+cd desktop && npm run test
+```
+
+这些测试验证的是协议和状态一致性，不是工艺精度。
+
 ## 通用引擎回归
 
 `tests/test_general_engine.py` 另行覆盖 4 种偏移图形 × 3 种刻蚀模式的局部/全域一致性、跨区域多步流程、区域递归合并、GDS 实例旋转与单位、布尔孔洞及反向掩膜、旧材料界面不变性、封闭孔洞不被后续沉积填充、二阶距离重建的网格收敛，以及超出资源预算时拒绝计算。

@@ -19,6 +19,7 @@ dependencies = [
 
 [project.scripts]
 process-studio = "process_studio.ui.app:main"
+process-studio-worker = "process_studio.worker.__main__:main"
 
 [project.optional-dependencies]
 test = ["pytest>=8"]

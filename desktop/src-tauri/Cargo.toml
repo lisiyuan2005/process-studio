@@ -1,0 +1,19 @@
+[package]
+name = "process-studio-desktop"
+version = "0.5.0"
+description = "Process Studio desktop shell"
+authors = ["Process Studio contributors"]
+edition = "2021"
+
+[lib]
+name = "process_studio_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
