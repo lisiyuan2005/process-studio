@@ -25,6 +25,7 @@ from process_studio.models import (
 )
 from process_studio.storage import ProjectRepository
 from process_studio.visualization import downsampled_material_voxels, top_view_labels
+from process_studio.worker.workspace import DigestCache, branch_digests
 
 
 MATERIALS = [
@@ -359,6 +360,14 @@ def main() -> None:
         logger=logs.append,
     )
     final_state = engine.run_branch(state, project, flow)
+    # Record what produced each snapshot, or the desktop shell treats the whole
+    # flow as stale and asks for a run the script already did.
+    cache = DigestCache(repository)
+    digests = branch_digests(
+        flow, {recipe.id: recipe for recipe in recipes}, sketches, project.grid
+    )
+    for step, digest in zip(flow.steps, digests):
+        cache.store(flow.id, step.id, digest)
     final_state.save(args.output_dir / "final-state.npz")
     render_demo(final_state, flow, args.output_dir / "1t1c-demo.png")
     (args.output_dir / "process.log").write_text("\n".join(logs), encoding="utf-8")

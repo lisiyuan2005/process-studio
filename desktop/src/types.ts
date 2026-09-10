@@ -1,7 +1,11 @@
 export type ProcessType = "deposit" | "etch" | "cmp" | "no_geometry";
 export type MaskSource = "none" | "quick_sketch" | "gds";
 export type MaskKeep = "inside" | "outside";
-export type StepStatus = "clean" | "dirty" | "running" | "failed";
+/**
+ * `clean` is a current result, `stale` a stored result that is no longer
+ * current, `dirty` a step that has never run and has nothing stored.
+ */
+export type StepStatus = "clean" | "stale" | "dirty" | "running" | "failed";
 export type ParameterValue = string | number | boolean | null | number[];
 
 export interface GridDefinition {

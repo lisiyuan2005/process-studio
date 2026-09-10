@@ -1,6 +1,15 @@
 import { OrbitControls } from "@react-three/drei";
 import { Canvas } from "@react-three/fiber";
-import { Box, CircleAlert, Image as ImageIcon, LoaderCircle, Ruler } from "lucide-react";
+import {
+  Box,
+  CircleAlert,
+  Eye,
+  EyeOff,
+  Image as ImageIcon,
+  LoaderCircle,
+  Ruler,
+  TriangleAlert,
+} from "lucide-react";
 import { useEffect, useMemo } from "react";
 import * as THREE from "three";
 import type {
@@ -19,6 +28,8 @@ interface ViewportProps {
   title: string;
   loading: boolean;
   error?: string;
+  /** Shown over the view without hiding it, for a result that is out of date. */
+  notice?: string;
   surfacesSupported: boolean;
   maximumInterpolation: number;
   interpolation: number;
@@ -28,6 +39,8 @@ interface ViewportProps {
   sectionIndex: number;
   onSectionIndexChange: (index: number) => void;
   materials: MaterialDefinition[];
+  hiddenMaterials: string[];
+  onToggleMaterial: (material: string) => void;
   surfaces?: SurfaceDocument;
   section?: SectionDocument;
   topView?: TopViewDocument;
@@ -84,9 +97,11 @@ function SurfaceMesh({
 function SurfaceScene({
   surfaces,
   materials,
+  hiddenMaterials,
 }: {
   surfaces: SurfaceDocument;
   materials: MaterialDefinition[];
+  hiddenMaterials: string[];
 }) {
   const { bounds } = surfaces;
   const center = new THREE.Vector3(
@@ -111,16 +126,18 @@ function SurfaceScene({
       <directionalLight position={[span, -span, span * 1.6]} intensity={1.25} />
       <directionalLight position={[-span, span * 0.6, span]} intensity={0.45} />
       <group>
-        {surfaces.surfaces.map((surface) => (
-          <SurfaceMesh
-            key={surface.material}
-            surface={surface}
-            opacity={
-              materials.find((material) => material.name === surface.material)?.opacity ?? 1
-            }
-            offset={center}
-          />
-        ))}
+        {surfaces.surfaces
+          .filter((surface) => !hiddenMaterials.includes(surface.material))
+          .map((surface) => (
+            <SurfaceMesh
+              key={surface.material}
+              surface={surface}
+              opacity={
+                materials.find((material) => material.name === surface.material)?.opacity ?? 1
+              }
+              offset={center}
+            />
+          ))}
         <gridHelper
           args={[span * 1.4, 14, "#c7d2db", "#dde5eb"]}
           rotation={[Math.PI / 2, 0, 0]}
@@ -138,6 +155,7 @@ export function Viewport({
   title,
   loading,
   error,
+  notice,
   surfacesSupported,
   maximumInterpolation,
   interpolation,
@@ -147,6 +165,8 @@ export function Viewport({
   sectionIndex,
   onSectionIndexChange,
   materials,
+  hiddenMaterials,
+  onToggleMaterial,
   surfaces,
   section,
   topView,
@@ -220,7 +240,11 @@ export function Viewport({
           </div>
         ) : mode === "surfaces" ? (
           surfaces && surfaces.surfaces.length > 0 ? (
-            <SurfaceScene surfaces={surfaces} materials={materials} />
+            <SurfaceScene
+              surfaces={surfaces}
+              materials={materials}
+              hiddenMaterials={hiddenMaterials}
+            />
           ) : (
             <div className="view-placeholder">
               <p>
@@ -251,6 +275,13 @@ export function Viewport({
           <div className="view-placeholder">
             <p>Run the flow to see the top view.</p>
           </div>
+        )}
+
+        {notice && !error && (
+          <span className="viewport-notice">
+            <TriangleAlert size={11} />
+            {notice}
+          </span>
         )}
 
         {mode !== "top" && (
@@ -305,12 +336,34 @@ export function Viewport({
         <div className="legend">
           {materials
             .filter((material) => shownMaterials.includes(material.name))
-            .map((material) => (
-              <span key={material.id}>
-                <i style={{ background: material.color }} />
-                {material.name}
-              </span>
-            ))}
+            .map((material) =>
+              mode === "surfaces" ? (
+                <button
+                  key={material.id}
+                  type="button"
+                  className={hiddenMaterials.includes(material.name) ? "hidden-material" : ""}
+                  title={
+                    hiddenMaterials.includes(material.name)
+                      ? `Show ${material.name} in the 3D view`
+                      : `Hide ${material.name} in the 3D view`
+                  }
+                  onClick={() => onToggleMaterial(material.name)}
+                >
+                  <i style={{ background: material.color }} />
+                  {material.name}
+                  {hiddenMaterials.includes(material.name) ? (
+                    <EyeOff size={11} />
+                  ) : (
+                    <Eye size={11} />
+                  )}
+                </button>
+              ) : (
+                <span key={material.id}>
+                  <i style={{ background: material.color }} />
+                  {material.name}
+                </span>
+              ),
+            )}
         </div>
       </div>
     </section>

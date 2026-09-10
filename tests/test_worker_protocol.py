@@ -98,11 +98,30 @@ def test_editing_a_step_invalidates_it_and_everything_after(workspace):
     saved = call("save_document", root=str(workspace), document=document)
     statuses = saved["stepStatuses"][branch["id"]]
     assert statuses[branch["steps"][0]["id"]] == "clean"
-    assert [statuses[step["id"]] for step in branch["steps"][1:]] == ["dirty"] * 3
+    # Their stored results are no longer current, but they are still results.
+    assert [statuses[step["id"]] for step in branch["steps"][1:]] == ["stale"] * 3
 
     result = call("run_flow", root=str(workspace))
     assert result["cachedStepIds"] == [branch["steps"][0]["id"]]
     assert len(result["executedStepIds"]) == 3
+
+
+def test_a_step_that_never_ran_is_reported_separately_from_a_stale_one(workspace):
+    """The views need the difference: stale has something to show, dirty does not."""
+    document = call("open_workspace", root=str(workspace))
+    branch = document["branches"][0]
+    second = branch["steps"][1]["id"]
+    call("run_flow", root=str(workspace), throughStepId=second)
+    document = call("open_workspace", root=str(workspace))
+    document["branches"][0]["steps"][0]["parameters"]["target"] = 0.11
+    saved = call("save_document", root=str(workspace), document=document)
+    statuses = saved["stepStatuses"][branch["id"]]
+    assert [statuses[step["id"]] for step in branch["steps"]] == [
+        "stale",
+        "stale",
+        "dirty",
+        "dirty",
+    ]
 
 
 def test_renaming_a_step_does_not_invalidate_its_result(workspace):
@@ -271,7 +290,7 @@ def test_sketch_edits_invalidate_the_steps_that_use_them(workspace):
     })
     branch = document["branches"][0]
     statuses = document["stepStatuses"][branch["id"]]
-    assert statuses[branch["steps"][0]["id"]] == "dirty"
+    assert statuses[branch["steps"][0]["id"]] == "stale"
     assert document["sketches"][0]["shapes"][0]["parameters"]["radius"] == 0.3
 
 

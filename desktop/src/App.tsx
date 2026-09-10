@@ -84,16 +84,27 @@ export default function App() {
   const [viewLoading, setViewLoading] = useState(false);
   const [viewError, setViewError] = useState<string>();
 
+  const [hiddenMaterials, setHiddenMaterials] = useState<string[]>([]);
+
   const skipNextAutosave = useRef(false);
   const runningStepId = useRef<string | undefined>(undefined);
+  // Only the newest view request may write to the view; a slower earlier one
+  // must not land on top of it and show another step's geometry.
+  const viewToken = useRef(0);
+  const shownTarget = useRef<string>("");
+  // The cut position lives in micrometres so it survives a step change.
+  const sectionPosition = useRef<number | null>(null);
 
   const branch = document ? getActiveBranch(document) : undefined;
+  const root = document?.root;
+  const branchId = branch?.id;
   const steps = document ? getSteps(document) : [];
   const selectedStep = steps.find((step) => step.id === selectedStepId);
   const statuses = useMemo(
     () => (document && branch ? document.stepStatuses[branch.id] ?? {} : {}),
     [document, branch],
   );
+  const selectedStatus = selectedStepId ? statuses[selectedStepId] ?? "dirty" : "clean";
 
   const setDocument = (next: WorkspaceDocument, persist = true) => {
     if (!persist) skipNextAutosave.current = true;
@@ -172,6 +183,8 @@ export default function App() {
     const first = getSteps(next)[0]?.id ?? "";
     setSelectedStepId(first);
     setSectionIndex(null);
+    sectionPosition.current = null;
+    setHiddenMaterials([]);
   };
 
   const handleCreate = async (name: string) => {
@@ -202,41 +215,67 @@ export default function App() {
 
   const refreshViews = useCallback(async () => {
     // A run holds the project database open; read the views once it is done.
-    if (!document || !branch || busy) return;
-    const status = selectedStepId ? statuses[selectedStepId] : "clean";
-    if (selectedStepId && status !== "clean") {
+    if (!root || !branchId || busy) return;
+    const token = (viewToken.current += 1);
+    const target = `${branchId}:${selectedStepId}`;
+    if (shownTarget.current !== target) {
+      // Never leave one step's result on screen while another one loads.
+      shownTarget.current = target;
       setSurfaces(undefined);
       setSection(undefined);
       setTopView(undefined);
-      setViewError("This step has no stored result yet. Run the flow to see it.");
+    }
+    if (selectedStatus === "dirty") {
+      // Nothing was ever stored for this step, so there is nothing to fetch.
+      setViewLoading(false);
+      setViewError("This step has not run yet. Run the flow to see it.");
       return;
     }
     setViewLoading(true);
     setViewError(undefined);
-    const request = { branchId: branch.id, stepId: selectedStepId, interpolation };
+    const request = { branchId, stepId: selectedStepId, interpolation };
     try {
+      // A stale step still has the result of the last run, so it is shown,
+      // labelled out of date, instead of being refused.
       if (mode === "surfaces") {
-        setSurfaces(await bridge.getSurfaces(document.root, request));
+        const next = await bridge.getSurfaces(root, request);
+        if (token !== viewToken.current) return;
+        setSurfaces(next);
       } else if (mode === "section") {
-        const next = await bridge.getSection(document.root, {
+        const next = await bridge.getSection(root, {
           ...request,
           axis: sectionAxis,
-          position:
-            sectionIndex === null ? undefined : section?.positions?.[sectionIndex] ?? undefined,
+          position: sectionPosition.current ?? undefined,
         });
+        if (token !== viewToken.current) return;
         setSection(next);
+        sectionPosition.current = next.position;
         if (next.index !== sectionIndex) setSectionIndex(next.index);
       } else {
-        setTopView(await bridge.getTopView(document.root, request));
+        const next = await bridge.getTopView(root, request);
+        if (token !== viewToken.current) return;
+        setTopView(next);
       }
     } catch (reason) {
+      if (token !== viewToken.current) return;
       setViewError(errorMessage(reason));
     } finally {
-      setViewLoading(false);
+      if (token === viewToken.current) setViewLoading(false);
     }
-    // `section` is intentionally excluded: it is the result this effect writes.
+    // Edits do not change what a run stored, so the document identity is not a
+    // trigger here: a finished run flips `busy`, which is.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [document, branch, busy, selectedStepId, statuses, mode, interpolation, sectionAxis, sectionIndex]);
+  }, [
+    root,
+    branchId,
+    busy,
+    selectedStepId,
+    selectedStatus,
+    mode,
+    interpolation,
+    sectionAxis,
+    sectionIndex,
+  ]);
 
   useEffect(() => {
     void refreshViews();
@@ -376,6 +415,12 @@ export default function App() {
     .filter((event) => event.kind === "progress" && event.total)
     .at(-1);
 
+  // A stale step still shows what the last run stored, labelled as out of date.
+  const viewNotice =
+    selectedStatus === "stale"
+      ? "Out of date: this is what the last run stored for this step."
+      : undefined;
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -498,6 +543,7 @@ export default function App() {
           }
           loading={viewLoading}
           error={viewError}
+          notice={viewNotice}
           surfacesSupported={capabilities?.rendering.surfaces ?? false}
           maximumInterpolation={capabilities?.rendering.maximumInterpolation ?? 4}
           interpolation={interpolation}
@@ -506,10 +552,22 @@ export default function App() {
           onSectionAxisChange={(axis) => {
             setSectionAxis(axis);
             setSectionIndex(null);
+            sectionPosition.current = null;
           }}
           sectionIndex={sectionIndex ?? 0}
-          onSectionIndexChange={setSectionIndex}
+          onSectionIndexChange={(index) => {
+            sectionPosition.current = section?.positions?.[index] ?? null;
+            setSectionIndex(index);
+          }}
           materials={document.materials}
+          hiddenMaterials={hiddenMaterials}
+          onToggleMaterial={(material) =>
+            setHiddenMaterials((current) =>
+              current.includes(material)
+                ? current.filter((name) => name !== material)
+                : [...current, material],
+            )
+          }
           surfaces={surfaces}
           section={section}
           topView={topView}

@@ -78,12 +78,21 @@ describe("workspace document", () => {
 });
 
 describe("result invalidation", () => {
-  it("dirties the edited step and everything after it", () => {
+  it("marks the edited step and everything after it out of date", () => {
     const document = updateStepParameters(cleanDocument(), "step-etch", { target: 0.4 });
     expect(stepStatus(document, "step-litho")).toBe("clean");
-    expect(stepStatus(document, "step-etch")).toBe("dirty");
-    expect(stepStatus(document, "step-strip")).toBe("dirty");
-    expect(stepStatus(document, "step-ald")).toBe("dirty");
+    expect(stepStatus(document, "step-etch")).toBe("stale");
+    expect(stepStatus(document, "step-strip")).toBe("stale");
+    expect(stepStatus(document, "step-ald")).toBe("stale");
+  });
+
+  it("leaves a step that never ran with nothing stored", () => {
+    const { document, step } = addStep(cleanDocument(), "etch", "step-litho");
+    expect(stepStatus(document, step.id)).toBe("dirty");
+    const edited = updateStepParameters(document, step.id, { target: 0.4 });
+    // An edit cannot give a step a result it never had.
+    expect(stepStatus(edited, step.id)).toBe("dirty");
+    expect(stepStatus(edited, "step-etch")).toBe("stale");
   });
 
   it("keeps results when only the step name changes", () => {
@@ -103,13 +112,13 @@ describe("result invalidation", () => {
       "step-litho", "step-ald", "step-etch", "step-strip",
     ]);
     expect(stepStatus(document, "step-litho")).toBe("clean");
-    expect(stepStatus(document, "step-ald")).toBe("dirty");
+    expect(stepStatus(document, "step-ald")).toBe("stale");
   });
 
-  it("dirties the rest of the flow when a step is disabled", () => {
+  it("invalidates the rest of the flow when a step is skipped", () => {
     const document = toggleStep(cleanDocument(), "step-etch");
     expect(getSteps(document)[1].enabled).toBe(false);
-    expect(stepStatus(document, "step-strip")).toBe("dirty");
+    expect(stepStatus(document, "step-strip")).toBe("stale");
   });
 
   it("does not dirty a step when a library recipe changes", () => {
@@ -134,12 +143,12 @@ describe("flow editing", () => {
     expect(step).not.toHaveProperty("recipeId");
   });
 
-  it("removes a step and dirties what followed it", () => {
+  it("removes a step and invalidates what followed it", () => {
     const document = removeStep(cleanDocument(), "step-etch");
     expect(getSteps(document).map((step) => step.id)).toEqual([
       "step-litho", "step-strip", "step-ald",
     ]);
-    expect(stepStatus(document, "step-strip")).toBe("dirty");
+    expect(stepStatus(document, "step-strip")).toBe("stale");
   });
 
   it("allows deleting a library recipe because steps own copies", () => {

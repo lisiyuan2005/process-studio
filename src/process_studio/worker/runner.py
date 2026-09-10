@@ -97,7 +97,12 @@ def step_statuses(
     sketches: Mapping[str, QuickSketch],
     project: ProjectDefinition,
 ) -> dict[str, str]:
-    """Mark each step clean only when a snapshot matches its current digest."""
+    """Report what each step has stored.
+
+    ``clean`` is a snapshot that matches the step's current digest. ``stale``
+    is a snapshot that no longer matches, which is still a real result the
+    views can show. ``dirty`` is a step that has never run and has nothing.
+    """
     by_id = {recipe.id: recipe for recipe in recipes}
     digests = branch_digests(branch, by_id, sketches, project.grid)
     stored = DigestCache(repository).load(branch.id)
@@ -108,15 +113,14 @@ def step_statuses(
         ).fetchall()
     with_snapshot = {row["step_id"] for row in rows}
     statuses: dict[str, str] = {}
-    stale = False
+    invalidated = False
     for step, digest in zip(branch.steps, digests):
-        clean = (
-            not stale and step.id in with_snapshot and stored.get(step.id) == digest
-        )
-        statuses[step.id] = "clean" if clean else "dirty"
+        stored_result = step.id in with_snapshot
+        clean = not invalidated and stored_result and stored.get(step.id) == digest
+        statuses[step.id] = "clean" if clean else "stale" if stored_result else "dirty"
         if not clean:
             # A changed step invalidates everything built on top of it.
-            stale = True
+            invalidated = True
     return statuses
 
 
@@ -243,6 +247,9 @@ def apply_grid(
     """Change the project grid and drop every result computed on the old one."""
     project.grid = grid_dict(grid)
     repository.save_project(project)
+    # The stored states are fields on the old grid: they are not results of
+    # this project any more, so they go rather than linger as stale views.
+    repository.delete_project_snapshots(project.id)
     cache = DigestCache(repository)
     for branch in repository.list_branches(project.id):
         loaded = repository.load_branch(branch.id)

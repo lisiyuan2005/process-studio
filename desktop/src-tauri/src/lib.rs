@@ -13,6 +13,7 @@ const WORKER_METHODS: &[&str] = &[
     "create_workspace",
     "open_workspace",
     "save_document",
+    "plan_grid",
     "set_grid",
     "save_sketch",
     "run_flow",

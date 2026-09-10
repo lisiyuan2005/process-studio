@@ -19,8 +19,6 @@ import {
   ClipboardList,
   CircleAlert,
   Clock3,
-  Eye,
-  EyeOff,
   GripVertical,
   Layers3,
   LoaderCircle,
@@ -28,6 +26,8 @@ import {
   Plus,
   Scissors,
   Sparkles,
+  Square,
+  SquareCheck,
 } from "lucide-react";
 import type { ProcessType, ProcessStep, StepStatus } from "../types";
 
@@ -44,7 +44,8 @@ interface StepListProps {
 
 const STATUS_LABELS: Record<StepStatus, string> = {
   clean: "Ready",
-  dirty: "Stale",
+  stale: "Stale",
+  dirty: "Not run",
   running: "Running",
   failed: "Failed",
 };
@@ -118,19 +119,28 @@ function SortableStep({
         </div>
         <div className="step-subtitle">
           {step.processType.replace("_", " ")} · {mask}
+          {step.enabled ? "" : " · skipped"}
         </div>
       </div>
       <button
         type="button"
+        role="switch"
+        aria-checked={step.enabled}
         className="step-toggle"
-        title={step.enabled ? "Skip this step" : "Enable this step"}
-        aria-label={step.enabled ? `Skip ${step.name}` : `Enable ${step.name}`}
+        title={
+          step.enabled
+            ? "In the run. Click to skip it; this step and the ones after it then need a re-run."
+            : "Skipped. Click to put it back in the run; this step and the ones after it then need a re-run."
+        }
+        aria-label={
+          step.enabled ? `Skip ${step.name} in the run` : `Include ${step.name} in the run`
+        }
         onClick={(event) => {
           event.stopPropagation();
           onToggle();
         }}
       >
-        {step.enabled ? <Eye size={14} /> : <EyeOff size={14} />}
+        {step.enabled ? <SquareCheck size={14} /> : <Square size={14} />}
       </button>
       <div className={`status-chip status-${status}`}>
         <StatusIcon status={status} />

@@ -63,14 +63,16 @@ function withSteps(document: WorkspaceDocument, steps: ProcessStep[]): Workspace
   return withBranch(document, { ...branch, steps });
 }
 
-/** Mark a step and everything after it dirty, the way the worker's digest chain does. */
+/** Invalidate a step and everything after it, the way the worker's digest chain does. */
 function invalidateFrom(document: WorkspaceDocument, stepId: string): WorkspaceDocument {
   const branch = getActiveBranch(document);
   const index = branch.steps.findIndex((step) => step.id === stepId);
   if (index < 0) return document;
   const statuses = { ...(document.stepStatuses[branch.id] ?? {}) };
   branch.steps.slice(index).forEach((step) => {
-    statuses[step.id] = "dirty";
+    // A step that had a current result keeps it, now marked out of date; one
+    // that never ran still has nothing to show.
+    statuses[step.id] = statuses[step.id] === "dirty" ? "dirty" : "stale";
   });
   return { ...document, stepStatuses: { ...document.stepStatuses, [branch.id]: statuses } };
 }
