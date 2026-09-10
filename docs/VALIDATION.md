@@ -12,10 +12,11 @@
 - Library：简化 Excel Recipe 导入导出。
 - Persistence：项目、分支、共享快照、级联失效和无引用文件删除。
 - Engine：Recipe + Step override、mask 解析、多步运行和快照记录。
+- Slab 内核（`tests/test_slab_kernel.py`）：裸片厚度与高度换算、保形膜在沟槽内外都等厚、各向同性刻蚀的 undercut 宽度、CMP 平面按工程高度、状态存档往返、单步不修改输入状态，以及混合刻蚀剖面和图形化沉积被拒绝而不是被近似。
 
 ## 桌面前端与 worker
 
-`tests/test_worker_protocol.py` 在 RPC 层覆盖：能力上报、工作目录创建与打开、document 往返、Recipe 与材料删除、网格更换与非法网格拒绝、按摘要缓存（改一步只重算其后、改名不失效、删步同时清快照和摘要）、运行到指定步、表面/截面/俯视图的数组长度与索引范围、GDS 导入、Excel 往返，以及逐行服务和错误码。
+`tests/test_worker_protocol.py` 在 RPC 层覆盖：能力上报与内核列表、按内核建工作区、内核不可更改、slab 工程的整条流程与三种视图、无网格内核改分辨率、工作目录创建与打开、document 往返、Recipe 与材料删除、网格更换与非法网格拒绝、按摘要缓存（改一步只重算其后、改名不失效、删步同时清快照和摘要）、运行到指定步、表面/截面/俯视图的数组长度与索引范围、GDS 导入、Excel 往返，以及逐行服务和错误码。
 
 前端的纯函数在 `desktop/src/domain/project.test.ts` 里用 vitest 覆盖：override 解析、清空 override 回退到 Recipe 值、编辑与重排的失效范围、重命名不失效、步骤增删和配色。
 

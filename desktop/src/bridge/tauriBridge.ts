@@ -32,7 +32,7 @@ export class TauriBridge implements DesktopBridge {
     return call<WorkerCapabilities>("describe");
   }
 
-  async createWorkspace(name: string): Promise<WorkspaceDocument | null> {
+  async createWorkspace(name: string, kernel: string): Promise<WorkspaceDocument | null> {
     const trimmed = name.trim();
     if (!trimmed) return null;
     const parent = await open({
@@ -43,7 +43,7 @@ export class TauriBridge implements DesktopBridge {
     if (!parent || Array.isArray(parent)) return null;
     const separator = parent.includes("\\") ? "\\" : "/";
     const root = `${parent}${separator}${safeFileName(trimmed)}`;
-    return call<WorkspaceDocument>("create_workspace", { root, name: trimmed });
+    return call<WorkspaceDocument>("create_workspace", { root, name: trimmed, kernel });
   }
 
   async openWorkspace(): Promise<WorkspaceDocument | null> {

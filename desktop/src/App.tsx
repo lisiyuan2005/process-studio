@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   CircleAlert,
   CheckCircle2,
+  Cpu,
   FileSpreadsheet,
   Grid3x3,
   LoaderCircle,
@@ -105,6 +106,9 @@ export default function App() {
     [document, branch],
   );
   const selectedStatus = selectedStepId ? statuses[selectedStepId] ?? "dirty" : "clean";
+  const projectKernel = capabilities?.kernels.find(
+    (item) => item.id === document?.project.kernel,
+  );
 
   const setDocument = (next: WorkspaceDocument, persist = true) => {
     if (!persist) skipNextAutosave.current = true;
@@ -147,8 +151,11 @@ export default function App() {
 
   useEffect(() => {
     if (!capabilities) return;
-    if (!capabilities.rendering.surfaces && mode === "surfaces") setMode("section");
-  }, [capabilities, mode]);
+    // Whether surfaces can be drawn is the kernel's answer, not the build's:
+    // the slab kernel hands over its own triangles and needs no extractor.
+    const supported = projectKernel?.surfaces ?? capabilities.rendering.surfaces;
+    if (!supported && mode === "surfaces") setMode("section");
+  }, [capabilities, projectKernel, mode]);
 
   // Autosave: the worker is the store of record, so every edit is written back.
   useEffect(() => {
@@ -187,11 +194,11 @@ export default function App() {
     setHiddenMaterials([]);
   };
 
-  const handleCreate = async (name: string) => {
+  const handleCreate = async (name: string, kernel: string) => {
     setBusy(true);
     setHomeError(undefined);
     try {
-      const created = await bridge.createWorkspace(name);
+      const created = await bridge.createWorkspace(name, kernel);
       if (created) openDocument(created);
     } catch (reason) {
       setHomeError(errorMessage(reason));
@@ -405,6 +412,8 @@ export default function App() {
         runtime={bridge.runtime}
         busy={busy}
         error={homeError}
+        kernels={capabilities?.kernels ?? []}
+        defaultKernel={capabilities?.defaultKernel ?? "levelset"}
         onCreate={handleCreate}
         onOpen={handleOpen}
       />
@@ -457,10 +466,32 @@ export default function App() {
               </option>
             ))}
           </select>
-          <button type="button" title="Simulation grid" onClick={() => setShowGrid(true)}>
+          <button
+            type="button"
+            title={
+              projectKernel && projectKernel.spacingRole !== "grid"
+                ? `${projectKernel.name}: geometry resolution`
+                : "Simulation grid"
+            }
+            onClick={() => setShowGrid(true)}
+          >
             <Grid3x3 size={13} />
-            {(document.project.grid.spacingUm * 1000).toFixed(0)} nm
+            {(
+              (projectKernel && projectKernel.spacingRole !== "grid"
+                ? document.project.resolutionUm ?? document.project.grid.spacingUm
+                : document.project.grid.spacingUm) * 1000
+            ).toFixed(0)}{" "}
+            nm
           </button>
+          {projectKernel && (
+            <span
+              className="kernel-badge"
+              title={`${projectKernel.summary} Fixed when the project was created.`}
+            >
+              <Cpu size={13} />
+              {projectKernel.name}
+            </span>
+          )}
           <button type="button" title="Import a GDSII layout" onClick={handleImportGds}>
             <MapIcon size={13} />
             GDS
@@ -544,7 +575,7 @@ export default function App() {
           loading={viewLoading}
           error={viewError}
           notice={viewNotice}
-          surfacesSupported={capabilities?.rendering.surfaces ?? false}
+          surfacesSupported={projectKernel?.surfaces ?? capabilities?.rendering.surfaces ?? false}
           maximumInterpolation={capabilities?.rendering.maximumInterpolation ?? 4}
           interpolation={interpolation}
           onInterpolationChange={setInterpolation}
@@ -579,6 +610,7 @@ export default function App() {
           status={selectedStep ? stepStatus(document, selectedStep.id) : "dirty"}
           sketches={document.sketches}
           gdsPath={document.project.gdsPath}
+          kernel={projectKernel}
           solverOrders={capabilities?.numerics.solverOrders ?? [1, 2]}
           busy={busy}
           onRename={(name) => selectedStep && setDocument(renameStep(document, selectedStep.id, name))}
@@ -674,8 +706,17 @@ export default function App() {
       {showGrid && (
         <GridEditor
           grid={document.project.grid}
-          presetsNm={capabilities?.numerics.spacingPresetsNm ?? [25, 12.5, 6.25]}
-          maximumNodes={capabilities?.numerics.maximumNodes ?? 20_000_000}
+          kernel={projectKernel}
+          resolutionUm={document.project.resolutionUm}
+          presetsNm={
+            projectKernel?.spacingPresetsNm ??
+            capabilities?.numerics.spacingPresetsNm ?? [25, 12.5, 6.25]
+          }
+          maximumNodes={
+            projectKernel
+              ? projectKernel.maximumNodes
+              : capabilities?.numerics.maximumNodes ?? 20_000_000
+          }
           busy={busy}
           onPlan={planGrid}
           onApply={handleApplyGrid}

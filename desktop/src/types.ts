@@ -34,11 +34,34 @@ export interface GridEstimate {
 }
 
 export interface GridPlan {
+  kernel: string;
+  /** "grid" when the spacing is the lattice, otherwise a plain resolution. */
+  spacingRole: SpacingRole;
   grid: GridDefinition;
-  estimate: GridEstimate;
-  maximumNodes: number;
+  /** A kernel without a field reports only the spacing it would work at. */
+  estimate: GridEstimate | { spacingNm: number };
+  maximumNodes: number | null;
   withinLimit: boolean;
   unchanged: boolean;
+}
+
+export type SpacingRole = "grid" | "conformal_resolution";
+
+/** One simulation core a project can be built on. */
+export interface KernelDescription {
+  id: string;
+  name: string;
+  version: string;
+  summary: string;
+  processTypes: ProcessType[];
+  maskSources: MaskSource[];
+  depositionModes: string[];
+  /** Accepted directional_fraction values, empty when any value works. */
+  directionalFractions: number[];
+  surfaces: boolean;
+  spacingRole: SpacingRole;
+  spacingPresetsNm: number[];
+  maximumNodes: number | null;
 }
 
 export interface MaterialDefinition {
@@ -94,6 +117,10 @@ export interface ProjectSummary {
   grid: GridDefinition;
   gdsPath: string | null;
   activeBranchId: string | null;
+  /** Fixed when the project was created; the worker refuses to change it. */
+  kernel: string;
+  /** Length a gridless kernel resolves geometry at, in micrometres. */
+  resolutionUm: number | null;
 }
 
 export interface SketchShape {
@@ -151,7 +178,10 @@ export interface SurfacePayload {
 
 export interface SurfaceDocument {
   interpolation: number;
-  sampledSpacingUm: number;
+  /** Absent when the kernel's geometry is exact rather than sampled. */
+  sampledSpacingUm?: number;
+  /** True when the surfaces are the geometry itself, not an isosurface. */
+  exact?: boolean;
   bounds: {
     xMin: number;
     xMax: number;
@@ -183,6 +213,7 @@ export interface SectionDocument {
   horizontalAxis: "x" | "y";
   extent: ImageExtent;
   positions: number[];
+  exact?: boolean;
 }
 
 export interface TopViewDocument {
@@ -190,6 +221,7 @@ export interface TopViewDocument {
   width: number;
   height: number;
   extent: ImageExtent;
+  exact?: boolean;
 }
 
 export interface GdsLayer {
@@ -210,6 +242,8 @@ export interface WorkerCapabilities {
   processTypes: ProcessType[];
   maskSources: MaskSource[];
   sketch: { shapes: string[]; operations: string[] };
+  kernels: KernelDescription[];
+  defaultKernel: string;
   rendering: { surfaces: boolean; maximumInterpolation: number };
   numerics: {
     solverOrders: number[];

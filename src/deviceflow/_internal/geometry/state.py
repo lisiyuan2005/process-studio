@@ -1,0 +1,433 @@
+"""ProcessState: the internal geometry model.
+
+The device is a contiguous stack of :class:`Slab` objects. Each slab is a Z
+interval ``[z0, z1)`` holding, per material, a clean XY ``MultiPolygon``.
+Within one slab the material regions are pairwise disjoint (at most one
+solid material at any point). Empty space is simply absence of a region.
+
+Z planes are stored normalised (rounded to :data:`Z_DECIMALS`) so that two
+planes computed by different arithmetic routes compare equal exactly; plane
+identity is never an epsilon comparison.
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Iterator
+
+import numpy as np
+import shapely
+from shapely.geometry import MultiPolygon, Point, Polygon, box
+
+from ...exceptions import GeometryError
+from ...material import Material
+from . import polygons as P
+
+Z_DECIMALS = 9
+
+
+def znorm(z) -> float:
+    z = round(float(z), Z_DECIMALS)
+    return 0.0 if z == 0 else z  # no -0.0
+
+
+class Slab:
+    __slots__ = ("z0", "z1", "regions")
+
+    def __init__(self, z0: float, z1: float, regions: dict[Material, MultiPolygon]):
+        self.z0 = z0
+        self.z1 = z1
+        self.regions = regions
+
+    @property
+    def thickness(self) -> float:
+        return znorm(self.z1 - self.z0)  # 1.3 - 1.0 is 0.30000000000000004 in floats
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.regions
+
+    def occupied(self) -> MultiPolygon:
+        if not self.regions:
+            return P.EMPTY
+        return P.as_multipolygon(shapely.unary_union(list(self.regions.values())))
+
+    def material_at(self, x: float, y: float) -> Material | None:
+        pt = Point(x, y)
+        for material, region in self.regions.items():
+            if region.covers(pt):
+                return material
+        return None
+
+    def same_regions(self, other: "Slab") -> bool:
+        if self.regions.keys() != other.regions.keys():
+            return False
+        return all(P.equals(self.regions[m], other.regions[m]) for m in self.regions)
+
+    def copy(self) -> "Slab":
+        return Slab(self.z0, self.z1, dict(self.regions))
+
+    def __repr__(self) -> str:
+        mats = ", ".join(m.name for m in self.regions) or "void"
+        return f"Slab({self.z0}..{self.z1}: {mats})"
+
+
+class ProcessState:
+    def __init__(self, bounds, grid: float):
+        x0, y0, x1, y1 = (float(v) for v in bounds)
+        if not (x1 > x0 and y1 > y0):
+            raise GeometryError(f"bounds must be (x0, y0, x1, y1) with x1 > x0, y1 > y0; got {bounds!r}")
+        self.bounds = (x0, y0, x1, y1)
+        self.grid = float(grid)
+        self._box = box(x0, y0, x1, y1)
+        self._slabs: list[Slab] = []
+
+    # -- inspection -------------------------------------------------------
+
+    @property
+    def bounds_area(self) -> float:
+        x0, y0, x1, y1 = self.bounds
+        return (x1 - x0) * (y1 - y0)
+
+    @property
+    def slabs(self) -> list[Slab]:
+        return self._slabs
+
+    @property
+    def z_planes(self) -> list[float]:
+        if not self._slabs:
+            return []
+        return [s.z0 for s in self._slabs] + [self._slabs[-1].z1]
+
+    @property
+    def top(self) -> float | None:
+        """Highest Z with any solid material, or None."""
+        for s in reversed(self._slabs):
+            if not s.is_empty:
+                return s.z1
+        return None
+
+    @property
+    def floor(self) -> float | None:
+        for s in self._slabs:
+            if not s.is_empty:
+                return s.z0
+        return None
+
+    def slab_at(self, z: float) -> Slab | None:
+        """Slab containing z, half-open: z0 <= z < z1."""
+        z = znorm(z)
+        for s in self._slabs:
+            if s.z0 <= z < s.z1:
+                return s
+        return None
+
+    def slabs_between(self, z0: float, z1: float) -> Iterator[Slab]:
+        """Slabs overlapping the open interval (z0, z1)."""
+        z0, z1 = znorm(z0), znorm(z1)
+        for s in self._slabs:
+            if s.z1 > z0 and s.z0 < z1:
+                yield s
+
+    def occupied_at(self, z: float) -> MultiPolygon:
+        s = self.slab_at(z)
+        return P.EMPTY if s is None else s.occupied()
+
+    def material_at(self, x: float, y: float, z: float) -> Material | None:
+        s = self.slab_at(z)
+        return None if s is None else s.material_at(x, y)
+
+    def volume(self, material: Material) -> float:
+        return sum(
+            s.regions[material].area * s.thickness for s in self._slabs if material in s.regions
+        )
+
+    # -- mutation ---------------------------------------------------------
+
+    def clean(self, geom) -> MultiPolygon:
+        """Clip to the device bounds and normalise."""
+        if geom is None or geom.is_empty:
+            return P.EMPTY
+        if not geom.is_valid:  # e.g. after shapely.snap; an overlay on invalid input can throw
+            geom = shapely.make_valid(geom)
+        return P.clean(shapely.intersection(geom, self._box), self.grid)
+
+    def _clean_regions(self, regions) -> dict[Material, MultiPolygon]:
+        out: dict[Material, MultiPolygon] = {}
+        for material, geom in regions.items():
+            if not isinstance(material, Material):
+                raise GeometryError(f"region key must be a Material, got {material!r}")
+            g = self.clean(geom)
+            if not g.is_empty:
+                out[material] = g
+        self._check_disjoint(out)
+        return out
+
+    def _check_disjoint(self, regions: dict[Material, MultiPolygon]) -> None:
+        items = list(regions.items())
+        eps = self.grid * self.grid
+        for i in range(len(items)):
+            for j in range(i + 1, len(items)):
+                (ma, ga), (mb, gb) = items[i], items[j]
+                overlap = ga.intersection(gb).area
+                if overlap > eps:
+                    raise GeometryError(
+                        f"materials {ma.name} and {mb.name} overlap by {overlap:.3g} um^2"
+                    )
+
+    def add_slab(self, z0: float, z1: float, regions) -> Slab:
+        """Append a slab above (or below) the current stack; gaps become void."""
+        z0, z1 = znorm(z0), znorm(z1)
+        if not (z1 > z0):
+            raise GeometryError(f"slab needs z1 > z0, got {z0}..{z1}")
+        slab = Slab(z0, z1, self._clean_regions(regions))
+        if not self._slabs:
+            self._slabs.append(slab)
+            return slab
+        zmin, zmax = self._slabs[0].z0, self._slabs[-1].z1
+        if z0 >= zmax:
+            if z0 > zmax:
+                self._slabs.append(Slab(zmax, z0, {}))
+            self._slabs.append(slab)
+        elif z1 <= zmin:
+            if z1 < zmin:
+                self._slabs.insert(0, Slab(z1, zmin, {}))
+            self._slabs.insert(0, slab)
+        else:
+            raise GeometryError(
+                f"slab {z0}..{z1} overlaps existing stack {zmin}..{zmax}; use split_at + region edits"
+            )
+        return slab
+
+    def split_at(self, z: float) -> None:
+        """Ensure a Z plane exists at z (no-op if outside the stack)."""
+        z = znorm(z)
+        for i, s in enumerate(self._slabs):
+            if s.z0 < z < s.z1:
+                lower = Slab(s.z0, z, dict(s.regions))
+                upper = Slab(z, s.z1, dict(s.regions))
+                self._slabs[i : i + 1] = [lower, upper]
+                return
+
+    def harmonize(self, changed=None, depth: int = 0) -> None:
+        """Rebuild every region from one snap-rounded planar arrangement.
+
+        Boolean results are snapped to the grid slab by slab, so rings of
+        different slabs can run within a grid step of each other without
+        sharing vertices, and noding them together (as the mesh builder must)
+        would create near-duplicate nodes: zero-length edges, sliver caps and
+        walls that disagree with caps. Instead all rings of all slabs are
+        noded together here, rounded to the grid, re-noded until stable, and
+        each region is re-assembled from the faces of that arrangement. Every
+        edge of every region is then an edge of the shared linework, so the
+        mesh builder never has to create a node. Geometry moves by at most a
+        grid step (1e-6 um by default); volumes stay exactly consistent.
+        """
+        regions = [(s, m, r) for s in self._slabs for m, r in s.regions.items()]
+        if not regions:
+            return
+        # After repeated deposition most slabs carry a region that some other
+        # slab carries too, so the same boundary would enter the linework many
+        # times over. Feeding each distinct one once builds the same union
+        # from a fraction of the input; the key is the exact coordinates, so
+        # only genuinely identical boundaries are folded together.
+        seen: set[bytes] = set()
+        boundaries = []
+        shape_of_region: list[bytes] = []
+        for _, _, region in regions:
+            shape = shapely.to_wkb(region)
+            shape_of_region.append(shape)
+            if shape not in seen:
+                seen.add(shape)
+                boundaries.append(region.boundary)
+        master = shapely.unary_union(boundaries)
+        for _ in range(6):
+            rounded = shapely.set_precision(master, self.grid, mode="valid_output")
+            noded = shapely.unary_union(rounded)
+            if noded.equals_exact(master, 0.0):
+                break
+            master = noded
+        faces = [f for f in shapely.get_parts(shapely.polygonize(shapely.get_parts(master))) if f.area > 0]
+        if not faces:
+            return
+        reps = shapely.points(np.array([[p.x, p.y] for p in (f.representative_point() for f in faces)]))
+        edges_of_face = [_directed_edges(f) for f in faces]
+        # Identical regions classify identically against one arrangement, so
+        # each distinct one is classified and reassembled once. The cache
+        # lives only for this call, and the shared result is immutable, as
+        # shapely geometry always is.
+        rebuilt_by_shape: dict[bytes, MultiPolygon | None] = {}
+        for (slab, material, region), shape in zip(regions, shape_of_region):
+            if shape in rebuilt_by_shape:
+                rebuilt = rebuilt_by_shape[shape]
+            else:
+                shapely.prepare(region)
+                inside = np.nonzero(shapely.contains(region, reps))[0]
+                rebuilt = _assemble(faces, edges_of_face, inside, region) if len(inside) else None
+                rebuilt_by_shape[shape] = rebuilt
+            if rebuilt is None:
+                # thinner than the grid everywhere: it vanishes
+                del slab.regions[material]
+                continue
+            slab.regions[material] = rebuilt
+        for slab in self._slabs:
+            self._check_disjoint(slab.regions)
+        opened = self._remove_pinches()
+        opened = self._remove_seams() or opened
+        if opened and depth < 4:
+            self.harmonize(depth=depth + 1)
+
+    def _remove_pinches(self) -> bool:
+        """Open point contacts inside a region by a one-grid-step notch.
+
+        Two parts (or two holes, or a hole and the exterior) of one material
+        touching at a single point make the mesh non-manifold along the
+        vertical line through that point. When the material is continuous
+        above and below, no vertex duplication can repair it, so the contact
+        is opened at the grid scale instead: a 2-grid square around the point
+        is removed from the region. Returns True if anything changed.
+        """
+        changed = False
+        g = self.grid
+        for slab in self._slabs:
+            for material, region in list(slab.regions.items()):
+                seen: dict[tuple, int] = {}
+                pinches = []
+                for poly in region.geoms:
+                    for ring in (poly.exterior, *poly.interiors):
+                        for xy in ring.coords[:-1]:
+                            key = (xy[0], xy[1])
+                            seen[key] = seen.get(key, 0) + 1
+                            if seen[key] == 2:
+                                pinches.append(key)
+                if not pinches:
+                    continue
+                notches = shapely.unary_union([box(x - g, y - g, x + g, y + g) for x, y in pinches])
+                new = self.clean(region.difference(notches))
+                if new.is_empty:
+                    del slab.regions[material]
+                else:
+                    slab.regions[material] = new
+                changed = True
+        return changed
+
+    def _remove_seams(self) -> bool:
+        """Open the cap-to-cap seams that no manifold mesh can represent.
+
+        At a plane where one material's region below and region above touch
+        along an edge from opposite sides (below on one side, above on the
+        other), the up-facing cap and the down-facing cap would share that
+        edge with the two walls: a crack whose ends merge into the solid,
+        which vertex duplication cannot fix. Such coincidences come from two
+        independent offset edges rounding onto the same grid line, so they
+        are resolved at the same scale: the upper region is set back from the
+        seam by one grid step. Returns True if anything changed.
+        """
+        changed = False
+        for below, above in zip(self._slabs[:-1], self._slabs[1:]):
+            for material in list(above.regions):
+                rb = below.regions.get(material)
+                ra = above.regions[material]
+                if rb is None:
+                    continue
+                up_cap = rb.difference(ra)
+                down_cap = ra.difference(rb)
+                if up_cap.is_empty or down_cap.is_empty:
+                    continue
+                seam = up_cap.boundary.intersection(down_cap.boundary)
+                lines = [g for g in shapely.get_parts(seam) if g.geom_type == "LineString" and g.length > 0]
+                if not lines:
+                    continue
+                strip = shapely.unary_union(lines).buffer(self.grid, cap_style="flat", join_style="mitre")
+                new = self.clean(ra.difference(strip))
+                if new.is_empty:
+                    del above.regions[material]
+                else:
+                    above.regions[material] = new
+                changed = True
+        return changed
+
+    def consolidate(self) -> None:
+        """Merge identical adjacent slabs; drop void slabs at the top and bottom."""
+        merged: list[Slab] = []
+        for s in self._slabs:
+            if merged and merged[-1].same_regions(s):
+                merged[-1] = Slab(merged[-1].z0, s.z1, merged[-1].regions)
+            else:
+                merged.append(s)
+        while merged and merged[-1].is_empty:
+            merged.pop()
+        while merged and merged[0].is_empty:
+            merged.pop(0)
+        self._slabs = merged
+
+    def copy(self) -> "ProcessState":
+        other = ProcessState(self.bounds, self.grid)
+        other._slabs = [s.copy() for s in self._slabs]
+        return other
+
+    # -- validation -------------------------------------------------------
+
+    def validate(self) -> None:
+        """Raise GeometryError on any structural problem."""
+        prev_z1 = None
+        for s in self._slabs:
+            if not (math.isfinite(s.z0) and math.isfinite(s.z1)):
+                raise GeometryError(f"non-finite Z in {s!r}")
+            if not s.z1 > s.z0:
+                raise GeometryError(f"non-positive thickness in {s!r}")
+            if prev_z1 is not None and s.z0 != prev_z1:
+                raise GeometryError(f"stack is not contiguous at z={prev_z1} / {s.z0}")
+            prev_z1 = s.z1
+            for material, region in s.regions.items():
+                if not isinstance(region, MultiPolygon):
+                    raise GeometryError(f"{material.name} in {s!r} is not a MultiPolygon")
+                if region.is_empty:
+                    raise GeometryError(f"{material.name} in {s!r} has an empty region")
+                if not region.is_valid:
+                    raise GeometryError(
+                        f"{material.name} in {s!r} is invalid: {shapely.is_valid_reason(region)}"
+                    )
+                if not _finite(region):
+                    raise GeometryError(f"{material.name} in {s!r} has non-finite coordinates")
+                if not self._box.buffer(self.grid).covers(region):
+                    raise GeometryError(f"{material.name} in {s!r} leaves the device bounds")
+            self._check_disjoint(s.regions)
+
+
+def _directed_edges(face) -> list[tuple[tuple, tuple]]:
+    out = []
+    for ring in (face.exterior, *face.interiors):
+        c = ring.coords
+        out.extend((tuple(c[i]), tuple(c[i + 1])) for i in range(len(c) - 1))
+    return out
+
+
+def _assemble(faces, edges_of_face, selected, original) -> MultiPolygon:
+    """Union of arrangement faces, keeping every node: boundary edges are
+    those used by exactly one selected face; polygonize them and keep the
+    pieces whose interior lies in the original region."""
+    from collections import Counter
+
+    count: Counter = Counter()
+    for fi in selected:
+        for a, b in edges_of_face[fi]:
+            count[(a, b) if a < b else (b, a)] += 1
+    boundary = [shapely.linestrings([a, b]) for (a, b), n in count.items() if n == 1]
+    if not boundary:
+        return P.EMPTY
+    pieces = []
+    for g in shapely.get_parts(shapely.polygonize(boundary)):
+        # a ring that touches itself at a node (pinch) is split into valid parts
+        pieces.extend(q for q in P._iter_polygons(shapely.make_valid(g)) if q.area > 0)
+    keep = [g for g in pieces if original.contains(g.representative_point())]
+    from shapely.geometry.polygon import orient
+
+    mp = MultiPolygon([Polygon(g.exterior, g.interiors) for g in keep])
+    if not mp.is_valid:  # parts touching along a node chain: let GEOS split/merge them
+        mp = P.as_multipolygon(shapely.make_valid(mp))
+    return P.as_multipolygon(MultiPolygon([orient(g, sign=1.0) for g in mp.geoms]))
+
+
+def _finite(geom) -> bool:
+    return bool(np.isfinite(shapely.get_coordinates(geom)).all())

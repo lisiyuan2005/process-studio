@@ -182,6 +182,13 @@ class ProjectDefinition:
     gds_path: str | None = None
     active_branch_id: str | None = None
     id: str = field(default_factory=new_id)
+    #: Which simulation kernel this project is built on. Chosen when the
+    #: project is created and never changed afterwards: the kernels store
+    #: geometry differently, so results cannot cross from one to the other.
+    kernel: str = "levelset"
+    #: Length the kernel resolves geometry at when it is not the grid: the
+    #: slab kernel's conformal-deposition resolution. None means its default.
+    resolution_um: float | None = None
 
 
 def dataclass_dict(value: Any) -> dict[str, Any]:

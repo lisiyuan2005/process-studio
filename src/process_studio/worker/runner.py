@@ -6,9 +6,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from ..engine import ProcessEngine
 from ..kernel.grid import UniformGrid3D
-from ..kernel.material_state import MaterialState
+from ..kernels import Kernel, get_kernel
 from ..layout.quick_sketch import QuickSketch
 from ..models import FlowBranch, ProjectDefinition, Recipe
 from ..storage import ProjectRepository
@@ -30,18 +29,14 @@ from .workspace import (
 )
 
 ProgressCallback = Callable[[dict[str, Any]], None]
-SUBSTRATE_MATERIAL = "Si"
 
 
-def initial_state(grid: UniformGrid3D) -> MaterialState:
-    """The starting wafer every run begins from.
-
-    Runs always replay from here rather than from a stored final state, so a
-    refined grid never inherits an interpolated coarse result.
-    """
-    state = MaterialState(grid)
-    state.add_material(SUBSTRATE_MATERIAL, grid.substrate())
-    return state
+def project_kernel(project: ProjectDefinition) -> Kernel:
+    """The kernel this project was created with."""
+    try:
+        return get_kernel(project.kernel)
+    except KeyError as error:
+        raise WorkspaceError(str(error)) from error
 
 
 def _branch_or_fail(repository: ProjectRepository, branch_id: str) -> FlowBranch:
@@ -144,13 +139,9 @@ def run_flow(
     digests = branch_digests(branch, by_id, sketches, project.grid)
     cache = DigestCache(repository)
     stored = cache.load(branch.id)
-    grid = UniformGrid3D(**project.grid)
-    engine = ProcessEngine(
-        by_id,
-        sketches=sketches,
-        repository=repository,
-        logger=lambda message: emit({"kind": "log", "message": message}),
-    )
+    kernel = project_kernel(project)
+    materials = repository.load_materials()
+    logger = lambda message: emit({"kind": "log", "message": message})  # noqa: E731
 
     if through_step_id and all(step.id != through_step_id for step in branch.steps):
         raise InvalidRequest(f"step {through_step_id!r} is not part of this branch")
@@ -160,7 +151,7 @@ def run_flow(
         total = next(
             index + 1 for index, step in enumerate(branch.steps) if step.id == through_step_id
         )
-    state = initial_state(grid)
+    state = kernel.initial_state(project, materials=materials)
     executed: list[str] = []
     cached: list[str] = []
     reusable = not force
@@ -170,7 +161,7 @@ def run_flow(
             break
         if reusable and stored.get(step.id) == digest:
             try:
-                state = repository.load_snapshot(branch.id, step.id)
+                state = kernel.load_state(repository.snapshot_path(branch.id, step.id))
                 cached.append(step.id)
                 emit(
                     {
@@ -195,8 +186,29 @@ def run_flow(
                 "total": total,
             }
         )
-        state = engine.run_step(state, step, project=project)
-        repository.save_snapshot(project.id, branch.id, step.id, state)
+        started_step = time.perf_counter()
+        state = kernel.run_step(
+            state,
+            step,
+            project=project,
+            recipes=by_id,
+            sketches=sketches,
+            logger=logger,
+            materials=materials,
+        )
+        repository.save_snapshot(
+            project.id,
+            branch.id,
+            step.id,
+            state,
+            suffix=kernel.info.snapshot_suffix,
+        )
+        repository.log(
+            project.id,
+            f"{step.name} completed",
+            step_id=step.id,
+            elapsed_ms=(time.perf_counter() - started_step) * 1000.0,
+        )
         cache.store(branch.id, step.id, digest)
         executed.append(step.id)
     elapsed_ms = (time.perf_counter() - started) * 1000.0
@@ -211,7 +223,7 @@ def run_flow(
         "executedStepIds": executed,
         "cachedStepIds": cached,
         "elapsedMs": elapsed_ms,
-        "materials": list(state.priority),
+        "materials": kernel.state_materials(state),
         "stepStatuses": step_statuses(repository, branch, recipes, sketches, project),
     }
 
@@ -222,21 +234,38 @@ def state_for_step(
     branch_id: str,
     step_id: str | None,
     project_id: str | None = None,
-) -> tuple[MaterialState, ProjectRepository, ProjectDefinition]:
+) -> tuple[Any, ProjectRepository, ProjectDefinition, Kernel]:
     """Load the geometry a view should show, or the bare wafer before step one."""
     repository = open_repository(root)
     project = load_project(repository, project_id)
+    kernel = project_kernel(project)
     branch = _branch_or_fail(repository, branch_id or project.active_branch_id or "")
     if not step_id:
-        return initial_state(UniformGrid3D(**project.grid)), repository, project
+        state = kernel.initial_state(project, materials=repository.load_materials())
+        return state, repository, project, kernel
     if all(step.id != step_id for step in branch.steps):
         raise InvalidRequest(f"step {step_id!r} is not part of this branch")
     try:
-        return repository.load_snapshot(branch.id, step_id), repository, project
+        path = repository.snapshot_path(branch.id, step_id)
     except KeyError as error:
         raise InvalidRequest(
             "This step has no stored result yet. Run the flow first."
         ) from error
+    return kernel.load_state(path), repository, project, kernel
+
+
+def discard_results(repository: ProjectRepository, project: ProjectDefinition) -> None:
+    """Drop every stored result of this project.
+
+    The stored states were computed at a resolution the project no longer
+    uses, so they are not results of this project any more and go rather than
+    linger as views of a setting nobody chose.
+    """
+    repository.delete_project_snapshots(project.id)
+    cache = DigestCache(repository)
+    for branch in repository.list_branches(project.id):
+        loaded = repository.load_branch(branch.id)
+        cache.forget(branch.id, [step.id for step in loaded.steps])
 
 
 def apply_grid(
@@ -247,11 +276,17 @@ def apply_grid(
     """Change the project grid and drop every result computed on the old one."""
     project.grid = grid_dict(grid)
     repository.save_project(project)
-    # The stored states are fields on the old grid: they are not results of
-    # this project any more, so they go rather than linger as stale views.
-    repository.delete_project_snapshots(project.id)
-    cache = DigestCache(repository)
-    for branch in repository.list_branches(project.id):
-        loaded = repository.load_branch(branch.id)
-        cache.forget(branch.id, [step.id for step in loaded.steps])
+    discard_results(repository, project)
+    return project
+
+
+def apply_resolution(
+    repository: ProjectRepository,
+    project: ProjectDefinition,
+    resolution_um: float,
+) -> ProjectDefinition:
+    """Change a gridless kernel's resolution and drop the old results."""
+    project.resolution_um = float(resolution_um)
+    repository.save_project(project)
+    discard_results(repository, project)
     return project

@@ -1,16 +1,32 @@
-import { ArrowRight, Boxes, FolderOpen, Layers3, Plus } from "lucide-react";
-import { useState } from "react";
+import { ArrowRight, Boxes, FolderOpen, Layers3, Lock, Plus } from "lucide-react";
+import { useEffect, useState } from "react";
+import type { KernelDescription } from "../types";
 
 interface ProjectHomeProps {
   runtime: "tauri" | "browser";
   busy: boolean;
   error?: string;
-  onCreate: (name: string) => void;
+  kernels: KernelDescription[];
+  defaultKernel: string;
+  onCreate: (name: string, kernel: string) => void;
   onOpen: () => void;
 }
 
-export function ProjectHome({ runtime, busy, error, onCreate, onOpen }: ProjectHomeProps) {
+export function ProjectHome({
+  runtime,
+  busy,
+  error,
+  kernels,
+  defaultKernel,
+  onCreate,
+  onOpen,
+}: ProjectHomeProps) {
   const [name, setName] = useState("Process Studio Project");
+  const [kernel, setKernel] = useState(defaultKernel);
+
+  // The kernel list arrives from the worker, so the default may land later.
+  useEffect(() => setKernel(defaultKernel), [defaultKernel]);
+  const chosen = kernels.find((item) => item.id === kernel);
 
   return (
     <div className="home-shell">
@@ -62,15 +78,44 @@ export function ProjectHome({ runtime, busy, error, onCreate, onOpen }: ProjectH
               value={name}
               onChange={(event) => setName(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && name.trim() && !busy) onCreate(name.trim());
+                if (event.key === "Enter" && name.trim() && !busy) onCreate(name.trim(), kernel);
               }}
             />
           </label>
+
+          {kernels.length > 1 && (
+            <div className="kernel-choice">
+              <span className="section-label">SIMULATION KERNEL</span>
+              {kernels.map((item) => (
+                <label key={item.id} className={item.id === kernel ? "kernel-card active" : "kernel-card"}>
+                  <input
+                    type="radio"
+                    name="kernel"
+                    value={item.id}
+                    checked={item.id === kernel}
+                    onChange={() => setKernel(item.id)}
+                  />
+                  <span className="kernel-name">
+                    {item.name}
+                    <em>{item.version}</em>
+                  </span>
+                  <span className="kernel-summary">{item.summary}</span>
+                </label>
+              ))}
+              <p className="kernel-lock">
+                <Lock size={12} />
+                The kernel is part of the project: it cannot be changed once the workspace
+                exists, because the two store geometry differently and neither can read the
+                other&apos;s results.
+              </p>
+            </div>
+          )}
+
           <button
             type="button"
             className="primary-button home-primary"
-            disabled={busy || !name.trim()}
-            onClick={() => onCreate(name.trim())}
+            disabled={busy || !name.trim() || (kernels.length > 0 && !chosen)}
+            onClick={() => onCreate(name.trim(), kernel)}
           >
             Create workspace <ArrowRight size={15} />
           </button>

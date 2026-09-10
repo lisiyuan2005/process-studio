@@ -1,6 +1,7 @@
 import { BookDown, CircleAlert, Layers, Play, Save, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type {
+  KernelDescription,
   MaskKeep,
   MaskSource,
   MaterialDefinition,
@@ -20,6 +21,7 @@ interface InspectorProps {
   status: StepStatus;
   sketches: QuickSketch[];
   gdsPath: string | null;
+  kernel?: KernelDescription;
   solverOrders: number[];
   busy: boolean;
   onRename: (name: string) => void;
@@ -47,6 +49,8 @@ interface ParameterSpec {
   kind?: "number" | "text" | "mode" | "solver";
   initial: ParameterValue;
   hint?: string;
+  /** Kernels that read this parameter; absent means every kernel does. */
+  kernels?: string[];
 }
 
 const PARAMETER_SPECS: Record<ProcessType, ParameterSpec[]> = {
@@ -62,6 +66,7 @@ const PARAMETER_SPECS: Record<ProcessType, ParameterSpec[]> = {
       unit: "µm",
       initial: 0,
       hint: "Used by directional, evaporation and fill modes.",
+      kernels: ["levelset"],
     },
   ],
   etch: [
@@ -74,25 +79,40 @@ const PARAMETER_SPECS: Record<ProcessType, ParameterSpec[]> = {
       initial: 1,
       hint: "1 is vertical; 0 is isotropic.",
     },
-    { key: "surface_z", label: "Surface height", unit: "µm", initial: 0 },
-    { key: "solver_order", label: "Solver order", kind: "solver", initial: 1 },
+    { key: "surface_z", label: "Surface height", unit: "µm", initial: 0, kernels: ["levelset"] },
+    {
+      key: "solver_order",
+      label: "Solver order",
+      kind: "solver",
+      initial: 1,
+      kernels: ["levelset"],
+    },
     {
       key: "tile_shape",
       label: "Tile size",
       unit: "nodes",
       initial: [24, 24, 24],
       hint: "Execution tiling changes memory use, not spatial resolution.",
+      kernels: ["levelset"],
     },
   ],
   cmp: [
     { key: "target_z", label: "Planarize to z", unit: "µm", initial: 0 },
     { key: "removal_amount", label: "Removal amount", unit: "µm", initial: 0.05 },
-    { key: "materials", label: "Materials", kind: "text", initial: "" },
+    { key: "materials", label: "Materials", kind: "text", initial: "", kernels: ["levelset"] },
   ],
   no_geometry: [
     { key: "time_min", label: "Time", unit: "min", initial: 1 },
     { key: "temperature_c", label: "Temperature", unit: "°C", initial: 25 },
   ],
+};
+
+const MODE_LABELS: Record<string, string> = {
+  conformal: "Conformal",
+  planar: "Planar",
+  directional: "Directional prism",
+  evaporation: "Evaporation",
+  fill: "Fill",
 };
 
 const TYPE_LABELS: Record<ProcessType, string> = {
@@ -140,12 +160,14 @@ function ParameterRow({
   spec,
   value,
   solverOrders,
+  depositionModes,
   onChange,
   onRemove,
 }: {
   spec: ParameterSpec;
   value: ParameterValue;
   solverOrders: number[];
+  depositionModes: string[];
   onChange: (value: ParameterValue) => void;
   onRemove: () => void;
 }) {
@@ -159,10 +181,11 @@ function ParameterRow({
       </div>
       {spec.kind === "mode" ? (
         <select value={String(value)} onChange={(event) => onChange(event.target.value)}>
-          <option value="conformal">Conformal</option>
-          <option value="directional">Directional prism</option>
-          <option value="evaporation">Evaporation</option>
-          <option value="fill">Fill</option>
+          {depositionModes.map((mode) => (
+            <option key={mode} value={mode}>
+              {MODE_LABELS[mode] ?? mode}
+            </option>
+          ))}
         </select>
       ) : spec.kind === "solver" ? (
         <select value={String(value)} onChange={(event) => onChange(Number(event.target.value))}>
@@ -233,6 +256,7 @@ export function Inspector({
   status,
   sketches,
   gdsPath,
+  kernel,
   solverOrders,
   busy,
   onRename,
@@ -270,7 +294,27 @@ export function Inspector({
     );
   }
 
-  const specs = PARAMETER_SPECS[step.processType];
+  // A parameter another kernel reads would do nothing here, so it is not
+  // offered: the fields are what this project's kernel actually uses.
+  const kernelId = kernel?.id ?? "levelset";
+  const depositionModes = kernel?.depositionModes ?? [
+    "conformal",
+    "directional",
+    "evaporation",
+    "fill",
+  ];
+  const specs = PARAMETER_SPECS[step.processType]
+    .filter((spec) => !spec.kernels || spec.kernels.includes(kernelId))
+    .map((spec) =>
+      spec.key === "directional_fraction" && kernel && kernel.directionalFractions.length > 0
+        ? {
+            ...spec,
+            hint: `${kernel.name} accepts ${kernel.directionalFractions
+              .map((value) => (value === 1 ? "1 (vertical)" : value === 0 ? "0 (isotropic)" : String(value)))
+              .join(" or ")}.`,
+          }
+        : spec,
+    );
   const knownKeys = new Set(specs.map((spec) => spec.key));
   const activeSpecs = specs.filter((spec) => spec.key in step.parameters);
   const missingSpecs = specs.filter((spec) => !(spec.key in step.parameters));
@@ -408,6 +452,7 @@ export function Inspector({
               spec={spec}
               value={step.parameters[spec.key]}
               solverOrders={solverOrders}
+              depositionModes={depositionModes}
               onChange={(value) => onParameter({ [spec.key]: value })}
               onRemove={() => onParameter({ [spec.key]: null })}
             />

@@ -7,6 +7,7 @@ import sqlite3
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from .kernel.material_state import MaterialState
@@ -46,7 +47,9 @@ class ProjectRepository:
                     name TEXT NOT NULL,
                     grid_json TEXT NOT NULL,
                     gds_path TEXT,
-                    active_branch_id TEXT
+                    active_branch_id TEXT,
+                    kernel TEXT NOT NULL DEFAULT 'levelset',
+                    resolution_um REAL
                 );
                 CREATE TABLE IF NOT EXISTS materials (
                     id TEXT PRIMARY KEY,
@@ -101,21 +104,40 @@ class ProjectRepository:
                 );
                 """
             )
+            # Databases written before the kernel was a choice have neither
+            # column; they are level-set projects, which is the default.
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(projects)").fetchall()
+            }
+            if "kernel" not in columns:
+                connection.execute(
+                    "ALTER TABLE projects ADD COLUMN kernel TEXT NOT NULL DEFAULT 'levelset'"
+                )
+            if "resolution_um" not in columns:
+                connection.execute("ALTER TABLE projects ADD COLUMN resolution_um REAL")
 
     def save_project(self, project: ProjectDefinition) -> None:
         with self.connect() as connection:
             connection.execute(
-                """INSERT INTO projects(id, name, grid_json, gds_path, active_branch_id)
-                VALUES (?, ?, ?, ?, ?)
+                """INSERT INTO projects(
+                    id, name, grid_json, gds_path, active_branch_id, kernel, resolution_um
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                -- kernel is deliberately absent from the update list: a
+                -- project keeps the kernel it was created with.
                 ON CONFLICT(id) DO UPDATE SET name=excluded.name,
                 grid_json=excluded.grid_json, gds_path=excluded.gds_path,
-                active_branch_id=excluded.active_branch_id""",
+                active_branch_id=excluded.active_branch_id,
+                resolution_um=excluded.resolution_um""",
                 (
                     project.id,
                     project.name,
                     json.dumps(project.grid),
                     project.gds_path,
                     project.active_branch_id,
+                    project.kernel,
+                    project.resolution_um,
                 ),
             )
 
@@ -132,6 +154,8 @@ class ProjectRepository:
             grid=json.loads(row["grid_json"]),
             gds_path=row["gds_path"],
             active_branch_id=row["active_branch_id"],
+            kernel=row["kernel"] or "levelset",
+            resolution_um=row["resolution_um"],
         )
 
     def list_projects(self) -> list[ProjectDefinition]:
@@ -296,10 +320,13 @@ class ProjectRepository:
         project_id: str,
         branch_id: str,
         step_id: str,
-        state: MaterialState,
+        state: Any,
+        *,
+        suffix: str = ".npz",
     ) -> str:
+        """Store one step's result. The kernel owns the file format."""
         snapshot_id = uuid4().hex
-        path = self.snapshot_directory / f"{snapshot_id}.npz"
+        path = self.snapshot_directory / f"{snapshot_id}{suffix}"
         state.save(path)
         with self.connect() as connection:
             old = connection.execute(
@@ -322,6 +349,19 @@ class ProjectRepository:
         if old is not None:
             self._delete_snapshot_if_unreferenced(old["snapshot_id"])
         return snapshot_id
+
+    def snapshot_path(self, branch_id: str, step_id: str) -> Path:
+        """Where a step's stored result lives, whatever wrote it."""
+        with self.connect() as connection:
+            row = connection.execute(
+                """SELECT snapshots.path FROM snapshots JOIN branch_snapshots
+                ON snapshots.id = branch_snapshots.snapshot_id
+                WHERE branch_snapshots.branch_id=? AND branch_snapshots.step_id=?""",
+                (branch_id, step_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError((branch_id, step_id))
+        return Path(row["path"])
 
     def load_snapshot(self, branch_id: str, step_id: str) -> MaterialState:
         with self.connect() as connection:

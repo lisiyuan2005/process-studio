@@ -27,7 +27,8 @@ export interface ViewRequest {
 export interface DesktopBridge {
   readonly runtime: "tauri" | "browser";
   describe(): Promise<WorkerCapabilities>;
-  createWorkspace(name: string): Promise<WorkspaceDocument | null>;
+  /** The kernel is chosen here and only here: a project keeps it for life. */
+  createWorkspace(name: string, kernel: string): Promise<WorkspaceDocument | null>;
   openWorkspace(): Promise<WorkspaceDocument | null>;
   saveDocument(document: WorkspaceDocument): Promise<WorkspaceDocument>;
   planGrid(root: string, targetSpacingNm: number): Promise<GridPlan>;

@@ -11,6 +11,9 @@ from .kernel.grid import UniformGrid3D
 # per material plus solver temporaries has to fit in memory.
 MAXIMUM_NODES = 20_000_000
 
+#: Spacings the desktop offers as one-click presets, coarse to fine.
+SPACING_PRESETS_NM: tuple[float, ...] = (25.0, 12.5, 6.25)
+
 
 @dataclass(frozen=True)
 class GridEstimate:

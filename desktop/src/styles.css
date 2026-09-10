@@ -248,6 +248,16 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .home-field { display: grid; gap: 7px; margin-top: 22px; color: #909da9; font-size: 10px; }
 .home-field input { height: 38px; padding: 0 11px; border: 1px solid #34414c; border-radius: 7px; background: #11171d; color: #dbe3ea; font-size: 12px; }
 .home-primary { width: 100%; height: 38px; margin-top: 12px; font-size: 11px; }
+.kernel-choice { margin-top: 20px; }
+.kernel-card { display: grid; grid-template-columns: 14px 1fr; align-items: start; gap: 4px 9px; margin-bottom: 7px; padding: 10px 11px; border: 1px solid #34414c; border-radius: 8px; background: #11171d; cursor: pointer; }
+.kernel-card.active { border-color: rgba(85, 142, 209, 0.65); background: rgba(85, 142, 209, 0.09); }
+.kernel-card input { grid-row: 1 / span 2; margin: 2px 0 0; accent-color: #5b9eea; }
+.kernel-name { display: flex; align-items: baseline; gap: 7px; color: #dbe3ea; font-size: 11px; font-weight: 600; }
+.kernel-name em { color: #71808c; font-size: 8.5px; font-style: normal; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.kernel-summary { color: #8a97a3; font-size: 9.5px; line-height: 1.5; }
+.kernel-lock { display: flex; align-items: flex-start; gap: 6px; margin: 10px 0 0 !important; color: #a0885c !important; font-size: 9px !important; line-height: 1.5; }
+.kernel-lock svg { flex: 0 0 auto; margin-top: 1px; }
+.kernel-badge { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); font-size: 9.5px; }
 .home-divider { display: flex; align-items: center; gap: 9px; margin: 17px 0; color: #56636f; font-size: 8px; }
 .home-divider::before, .home-divider::after { content: ""; flex: 1; height: 1px; background: #29333c; }
 .open-button { width: 100%; height: 37px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; color: #9aa8b4; font-size: 10.5px; }
@@ -313,6 +323,10 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .feature-row span { background: rgba(255,255,255,0.72); border-color: #d5dde4; }
 .home-card { background: rgba(255,255,255,0.96); border-color: #d1dbe3; box-shadow: 0 25px 70px rgba(44,63,79,0.13); }
 .home-field input { background: #f8fafb; color: #263746; border-color: #cbd6df; }
+.kernel-card { background: #f8fafb; border-color: #cbd6df; }
+.kernel-card.active { background: rgba(85, 142, 209, 0.08); }
+.kernel-name { color: #263746; }
+.kernel-summary { color: #5d6d7b; }
 .open-button { color: #566b7d; }
 
 @media (max-width: 1120px) {

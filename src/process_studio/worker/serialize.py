@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from ..kernel.grid import UniformGrid3D
+from ..kernels import DEFAULT_KERNEL
 from ..models import (
     FlowBranch,
     MaterialDefinition,
@@ -275,6 +276,8 @@ def project_to_json(project: ProjectDefinition) -> dict[str, Any]:
         "grid": grid_to_json(UniformGrid3D(**project.grid)),
         "gdsPath": project.gds_path,
         "activeBranchId": project.active_branch_id,
+        "kernel": project.kernel,
+        "resolutionUm": project.resolution_um,
     }
 
 
@@ -288,10 +291,13 @@ def project_from_json(payload: Mapping[str, Any]) -> ProjectDefinition:
     project_id = str(payload.get("id") or "")
     if not project_id:
         raise InvalidRequest("project id cannot be empty")
+    resolution = payload.get("resolutionUm")
     return ProjectDefinition(
         name,
         grid_dict(grid_from_json(grid)),
         None if payload.get("gdsPath") in (None, "") else str(payload["gdsPath"]),
         payload.get("activeBranchId"),
         id=project_id,
+        kernel=str(payload.get("kernel") or DEFAULT_KERNEL),
+        resolution_um=None if resolution in (None, "") else float(resolution),
     )

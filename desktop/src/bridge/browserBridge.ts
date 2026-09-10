@@ -38,6 +38,37 @@ export class BrowserBridge implements DesktopBridge {
         operations: ["merge", "subtract", "intersect"],
       },
       rendering: { surfaces: false, maximumInterpolation: 4 },
+      kernels: [
+        {
+          id: "levelset",
+          name: "Level set",
+          version: "preview",
+          summary: "Signed distance fields on a uniform grid.",
+          processTypes: ["deposit", "etch", "cmp", "no_geometry"],
+          maskSources: ["none", "quick_sketch", "gds"],
+          depositionModes: ["conformal", "directional", "evaporation", "fill"],
+          directionalFractions: [],
+          surfaces: false,
+          spacingRole: "grid",
+          spacingPresetsNm: [25, 12.5, 6.25],
+          maximumNodes: 20_000_000,
+        },
+        {
+          id: "slab",
+          name: "Slab (DeviceFlow)",
+          version: "preview",
+          summary: "Exact polygon slabs from the DeviceFlow core.",
+          processTypes: ["deposit", "etch", "cmp", "no_geometry"],
+          maskSources: ["none", "quick_sketch", "gds"],
+          depositionModes: ["conformal", "planar"],
+          directionalFractions: [0, 1],
+          surfaces: false,
+          spacingRole: "conformal_resolution",
+          spacingPresetsNm: [25, 10, 2],
+          maximumNodes: null,
+        },
+      ],
+      defaultKernel: "levelset",
       numerics: {
         solverOrders: [1, 2],
         refinementFactors: [2, 4, 8],
@@ -49,8 +80,11 @@ export class BrowserBridge implements DesktopBridge {
     };
   }
 
-  async createWorkspace(name: string): Promise<WorkspaceDocument | null> {
-    this.document = { ...demoDocument(), project: { ...demoDocument().project, name } };
+  async createWorkspace(name: string, kernel: string): Promise<WorkspaceDocument | null> {
+    this.document = {
+      ...demoDocument(),
+      project: { ...demoDocument().project, name, kernel },
+    };
     return this.document;
   }
 
@@ -160,6 +194,8 @@ export function demoDocument(): WorkspaceDocument {
       },
       gdsPath: null,
       activeBranchId: branchId,
+      kernel: "levelset",
+      resolutionUm: null,
     },
     branches: [
       {

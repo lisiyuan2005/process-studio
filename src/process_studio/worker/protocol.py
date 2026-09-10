@@ -16,13 +16,21 @@ from typing import Any, IO, Mapping
 
 from . import PROTOCOL_VERSION, __version__
 from ..kernel.grid import UniformGrid3D
+from ..kernels import DEFAULT_KERNEL, available_kernels, get_kernel
 from ..layout.gds import available_gds_layers
 from ..libraries import RecipeLibrary
 from ..models import ProcessType
 from ..simulation_settings import MAXIMUM_NODES, estimate_grid, grid_for_target_spacing
 from .errors import InvalidRequest, WorkerError, WorkspaceError
-from .render import MAXIMUM_INTERPOLATION, MESHES_AVAILABLE, material_surfaces, section_image, top_view_image
-from .runner import apply_grid, build_document, run_flow, state_for_step
+from .render import MAXIMUM_INTERPOLATION, MESHES_AVAILABLE
+from .runner import (
+    apply_grid,
+    apply_resolution,
+    build_document,
+    project_kernel,
+    run_flow,
+    state_for_step,
+)
 from .serialize import (
     branch_from_json,
     grid_from_json,
@@ -65,6 +73,8 @@ def _describe() -> dict[str, Any]:
         "processTypes": [process_type.value for process_type in ProcessType],
         "maskSources": list(MASK_SOURCES),
         "sketch": {"shapes": list(SKETCH_SHAPES), "operations": list(SKETCH_OPERATIONS)},
+        "kernels": [kernel.info.to_json() for kernel in available_kernels()],
+        "defaultKernel": DEFAULT_KERNEL,
         "rendering": {
             "surfaces": MESHES_AVAILABLE,
             "maximumInterpolation": MAXIMUM_INTERPOLATION,
@@ -105,6 +115,17 @@ def _persist_document(parameters: Mapping[str, Any]) -> dict[str, Any]:
         raise InvalidRequest(
             "Use set_grid to change the grid; it discards results computed on the old one."
         )
+    if stored.resolution_um != project.resolution_um:
+        raise InvalidRequest(
+            "Use set_grid to change the resolution; it discards results computed at the old one."
+        )
+    if project.kernel != stored.kernel:
+        raise InvalidRequest(
+            f"This project runs on the {stored.kernel!r} kernel and cannot be moved to "
+            f"{project.kernel!r}. The kernels store geometry differently, so a result of "
+            "one is not a result of the other. Create a new project to use another kernel."
+        )
+    project.kernel = stored.kernel
     repository.save_project(project)
 
     recipes = document.get("recipes")
@@ -164,21 +185,38 @@ def _target_spacing(parameters: Mapping[str, Any]) -> float:
 
 
 def _plan_grid(parameters: Mapping[str, Any]) -> dict[str, Any]:
-    """Report the grid a target spacing would produce, and what it would cost.
+    """Report what a target spacing would mean, and what it would cost.
 
-    The spacing has to divide every project extent, so the requested value is
-    matched to the nearest lattice that does rather than rounded per axis.
+    On the level-set kernel the spacing is the grid, and it has to divide
+    every project extent, so the requested value is matched to the nearest
+    lattice that does rather than rounded per axis. On a kernel without a
+    field the same number is a resolution, which any positive value satisfies
+    and which costs no nodes.
     """
     root = _root(parameters)
     repository = open_repository(root)
     project = load_project(repository, parameters.get("projectId"))
+    kernel = project_kernel(project)
     current = UniformGrid3D(**project.grid)
+    if kernel.info.spacing_role != "grid":
+        spacing = _target_spacing(parameters)
+        return {
+            "kernel": kernel.info.id,
+            "spacingRole": kernel.info.spacing_role,
+            "grid": grid_to_json(current),
+            "estimate": {"spacingNm": spacing},
+            "maximumNodes": None,
+            "withinLimit": True,
+            "unchanged": abs(spacing / 1000.0 - (project.resolution_um or 0.0)) < 1e-12,
+        }
     try:
         proposed = grid_for_target_spacing(current, _target_spacing(parameters))
     except ValueError as error:
         raise InvalidRequest(str(error)) from error
     estimate = estimate_grid(proposed, len(repository.load_materials()))
     return {
+        "kernel": kernel.info.id,
+        "spacingRole": kernel.info.spacing_role,
         "grid": grid_to_json(proposed),
         "estimate": {
             "spacingNm": estimate.spacing_nm,
@@ -198,6 +236,15 @@ def _set_grid(parameters: Mapping[str, Any]) -> dict[str, Any]:
     root = _root(parameters)
     repository = open_repository(root)
     project = load_project(repository, parameters.get("projectId"))
+    kernel = project_kernel(project)
+    if kernel.info.spacing_role != "grid":
+        if parameters.get("targetSpacingNm") is None:
+            raise InvalidRequest(
+                f"The {kernel.info.name} kernel has no grid to set; give targetSpacingNm "
+                "to change the resolution it works at."
+            )
+        apply_resolution(repository, project, _target_spacing(parameters) / 1000.0)
+        return build_document(root, repository, project)
     if parameters.get("targetSpacingNm") is not None:
         try:
             grid = grid_for_target_spacing(
@@ -218,6 +265,7 @@ def _set_grid(parameters: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _view_state(parameters: Mapping[str, Any]):
+    """The state a view should draw, with the kernel that knows how to draw it."""
     root = _root(parameters)
     branch_id = parameters.get("branchId")
     if not isinstance(branch_id, str) or not branch_id:
@@ -315,7 +363,8 @@ def dispatch(request: Mapping[str, Any], output: IO[str]) -> Any:
     if method == "create_workspace":
         root = _root(parameters)
         name = str(parameters.get("name") or "Process Studio Project")
-        repository = initialize_workspace(root, name)
+        kernel = str(parameters.get("kernel") or DEFAULT_KERNEL)
+        repository = initialize_workspace(root, name, kernel)
         return build_document(root, repository, load_project(repository))
     if method == "open_workspace":
         return _open(parameters)
@@ -351,10 +400,11 @@ def dispatch(request: Mapping[str, Any], output: IO[str]) -> Any:
             progress=progress,
         )
     if method == "get_surfaces":
-        state, repository, _ = _view_state(parameters)
+        state, repository, project, kernel = _view_state(parameters)
         materials = parameters.get("materials")
-        payload = material_surfaces(
+        payload = kernel.surfaces(
             state,
+            project=project,
             interpolation=parameters.get("interpolation", 1),
             materials=None if materials is None else [str(name) for name in materials],
         )
@@ -363,10 +413,11 @@ def dispatch(request: Mapping[str, Any], output: IO[str]) -> Any:
             surface["color"] = colors.get(surface["material"], "#7c83a0")
         return payload
     if method == "get_section":
-        state, repository, _ = _view_state(parameters)
-        return section_image(
+        state, repository, project, kernel = _view_state(parameters)
+        return kernel.section(
             state,
             _material_colors(repository),
+            project=project,
             axis=str(parameters.get("axis", "y")),
             position=(
                 None if parameters.get("position") is None else float(parameters["position"])
@@ -374,8 +425,8 @@ def dispatch(request: Mapping[str, Any], output: IO[str]) -> Any:
             interpolation=parameters.get("interpolation", 1),
         )
     if method == "get_top_view":
-        state, repository, _ = _view_state(parameters)
-        return top_view_image(state, _material_colors(repository))
+        state, repository, project, kernel = _view_state(parameters)
+        return kernel.top_view(state, _material_colors(repository), project=project)
     if method == "import_gds":
         return _import_gds(parameters)
     if method == "export_recipes_xlsx":

@@ -1,0 +1,692 @@
+"""The slab kernel: exact polygon slabs, from the DeviceFlow 0.2.0 core.
+
+This is the engine ProcessFlow-Emulator runs, wrapped in Process Studio's
+kernel interface. It keeps geometry as stacked slabs of exact polygons rather
+than as sampled fields, so a film has the thickness it was given and a mask
+edge is where the mask says it is, with no grid to converge. What it cannot
+do is anything the slab model has no room for: a partly directional etch, a
+patterned deposition, a selective polish.
+
+Heights differ between the two kernels and are translated here. The level-set
+project puts the wafer surface at z = 0 with the substrate below it, down to
+the project's ``z_min``. A DeviceFlow device stands on its floor at z = 0 and
+grows upward. The substrate is therefore ``|z_min|`` thick, and every height
+this module reports to the client has ``z_min`` added, so both kernels show a
+wafer surface at 0 and the same deposit at the same height.
+"""
+
+from __future__ import annotations
+
+import base64
+import io
+import math
+from pathlib import Path
+from typing import Any, Callable, Mapping, Sequence
+
+import numpy as np
+import shapely
+from PIL import Image, ImageDraw
+from shapely.geometry import LineString, Point, Polygon, box
+
+from deviceflow import Device
+from deviceflow.mask import Mask
+from deviceflow.state_io import decode_state, encode_state
+
+from ..layout.quick_sketch import QuickSketch, SketchShape
+from ..models import MaterialDefinition, ProcessStep, ProcessType, ProjectDefinition, Recipe
+from .base import KernelInfo
+
+#: Snapping tolerance handed to DeviceFlow. It is the kernel's own default:
+#: a cleanup epsilon for polygon arithmetic, not a simulation resolution.
+GEOMETRY_GRID_UM = 1e-6
+
+#: Conformal resolution used when a project does not name one.
+DEFAULT_RESOLUTION_UM = 0.01
+
+SUBSTRATE_MATERIAL = "Si"
+BACKGROUND_RGB = (247, 249, 252)
+#: Cut positions offered along an axis. The geometry is continuous; this is
+#: only how many stops the client's slider has.
+SECTION_POSITIONS = 201
+#: Longest edge of a rendered picture, before the sampling factor.
+BASE_PIXELS = 900
+MAXIMUM_PIXELS = 2600
+
+_ROLES = {
+    "semiconductor": "semiconductor",
+    "dielectric": "dielectric",
+    "metal": "metal",
+    "mask": "resist",
+    "resist": "resist",
+    "substrate": "substrate",
+}
+
+
+class SlabError(ValueError):
+    """A step the slab kernel cannot execute, explained in its message."""
+
+
+def _role(category: str) -> str:
+    return _ROLES.get(category.strip().lower(), "other")
+
+
+def material_table(materials: Sequence[MaterialDefinition]) -> dict[str, dict[str, Any]]:
+    """The project's materials in the shape DeviceFlow's registry reads."""
+    return {
+        material.name: {"role": _role(material.category), "color": material.color}
+        for material in materials
+    }
+
+
+def _window(project: ProjectDefinition) -> tuple[float, float, float, float]:
+    grid = project.grid
+    return (
+        float(grid["x_min"]),
+        float(grid["y_min"]),
+        float(grid["x_max"]),
+        float(grid["y_max"]),
+    )
+
+
+def resolution_um(project: ProjectDefinition) -> float:
+    value = getattr(project, "resolution_um", None)
+    return DEFAULT_RESOLUTION_UM if not value else float(value)
+
+
+class SlabState:
+    """A DeviceFlow device and the wafer offset the workspace displays it at."""
+
+    def __init__(self, device: Device, z_offset: float) -> None:
+        self.device = device
+        self.z_offset = float(z_offset)
+
+    @property
+    def priority(self) -> list[str]:
+        """Materials that own geometry, in the order they first appear."""
+        names: list[str] = []
+        for slab in self.device._state.slabs:
+            for material in slab.regions:
+                if material.name not in names:
+                    names.append(material.name)
+        return names
+
+    def working_copy(self) -> Device:
+        """A device that can be advanced without touching this state."""
+        return self.device._clone(self.device._state, self.device.history)
+
+    def save(self, path: Path) -> None:
+        Path(path).write_bytes(
+            encode_state(
+                self.device._state,
+                self.device._materials,
+                metadata={"zOffsetUm": self.z_offset, "deviceName": self.device.name},
+                conformal_resolution=self.device.conformal_resolution,
+            )
+        )
+
+    @classmethod
+    def load(cls, path: Path) -> "SlabState":
+        restored = decode_state(Path(path).read_bytes())
+        resolution = restored.conformal_resolution
+        if resolution is None:
+            raise SlabError("this stored state does not record its conformal resolution")
+        # Rebuilt field by field: Device() would create an empty state and a
+        # new registry, and the restored regions are keyed by the restored
+        # registry's material objects.
+        device = Device.__new__(Device)
+        device.name = str(restored.metadata.get("deviceName", "process-studio"))
+        device.units = "um"
+        device.grid = float(restored.state.grid)
+        device.conformal_resolution = float(resolution)
+        device._materials = restored.materials
+        device.masks = _factory(device.grid)
+        device._state = restored.state
+        device._history = []
+        device._meshes = None
+        device.record_steps = False
+        device._step_dir = None
+        device._step_options = {"render": False}
+        device.verbose = False
+        device._snapshots = []
+        return cls(device, float(restored.metadata.get("zOffsetUm", 0.0)))
+
+
+def _factory(grid: float):
+    from deviceflow.mask import MaskFactory
+
+    return MaskFactory(grid=grid)
+
+
+def _ensure_material(device: Device, name: str) -> None:
+    if name not in device._materials:
+        device.material(name)
+
+
+# -- masks -----------------------------------------------------------------
+
+
+def _instances(shape: SketchShape) -> list[tuple[float, float]]:
+    count_x, count_y, pitch_x, pitch_y = shape.array
+    return [
+        (
+            (ix - (count_x - 1) / 2.0) * pitch_x,
+            (iy - (count_y - 1) / 2.0) * pitch_y,
+        )
+        for iy in range(count_y)
+        for ix in range(count_x)
+    ]
+
+
+def _primitive(shape: SketchShape, offset_x: float, offset_y: float):
+    parameters = shape.parameters
+    if shape.kind == "rectangle":
+        center_x, center_y = parameters.get("center", (0.0, 0.0))
+        width, height = (float(value) for value in parameters["size"])
+        if min(width, height) <= 0.0:
+            raise SlabError("rectangle size must be positive")
+        center_x += offset_x
+        center_y += offset_y
+        return box(
+            center_x - width / 2.0,
+            center_y - height / 2.0,
+            center_x + width / 2.0,
+            center_y + height / 2.0,
+        )
+    if shape.kind == "circle":
+        center_x, center_y = parameters.get("center", (0.0, 0.0))
+        radius = float(parameters["radius"])
+        if radius <= 0.0:
+            raise SlabError("circle radius must be positive")
+        return Point(center_x + offset_x, center_y + offset_y).buffer(radius, quad_segs=64)
+    points = np.asarray(parameters["points"], dtype=float) + [offset_x, offset_y]
+    if shape.kind == "polygon":
+        if len(points) < 3:
+            raise SlabError("a polygon needs at least three points")
+        return Polygon(points)
+    width = float(parameters["width"])
+    if width <= 0.0:
+        raise SlabError("path width must be positive")
+    return LineString(points).buffer(width / 2.0, quad_segs=32, cap_style="round")
+
+
+def sketch_geometry(sketch: QuickSketch, window):
+    """The sketch as exact polygons, with the same CSG order the fields use."""
+    combined = None
+    for shape in sketch.shapes:
+        pieces = [_primitive(shape, x, y) for x, y in _instances(shape)]
+        geometry = shapely.union_all([shapely.make_valid(piece) for piece in pieces])
+        if combined is None:
+            combined = window.difference(geometry) if shape.operation == "subtract" else geometry
+        elif shape.operation == "merge":
+            combined = combined.union(geometry)
+        elif shape.operation == "subtract":
+            combined = combined.difference(geometry)
+        else:
+            combined = combined.intersection(geometry)
+    if combined is None:
+        raise SlabError("this quick sketch has no shapes")
+    return combined
+
+
+def step_mask(
+    device: Device,
+    step: ProcessStep,
+    *,
+    project: ProjectDefinition,
+    parameters: Mapping[str, Any],
+    sketches: Mapping[str, QuickSketch],
+) -> Mask | None:
+    """The step's opening, or None for the whole device window."""
+    x_min, y_min, x_max, y_max = device.bounds
+    window = box(x_min, y_min, x_max, y_max)
+    if step.mask_source == "none":
+        return None
+    if step.mask_source == "quick_sketch":
+        sketch_id = str(parameters.get("sketch_id", "default"))
+        if sketch_id not in sketches:
+            raise SlabError(f"quick sketch {sketch_id!r} was not found")
+        geometry = sketch_geometry(sketches[sketch_id], window)
+        mask = Mask(shapely.make_valid(geometry), device.grid)
+    else:
+        if not project.gds_path:
+            raise SlabError("the project has no GDS file")
+        if step.layer is None or step.datatype is None:
+            raise SlabError("GDS steps require a layer and a datatype")
+        from deviceflow import Layout
+
+        layout = Layout.from_gds(project.gds_path, window=None, grid=device.grid)
+        mask = layout.mask(int(step.layer), int(step.datatype))
+    if step.keep == "outside":
+        mask = Mask(window, device.grid) - mask
+    mask = mask.clip(device.bounds)
+    if mask.is_empty:
+        raise SlabError("this mask does not overlap the device window")
+    return mask
+
+
+# -- step translation ------------------------------------------------------
+
+
+def _etch_rates(recipe: Recipe, parameters: Mapping[str, Any]) -> dict[str, float]:
+    """The same rate table the level-set engine builds, from the same fields."""
+    rates = {
+        name: response.rate_um_per_min
+        for name, response in recipe.material_responses.items()
+    }
+    overrides = parameters.get("material_rates", {})
+    if isinstance(overrides, Mapping):
+        rates.update({str(name): float(rate) for name, rate in overrides.items()})
+    selected = str(parameters.get("material", ""))
+    if selected and parameters.get("rate") is not None:
+        rates[selected] = float(parameters["rate"])
+    stop_materials = parameters.get("stop_materials", [])
+    if isinstance(stop_materials, str):
+        stop_materials = [name.strip() for name in stop_materials.split(",") if name.strip()]
+    for name in stop_materials:
+        rates[str(name)] = 0.0
+    if not rates:
+        if not selected:
+            raise SlabError("an etch step needs at least one material response")
+        rates[selected] = float(parameters.get("rate", 1.0))
+    return rates
+
+
+def _deposit(device: Device, step: ProcessStep, recipe: Recipe, parameters, logger) -> None:
+    material = str(parameters.get("material") or recipe.output_material or "")
+    if not material:
+        raise SlabError("a deposition step needs an output material")
+    thickness = float(parameters.get("target", parameters.get("thickness", 0.0)))
+    if thickness <= 0.0:
+        raise SlabError("deposition thickness must be greater than zero")
+    mode = str(parameters.get("mode", "conformal")).strip().lower()
+    if mode in {"directional", "evaporation", "fill", "directional prism"}:
+        raise SlabError(
+            f"the slab kernel cannot deposit in {mode!r} mode; it offers 'conformal' "
+            "and 'planar'. Use a level-set project for shadowed or filling deposition."
+        )
+    if mode not in {"conformal", "planar"}:
+        raise SlabError(f"unknown deposition mode {mode!r}; expected 'conformal' or 'planar'")
+    if step.mask_source != "none":
+        raise SlabError(
+            "the slab kernel deposits over the whole window and cannot use a mask; "
+            "deposit blanket and pattern it with an etch step."
+        )
+    _ensure_material(device, material)
+    logger(f"SLAB deposit {material} {thickness:g} um {mode}")
+    device.deposit(material, thickness, mode=mode)
+
+
+def _etch(
+    device: Device,
+    step: ProcessStep,
+    recipe: Recipe,
+    parameters,
+    mask: Mask | None,
+    logger,
+) -> None:
+    rates = _etch_rates(recipe, parameters)
+    active = {name: rate for name, rate in rates.items() if rate > 0.0}
+    if not active:
+        raise SlabError("every material in this etch has rate zero; nothing would be removed")
+    for name in rates:
+        if name not in device._materials:
+            # An etch may list a material this device never grew; the kernel
+            # only needs to know the name to give it a rate.
+            device.material(name)
+    fraction = float(parameters.get("directional_fraction", 1.0))
+    if fraction not in (0.0, 1.0):
+        raise SlabError(
+            f"the slab kernel etches either straight down (directional_fraction 1) or "
+            f"isotropically (0); this step asks for {fraction:g}. Use a level-set "
+            "project for a mixed profile."
+        )
+    etch = device.etch if fraction == 1.0 else device.wet_etch
+    profile = "vertical" if fraction == 1.0 else "isotropic"
+    if parameters.get("target") is not None:
+        depth = float(parameters["target"])
+        if depth <= 0.0:
+            raise SlabError("etch depth must be greater than zero")
+        reference = max(active, key=lambda name: active[name])
+        selectivity = {name: rates[name] / rates[reference] for name in rates}
+        logger(f"SLAB etch {profile} {depth:g} um of {reference} ({len(rates)} material(s))")
+        etch(mask, depth=depth, selectivity=selectivity, reference=reference)
+        return
+    if parameters.get("time_min") is None:
+        raise SlabError("an etch step needs a target depth or a time")
+    minutes = float(parameters["time_min"])
+    if minutes <= 0.0:
+        raise SlabError("etch time must be greater than zero")
+    logger(f"SLAB etch {profile} for {minutes:g} min")
+    etch(
+        mask,
+        rates={name: f"{rate}um/min" for name, rate in rates.items()},
+        time=f"{minutes}min",
+    )
+
+
+def _cmp(device: Device, recipe: Recipe, parameters, z_offset: float, logger) -> None:
+    selected = parameters.get("materials")
+    stop = next(
+        (name for name, response in recipe.material_responses.items() if response.stop_layer),
+        parameters.get("stop_material"),
+    )
+    if selected or stop:
+        logger(
+            "SLAB cmp is unselective: it removes everything above the plane, so the "
+            "step's material list and stop layer do not apply."
+        )
+    if parameters.get("target_z") is not None:
+        height = float(parameters["target_z"]) - z_offset
+    else:
+        top = device.top
+        if top is None:
+            raise SlabError("this device has no geometry to polish")
+        height = top - float(parameters.get("removal_amount", 0.0))
+    if height <= 0.0:
+        raise SlabError("the polish plane is at or below the wafer floor")
+    logger(f"SLAB cmp to z={height + z_offset:g} um")
+    device.cmp(height)
+
+
+# -- pictures --------------------------------------------------------------
+
+
+def _rgb(color: str) -> tuple[int, int, int]:
+    value = color.strip().lstrip("#")
+    if len(value) != 6:
+        return (124, 131, 160)
+    try:
+        return (int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
+    except ValueError:
+        return (124, 131, 160)
+
+
+def _png(rgb: np.ndarray) -> str:
+    buffer = io.BytesIO()
+    Image.fromarray(rgb, mode="RGB").save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def _raster(
+    shapes: Sequence[tuple[Sequence[Sequence[tuple[float, float]]], str]],
+    colors: Mapping[str, str],
+    extent: tuple[float, float, float, float],
+    pixels_per_um: float,
+) -> np.ndarray:
+    """Fill exact polygons into an image, holes included.
+
+    Every material is drawn into its own bitmap and composited, so a cavity in
+    one material shows what is really inside it rather than the background.
+    """
+    horizontal_min, horizontal_max, vertical_min, vertical_max = extent
+    width = max(2, min(MAXIMUM_PIXELS, round((horizontal_max - horizontal_min) * pixels_per_um)))
+    height = max(2, min(MAXIMUM_PIXELS, round((vertical_max - vertical_min) * pixels_per_um)))
+    scale_x = (width - 1) / max(horizontal_max - horizontal_min, 1e-12)
+    scale_y = (height - 1) / max(vertical_max - vertical_min, 1e-12)
+    canvas = np.zeros((height, width, 3), dtype=np.uint8)
+    canvas[...] = BACKGROUND_RGB
+    for rings, name in shapes:
+        if not rings:
+            continue
+        stencil = Image.new("1", (width, height), 0)
+        pen = ImageDraw.Draw(stencil)
+        for index, ring in enumerate(rings):
+            points = [
+                (
+                    (x - horizontal_min) * scale_x,
+                    (vertical_max - y) * scale_y,
+                )
+                for x, y in ring
+            ]
+            if len(points) >= 3:
+                pen.polygon(points, fill=0 if index else 1, outline=0 if index else 1)
+        canvas[np.asarray(stencil, dtype=bool)] = _rgb(colors.get(name, "#7c83a0"))
+    return canvas
+
+
+def _section_shapes(section, z_offset: float):
+    # `polygons()` returns exterior rings only, which would paint over every
+    # cavity; `_shapes` keeps the holes, which is what a filled picture needs.
+    shapes, _, _, _ = section._shapes(1.0)
+    return [
+        ([[(s, z + z_offset) for s, z in ring] for ring in rings], name)
+        for rings, _color, name in shapes
+    ]
+
+
+def _top_view_shapes(top_view):
+    return [(rings, name) for rings, _color, name in top_view._shapes()]
+
+
+class SlabKernel:
+    """Exact slab geometry, from the DeviceFlow 0.2.0 core."""
+
+    info = KernelInfo(
+        id="slab",
+        name="Slab (DeviceFlow)",
+        version="0.2.0",
+        summary=(
+            "Exact polygon slabs from the DeviceFlow core, the engine "
+            "ProcessFlow-Emulator runs. Planar and conformal deposition, "
+            "vertical and isotropic etching, unselective CMP. No grid to "
+            "converge; conformal deposition is walked at the set resolution."
+        ),
+        process_types=("deposit", "etch", "cmp", "no_geometry"),
+        mask_sources=("none", "quick_sketch", "gds"),
+        deposition_modes=("conformal", "planar"),
+        directional_fractions=(0.0, 1.0),
+        surfaces=True,
+        spacing_role="conformal_resolution",
+        spacing_presets_nm=(25.0, 10.0, 2.0),
+        maximum_nodes=None,
+        snapshot_suffix=".dfz",
+    )
+
+    def initial_state(
+        self,
+        project: ProjectDefinition,
+        *,
+        materials: Sequence[MaterialDefinition] = (),
+    ) -> SlabState:
+        """The bare wafer: one substrate slab, its top face at z = 0."""
+        x_min, y_min, x_max, y_max = _window(project)
+        z_offset = float(project.grid["z_min"])
+        thickness = -z_offset
+        if thickness <= 0.0:
+            raise SlabError("the project window needs room below z = 0 for the substrate")
+        device = Device(
+            name=project.name,
+            bounds=(x_min, y_min, x_max, y_max),
+            grid=GEOMETRY_GRID_UM,
+            conformal_resolution=resolution_um(project),
+            materials=material_table(materials),
+            verbose=False,
+        )
+        device.material(SUBSTRATE_MATERIAL)
+        device.deposit(SUBSTRATE_MATERIAL, thickness, mode="planar")
+        return SlabState(device, z_offset)
+
+    def run_step(
+        self,
+        state: SlabState,
+        step: ProcessStep,
+        *,
+        project: ProjectDefinition,
+        recipes: Mapping[str, Recipe],
+        sketches: Mapping[str, QuickSketch],
+        logger: Callable[[str], None],
+        materials: Sequence[MaterialDefinition] = (),
+    ) -> SlabState:
+        device = state.working_copy()
+        if not step.enabled:
+            logger(f"SKIP {step.name}: disabled")
+            return SlabState(device, state.z_offset)
+        recipe = step.effective_recipe(recipes)
+        parameters = dict(recipe.parameters)
+        logger(f"RUN {step.name} [{recipe.process_type.value}]")
+        if recipe.process_type is ProcessType.DEPOSIT:
+            _deposit(device, step, recipe, parameters, logger)
+        elif recipe.process_type is ProcessType.ETCH:
+            mask = step_mask(
+                device, step, project=project, parameters=parameters, sketches=sketches
+            )
+            _etch(device, step, recipe, parameters, mask, logger)
+        elif recipe.process_type is ProcessType.CMP:
+            _cmp(device, recipe, parameters, state.z_offset, logger)
+        return SlabState(device, state.z_offset)
+
+    def load_state(self, path: Path) -> SlabState:
+        return SlabState.load(path)
+
+    def state_materials(self, state: SlabState) -> list[str]:
+        return state.priority
+
+    # -- views -------------------------------------------------------------
+
+    def surfaces(
+        self,
+        state: SlabState,
+        *,
+        project: ProjectDefinition,
+        interpolation: int = 1,
+        materials: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
+        device = state.device
+        meshes = device.build_mesh()
+        selected = [
+            name
+            for name in state.priority
+            if name in meshes and (materials is None or name in materials)
+        ]
+        payload = []
+        for name in selected:
+            mesh = meshes[name]
+            positions = np.asarray(mesh.vertices, dtype=np.float64).copy()
+            positions[:, 2] += state.z_offset
+            faces = np.asarray(mesh.faces, dtype=np.uint32)
+            payload.append(
+                {
+                    "material": name,
+                    "positions": _encode(positions.astype(np.float32)),
+                    "normals": _encode(np.asarray(mesh.vertex_normals, dtype=np.float32)),
+                    "indices": _encode(faces),
+                    "vertexCount": int(len(positions)),
+                    "triangleCount": int(len(faces)),
+                }
+            )
+        x_min, y_min, x_max, y_max = device.bounds
+        top = device.top or 0.0
+        return {
+            "interpolation": 1,
+            "exact": True,
+            "bounds": {
+                "xMin": x_min,
+                "xMax": x_max,
+                "yMin": y_min,
+                "yMax": y_max,
+                "zMin": state.z_offset,
+                "zMax": max(float(project.grid["z_max"]), top + state.z_offset),
+            },
+            "surfaces": payload,
+        }
+
+    def section(
+        self,
+        state: SlabState,
+        colors: Mapping[str, str],
+        *,
+        project: ProjectDefinition,
+        axis: str = "y",
+        position: float | None = None,
+        interpolation: int = 1,
+    ) -> dict[str, Any]:
+        device = state.device
+        x_min, y_min, x_max, y_max = device.bounds
+        if axis == "y":
+            coordinates = np.linspace(y_min, y_max, SECTION_POSITIONS)
+        elif axis == "x":
+            coordinates = np.linspace(x_min, x_max, SECTION_POSITIONS)
+        else:
+            raise SlabError("section axis must be 'x' or 'y'")
+        default = 0.5 * (coordinates[0] + coordinates[-1])
+        index = int(np.argmin(np.abs(coordinates - (default if position is None else position))))
+        cut = float(coordinates[index])
+        if axis == "y":
+            start, end = (x_min, cut), (x_max, cut)
+            horizontal = (x_min, x_max)
+            horizontal_label = "x"
+        else:
+            start, end = (cut, y_min), (cut, y_max)
+            horizontal = (y_min, y_max)
+            horizontal_label = "y"
+        section = device.cross_section(start, end)
+        top = device.top or 0.0
+        extent = (
+            horizontal[0],
+            horizontal[1],
+            state.z_offset,
+            max(float(project.grid["z_max"]), top + state.z_offset),
+        )
+        shapes = [
+            ([[(s + horizontal[0], z) for s, z in ring] for ring in rings], name)
+            for rings, name in _section_shapes(section, state.z_offset)
+        ]
+        pixels_per_um = _pixels_per_um(extent, interpolation)
+        rgb = _raster(shapes, colors, extent, pixels_per_um)
+        return {
+            "image": _png(rgb),
+            "axis": axis,
+            "position": cut,
+            "index": index,
+            "interpolation": interpolation,
+            "sampledSpacingUm": 1.0 / pixels_per_um,
+            "exact": True,
+            "width": int(rgb.shape[1]),
+            "height": int(rgb.shape[0]),
+            "horizontalAxis": horizontal_label,
+            "extent": {
+                "horizontalMin": extent[0],
+                "horizontalMax": extent[1],
+                "verticalMin": extent[2],
+                "verticalMax": extent[3],
+            },
+            "positions": [float(value) for value in coordinates],
+        }
+
+    def top_view(
+        self,
+        state: SlabState,
+        colors: Mapping[str, str],
+        *,
+        project: ProjectDefinition,
+    ) -> dict[str, Any]:
+        device = state.device
+        x_min, y_min, x_max, y_max = device.bounds
+        extent = (x_min, x_max, y_min, y_max)
+        rgb = _raster(
+            _top_view_shapes(device.top_view()),
+            colors,
+            extent,
+            _pixels_per_um(extent, 1),
+        )
+        return {
+            "image": _png(rgb),
+            "exact": True,
+            "width": int(rgb.shape[1]),
+            "height": int(rgb.shape[0]),
+            "extent": {
+                "horizontalMin": x_min,
+                "horizontalMax": x_max,
+                "verticalMin": y_min,
+                "verticalMax": y_max,
+            },
+        }
+
+
+def _encode(array: np.ndarray) -> str:
+    return base64.b64encode(np.ascontiguousarray(array).tobytes()).decode("ascii")
+
+
+def _pixels_per_um(extent: tuple[float, float, float, float], interpolation: int) -> float:
+    span = max(extent[1] - extent[0], extent[3] - extent[2], 1e-9)
+    return BASE_PIXELS * max(1, int(interpolation)) / span

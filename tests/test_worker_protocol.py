@@ -52,6 +52,72 @@ def test_create_workspace_is_idempotent(tmp_path):
     assert len(second["branches"][0]["steps"]) == len(first["branches"][0]["steps"])
 
 
+def test_describe_publishes_the_kernels_a_project_can_be_built_on():
+    described = call("describe")
+    kernels = {kernel["id"]: kernel for kernel in described["kernels"]}
+    assert described["defaultKernel"] == "levelset"
+    assert kernels["levelset"]["spacingRole"] == "grid"
+    assert kernels["slab"]["spacingRole"] == "conformal_resolution"
+    # The slab kernel has no field, so there is no node ceiling to report.
+    assert kernels["slab"]["maximumNodes"] is None
+    assert kernels["slab"]["depositionModes"] == ["conformal", "planar"]
+
+
+def test_a_workspace_keeps_the_kernel_it_was_created_with(tmp_path):
+    root = tmp_path / "slab-workspace"
+    created = call("create_workspace", root=str(root), name="Slab", kernel="slab")
+    assert created["project"]["kernel"] == "slab"
+    assert created["project"]["resolutionUm"] == pytest.approx(0.01)
+    reopened = call("open_workspace", root=str(root))
+    assert reopened["project"]["kernel"] == "slab"
+
+
+def test_an_unknown_kernel_is_rejected_rather_than_defaulted(tmp_path):
+    with pytest.raises(InvalidRequest, match="unknown kernel"):
+        call("create_workspace", root=str(tmp_path / "ws"), name="Nope", kernel="quantum")
+
+
+def test_saving_a_document_cannot_move_a_project_to_another_kernel(workspace):
+    document = call("open_workspace", root=str(workspace))
+    document["project"]["kernel"] = "slab"
+    with pytest.raises(InvalidRequest, match="cannot be moved"):
+        call("save_document", root=str(workspace), document=document)
+    unchanged = call("open_workspace", root=str(workspace))
+    assert unchanged["project"]["kernel"] == "levelset"
+
+
+def test_a_slab_project_runs_its_flow_and_draws_every_view(tmp_path):
+    root = tmp_path / "slab-run"
+    document = call("create_workspace", root=str(root), name="Slab", kernel="slab")
+    branch = document["branches"][0]
+    result = call("run_flow", root=str(root), branchId=branch["id"])
+    assert len(result["executedStepIds"]) == len(branch["steps"])
+    assert result["materials"] == ["Si", "Al2O3"]
+    last = branch["steps"][-1]["id"]
+    surfaces = call("get_surfaces", root=str(root), branchId=branch["id"], stepId=last)
+    assert [surface["material"] for surface in surfaces["surfaces"]] == ["Si", "Al2O3"]
+    assert surfaces["exact"] is True
+    section = call("get_section", root=str(root), branchId=branch["id"], stepId=last, axis="y")
+    assert base64.b64decode(section["image"])[:4] == b"\x89PNG"
+    top = call("get_top_view", root=str(root), branchId=branch["id"], stepId=last)
+    assert base64.b64decode(top["image"])[:4] == b"\x89PNG"
+
+
+def test_a_slab_project_sets_a_resolution_rather_than_a_grid(tmp_path):
+    root = tmp_path / "slab-resolution"
+    call("create_workspace", root=str(root), name="Slab", kernel="slab")
+    call("run_flow", root=str(root))
+    plan = call("plan_grid", root=str(root), targetSpacingNm=2.0)
+    assert plan["spacingRole"] == "conformal_resolution"
+    assert plan["estimate"] == {"spacingNm": 2.0}
+    # 2 nm over this window is far past the level-set node ceiling; without a
+    # field there is nothing for that ceiling to apply to.
+    assert plan["withinLimit"] is True
+    updated = call("set_grid", root=str(root), targetSpacingNm=2.0)
+    assert updated["project"]["resolutionUm"] == pytest.approx(0.002)
+    assert set(updated["stepStatuses"][updated["branches"][0]["id"]].values()) == {"dirty"}
+
+
 def test_open_workspace_without_a_database_is_rejected(tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()

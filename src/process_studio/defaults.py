@@ -33,13 +33,21 @@ def default_materials() -> list[MaterialDefinition]:
     ]
 
 
-def default_recipes() -> list[Recipe]:
+def default_recipes(kernel: str = "levelset") -> list[Recipe]:
+    """The starter library, written for the kernel the project runs on.
+
+    The slab kernel etches either straight down or isotropically, so its
+    starter etch asks for a fully directional profile rather than the mixed
+    one the level-set kernel can resolve, and its CMP does not name materials
+    because that kernel polishes everything above the plane.
+    """
+    slab = kernel == "slab"
     return [
         Recipe(
             "Si Directional Trench Etch",
             ProcessType.ETCH,
             tool="ICP-RIE",
-            parameters={"target": 0.32, "directional_fraction": 0.9},
+            parameters={"target": 0.32, "directional_fraction": 1.0 if slab else 0.9},
             material_responses={"Si": MaterialResponse("Si", 0.12)},
             id="recipe-si-trench",
         ),
@@ -74,8 +82,14 @@ def default_recipes() -> list[Recipe]:
             "Ideal CMP",
             ProcessType.CMP,
             tool="CMP-01",
-            parameters={"target_z": 0.0, "materials": "Al2O3,TiN,W"},
-            material_responses={"Si": MaterialResponse("Si", 0.0, stop_layer=True)},
+            parameters=(
+                {"target_z": 0.0}
+                if slab
+                else {"target_z": 0.0, "materials": "Al2O3,TiN,W"}
+            ),
+            material_responses=(
+                {} if slab else {"Si": MaterialResponse("Si", 0.0, stop_layer=True)}
+            ),
             id="recipe-cmp",
         ),
         Recipe("Lithography", ProcessType.NO_GEOMETRY, tool="Stepper", id="recipe-litho"),
@@ -83,8 +97,8 @@ def default_recipes() -> list[Recipe]:
     ]
 
 
-def default_branch() -> FlowBranch:
-    recipes = {recipe.id: recipe for recipe in default_recipes()}
+def default_branch(kernel: str = "levelset") -> FlowBranch:
+    recipes = {recipe.id: recipe for recipe in default_recipes(kernel)}
     return FlowBranch(
         "main",
         [

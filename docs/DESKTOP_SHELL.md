@@ -30,11 +30,11 @@ src/process_studio/kernel   Level Set 内核，未改动
 
 | 方法 | 作用 |
 | --- | --- |
-| `ping` / `describe` | 版本与能力（求解器阶数、可用插值上限、是否支持表面提取） |
-| `create_workspace` / `open_workspace` | 建立或打开工作目录，返回完整 document |
+| `ping` / `describe` | 版本与能力（可用内核、求解器阶数、可用插值上限、是否支持表面提取） |
+| `create_workspace` / `open_workspace` | 建立或打开工作目录，返回完整 document；建立时用 `kernel` 选内核 |
 | `save_document` | 写回工程、分支、步骤、Recipe、材料 |
 | `plan_grid` | 给出目标间距对应的格子形状、节点数与内存估计 |
-| `set_grid` | 按目标间距或显式格子更换网格，同时作废全部已存结果 |
+| `set_grid` | 按目标间距或显式格子更换网格；无网格的内核改的是几何分辨率。两种都会删除全部已存结果 |
 | `save_sketch` | 写入 Quick Sketch |
 | `run_flow` | 执行分支，可指定 `throughStepId` 或 `force` |
 | `get_surfaces` | 每种材料的 marching cubes 三角面，base64 传输 |
@@ -66,11 +66,15 @@ worker 为每一步计算一个链式摘要，内容包括该步自带的工艺�
 
 执行永远从初始衬底重放，不会把粗网格的旧结果插值当成细网格的初始条件。
 
+## 仿真内核
+
+工程在新建时选内核，之后不能改：`describe` 给出可用内核及各自能力，`create_workspace` 接受 `kernel`，`save_document` 拒绝改动它。视图、执行和快照格式都由内核自己提供，`runner.py` 和 `protocol.py` 不判断内核 id。两个内核的能力对照见[内核说明](KERNELS.md)。
+
 ## 精度控制
 
 界面上有两处，含义完全不同：
 
-- **Simulation grid**（顶栏间距按钮）：改的是真实计算精度。填目标间距（nm）或选预设，worker 用 `grid_for_target_spacing` 搜索能整除三个方向跨度的最近格子，因此三向间距永远相等，不需要手填 nx/ny/nz。对话框实时显示提议的格子形状、节点数、状态体积和运行所需内存，超过 `MAXIMUM_NODES`（2000 万）会拒绝。应用后会丢弃全部已存结果。
+- **Simulation grid / Geometry resolution**（顶栏间距按钮）：改的是真实计算精度。level set 工程改的是网格；slab 工程改的是保形沉积的行走步长，对话框相应地不显示节点数和内存，因为该内核没有场。填目标间距（nm）或选预设，worker 用 `grid_for_target_spacing` 搜索能整除三个方向跨度的最近格子，因此三向间距永远相等，不需要手填 nx/ny/nz。对话框实时显示提议的格子形状、节点数、状态体积和运行所需内存，超过 `MAXIMUM_NODES`（2000 万）会拒绝。应用后会丢弃全部已存结果。
 - **Sampling**（视口底栏）：只影响显示。它对 level-set 场做线性插值后再提取零等值面或标签，不改变内核算出的结果。俯视图不提供该选项，因为它取的是每列最上层的标签，插值会凭空造出覆盖。
 
 刻蚀步骤的求解器阶数和分块大小都是按需参数，分别写入该 Step 的 `solver_order` 与 `tile_shape`。分块只影响内存占用，不影响结果。

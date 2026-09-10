@@ -12,8 +12,13 @@ project_root = Path(SPECPATH).parent
 
 datas = []
 binaries = []
-hiddenimports = ["process_studio.worker", "process_studio.worker.protocol"]
-for package in ("scipy", "skfmm", "gdstk", "openpyxl", "PIL", "skimage"):
+hiddenimports = [
+    "process_studio.worker",
+    "process_studio.worker.protocol",
+    # The slab kernel reaches its GDS reader through deviceflow.__getattr__.
+    "deviceflow.layout",
+]
+for package in ("scipy", "skfmm", "gdstk", "openpyxl", "PIL", "skimage", "shapely", "trimesh"):
     package_datas, package_binaries, package_hiddenimports = collect_all(package)
     datas += package_datas
     binaries += package_binaries

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from ..defaults import default_branch, default_grid, default_materials, default_recipes
+from ..kernels import DEFAULT_KERNEL, get_kernel
 from ..layout.quick_sketch import QuickSketch, SketchShape
 from ..models import FlowBranch, ProcessStep, ProjectDefinition, Recipe
 from ..storage import ProjectRepository
@@ -127,23 +128,39 @@ def sketch_to_json(sketch_id: str, sketch: QuickSketch) -> dict[str, Any]:
     }
 
 
-def initialize_workspace(root: Path, name: str) -> ProjectRepository:
-    """Create the starter project a new workspace opens with."""
+def initialize_workspace(
+    root: Path, name: str, kernel: str = DEFAULT_KERNEL
+) -> ProjectRepository:
+    """Create the starter project a new workspace opens with.
+
+    The kernel is fixed here and nowhere else: it decides how every later
+    result is computed and stored, so it is part of what the project is.
+    """
+    try:
+        chosen = get_kernel(kernel)
+    except KeyError as error:
+        raise InvalidRequest(str(error)) from error
     root.mkdir(parents=True, exist_ok=True)
     repository = open_repository(root, create=True)
     if repository.list_projects():
         return repository
     grid = default_grid()
-    branch = default_branch()
+    branch = default_branch(chosen.info.id)
     project = ProjectDefinition(
         name.strip() or "Process Studio Project",
         grid_dict(grid),
         active_branch_id=branch.id,
         id=DEFAULT_PROJECT_ID,
+        kernel=chosen.info.id,
+        resolution_um=(
+            None
+            if chosen.info.spacing_role == "grid"
+            else chosen.info.spacing_presets_nm[1] / 1000.0
+        ),
     )
     for material in default_materials():
         repository.save_material(material)
-    for recipe in default_recipes():
+    for recipe in default_recipes(chosen.info.id):
         repository.save_recipe(recipe)
     repository.save_project(project)
     repository.save_branch(project.id, branch)

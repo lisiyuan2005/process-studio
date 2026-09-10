@@ -1,11 +1,13 @@
 import { LoaderCircle, TriangleAlert, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { GridDefinition, GridPlan } from "../types";
+import type { GridDefinition, GridEstimate, GridPlan, KernelDescription } from "../types";
 
 interface GridEditorProps {
   grid: GridDefinition;
+  kernel?: KernelDescription;
+  resolutionUm: number | null;
   presetsNm: number[];
-  maximumNodes: number;
+  maximumNodes: number | null;
   busy: boolean;
   onPlan: (targetSpacingNm: number) => Promise<GridPlan>;
   onApply: (targetSpacingNm: number) => void;
@@ -15,15 +17,25 @@ interface GridEditorProps {
 const PRESET_LABELS: Record<number, string> = {
   25: "Draft",
   12.5: "Standard",
+  10: "Standard",
   6.25: "Accurate",
+  2: "Accurate",
 };
 
 function gigabytes(bytes: number) {
   return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
 }
 
+/** A kernel without a field reports the spacing alone, and costs no nodes. */
+function fieldEstimate(plan: GridPlan | undefined): GridEstimate | undefined {
+  if (!plan || plan.spacingRole !== "grid") return undefined;
+  return plan.estimate as GridEstimate;
+}
+
 export function GridEditor({
   grid,
+  kernel,
+  resolutionUm,
   presetsNm,
   maximumNodes,
   busy,
@@ -31,7 +43,10 @@ export function GridEditor({
   onApply,
   onClose,
 }: GridEditorProps) {
-  const currentNm = grid.spacingUm * 1000;
+  // On a gridless kernel the same number is the length geometry is resolved
+  // at, not a lattice: there is no node count and no ceiling to respect.
+  const onGrid = (kernel?.spacingRole ?? "grid") === "grid";
+  const currentNm = (onGrid ? grid.spacingUm : resolutionUm ?? grid.spacingUm) * 1000;
   const [spacing, setSpacing] = useState(String(Number(currentNm.toFixed(4))));
   const [plan, setPlan] = useState<GridPlan>();
   const [planning, setPlanning] = useState(false);
@@ -68,7 +83,8 @@ export function GridEditor({
     };
   }, [spacing, onPlan]);
 
-  const estimate = plan?.estimate;
+  const estimate = fieldEstimate(plan);
+  const spacingNm = plan?.estimate.spacingNm;
   const applicable = !!plan && plan.withinLimit && !plan.unchanged && !busy;
 
   return (
@@ -77,7 +93,7 @@ export function GridEditor({
         <header className="modal-header">
           <div>
             <span className="eyebrow">NUMERICS</span>
-            <h2>Simulation grid</h2>
+            <h2>{onGrid ? "Simulation grid" : "Geometry resolution"}</h2>
           </div>
           <button type="button" className="icon-button" aria-label="Close" onClick={onClose}>
             <X size={16} />
@@ -85,7 +101,9 @@ export function GridEditor({
         </header>
 
         <div className="modal-body">
-          <span className="section-label">TARGET SPACING</span>
+          <span className="section-label">
+            {onGrid ? "TARGET SPACING" : "TARGET RESOLUTION"}
+          </span>
           <div className="chip-row">
             {presetsNm.map((preset) => (
               <button
@@ -100,7 +118,7 @@ export function GridEditor({
           </div>
 
           <label className="field-row">
-            <span>Spacing</span>
+            <span>{onGrid ? "Spacing" : "Resolution"}</span>
             <span className="number-input-wrap">
               <input
                 autoFocus
@@ -112,32 +130,40 @@ export function GridEditor({
               <span>nm</span>
             </span>
             <small>
-              Project bounds are preserved, so the closest spacing that divides every extent is
-              used. This is the solver grid, not image resolution.
+              {onGrid
+                ? "Project bounds are preserved, so the closest spacing that divides every extent is used. This is the solver grid, not image resolution."
+                : `${kernel?.name ?? "This kernel"} keeps exact geometry and has no grid. This is the step it walks a surface in when it deposits conformally; it does not change planar deposition, etching or CMP, which are exact.`}
             </small>
           </label>
 
           <dl className="grid-summary">
             <dt>Current</dt>
             <dd>
-              {currentNm.toFixed(3)} nm · {grid.nx}×{grid.ny}×{grid.nz}
+              {currentNm.toFixed(3)} nm
+              {onGrid ? ` · ${grid.nx}×${grid.ny}×${grid.nz}` : ""}
             </dd>
             <dt>Proposed</dt>
             <dd>
               {planning ? (
                 <LoaderCircle className="spin" size={11} />
+              ) : spacingNm === undefined ? (
+                "—"
               ) : estimate ? (
                 `${estimate.spacingNm.toFixed(3)} nm · ${estimate.shape.join("×")}`
               ) : (
-                "—"
+                `${spacingNm.toFixed(3)} nm`
               )}
             </dd>
-            <dt>Nodes</dt>
-            <dd>{estimate ? estimate.nodeCount.toLocaleString() : "—"}</dd>
-            <dt>Saved state</dt>
-            <dd>{estimate ? gigabytes(estimate.stateBytes) : "—"}</dd>
-            <dt>Memory to run</dt>
-            <dd>{estimate ? gigabytes(estimate.recommendedBytes) : "—"}</dd>
+            {onGrid && (
+              <>
+                <dt>Nodes</dt>
+                <dd>{estimate ? estimate.nodeCount.toLocaleString() : "—"}</dd>
+                <dt>Saved state</dt>
+                <dd>{estimate ? gigabytes(estimate.stateBytes) : "—"}</dd>
+                <dt>Memory to run</dt>
+                <dd>{estimate ? gigabytes(estimate.recommendedBytes) : "—"}</dd>
+              </>
+            )}
           </dl>
 
           {error && (
@@ -147,29 +173,41 @@ export function GridEditor({
             </div>
           )}
 
-          {plan && !plan.withinLimit && (
+          {plan && !plan.withinLimit && estimate && (
             <div className="error-box">
               <TriangleAlert size={13} />
               <span>
-                This grid needs {plan.estimate.nodeCount.toLocaleString()} nodes; the ceiling is{" "}
-                {maximumNodes.toLocaleString()}. Use a coarser spacing or smaller project bounds.
+                This grid needs {estimate.nodeCount.toLocaleString()} nodes; the ceiling is{" "}
+                {(maximumNodes ?? 0).toLocaleString()}. Use a coarser spacing or smaller project
+                bounds.
               </span>
             </div>
           )}
 
-          {plan?.unchanged && <p className="numerics-note">This is the grid already in use.</p>}
+          {plan?.unchanged && (
+            <p className="numerics-note">
+              This is the {onGrid ? "grid" : "resolution"} already in use.
+            </p>
+          )}
 
           <div className="warning-box">
             <TriangleAlert size={13} />
             <span>
-              Changing the grid discards every stored result: the flow is replayed from the bare
-              wafer on the new grid rather than interpolating the old one.
+              {onGrid
+                ? "Changing the grid discards every stored result: the flow is replayed from the bare wafer on the new grid rather than interpolating the old one."
+                : "Changing the resolution discards every stored result: the flow is replayed from the bare wafer at the new resolution."}
             </span>
           </div>
         </div>
 
         <div className="modal-actions">
-          <span>{applicable ? "Ready to apply" : "Pick a spacing that fits"}</span>
+          <span>
+            {applicable
+              ? "Ready to apply"
+              : onGrid
+                ? "Pick a spacing that fits"
+                : "Pick a different resolution"}
+          </span>
           <button type="button" className="secondary-button" onClick={onClose}>
             Cancel
           </button>
@@ -179,7 +217,7 @@ export function GridEditor({
             disabled={!applicable}
             onClick={() => onApply(Number(spacing))}
           >
-            Apply grid
+            {onGrid ? "Apply grid" : "Apply resolution"}
           </button>
         </div>
       </div>
