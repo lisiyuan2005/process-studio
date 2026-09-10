@@ -26,7 +26,11 @@ cd desktop
 npm ci
 npm run test
 if [ "$(uname)" = "Darwin" ]; then
-  npm run tauri build -- --bundles app
+  # The disk image copies the bundle byte for byte, so the signature survives
+  # the trip to another machine. A .app that travels as a plain archive can
+  # lose symlinks or permissions, and any such change makes macOS call it
+  # damaged instead of merely unidentified.
+  npm run tauri build -- --bundles app,dmg
 else
   npm run tauri build -- --no-bundle
 fi

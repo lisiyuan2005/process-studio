@@ -120,5 +120,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ProcessStudio-macOS
-          path: release/ProcessStudio-macOS.zip
+          path: |
+            release/ProcessStudio-macOS.zip
+            desktop/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
