@@ -101,6 +101,18 @@ jobs:
       - name: Build the desktop shell
         run: bash scripts/build_desktop.sh
 
+      # The linker's own signature covers the executable only. Without a bundle
+      # signature there is no _CodeSignature/CodeResources, the Info.plist is
+      # unbound, and the kernel kills the process on launch. Fail the build here
+      # rather than shipping an app that cannot start.
+      - name: Verify the bundle signature
+        run: |
+          APP="desktop/src-tauri/target/release/bundle/macos/Process Studio.app"
+          test -f "$APP/Contents/_CodeSignature/CodeResources" \
+            || { echo "the bundle has no sealed resources"; exit 1; }
+          codesign -dv --verbose=4 "$APP" 2>&1 | grep -E "Signature|flags|Info.plist"
+          codesign --verify --strict --verbose=2 "$APP"
+
       # A .app is a directory, so it is zipped once here; GitHub would
       # otherwise flatten it and lose the executable bit.
       - name: Collect the application

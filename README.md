@@ -46,7 +46,7 @@ Windows 产物必须整个目录一起用：exe 会在自己同级的 `resources
 
 脚本先用 PyInstaller 把 worker 打成独立可执行文件，跑一次 `describe` 冒烟测试，再执行 `npm run tauri build`。
 
-macOS 产物没有 Developer ID 签名，也没有 notarize，首次打开需要在访达里右键选**打开**信任一次。macOS 构建固定在 `macos-14` 运行器上。
+macOS 产物用 ad-hoc 身份签名（`signingIdentity: "-"`），没有 Developer ID 也没有 notarize，首次打开需要在访达里右键选**打开**信任一次。构建固定在 `macos-14` 运行器上，并在打包前校验 bundle 已封存资源，否则构建失败。
 
 如果系统报「应用已损坏」而不是「未识别的开发者」，那是隔离标记加签名校验失败，执行一次即可：
 
