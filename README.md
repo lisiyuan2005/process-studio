@@ -31,16 +31,29 @@ process-studio
 
 ### 桌面安装产物
 
-无需 Python 的 Windows 版本可直接运行 `ProcessStudio.exe`。本地重新构建：
+发布版本就是 Tauri 外壳。`Desktop builds` GitHub Actions 在推送 `v*` tag 或手动触发时构建，产出：
+
+| 产物 | 内容 |
+| --- | --- |
+| `ProcessStudio-Windows-installer` | NSIS 安装包和 MSI |
+| `ProcessStudio-Windows-portable` | 免安装 zip，`ProcessStudio.exe` 与 `resources/` 同级 |
+| `ProcessStudio-macOS` | `.app` 压缩包和 DMG |
+
+免安装 zip 必须整包解压：exe 会在自己同级的 `resources/worker` 下找 worker，单独拷出 exe 无法运行。
+
+本地构建：
 
 ```powershell
-./scripts/build_windows.ps1     # Tkinter 版 EXE
-./scripts/build_desktop.ps1     # Tauri 外壳，内含打包好的 worker
+./scripts/build_desktop.ps1     # Windows
 ```
 
-`build_desktop.ps1` 先用 PyInstaller 把 worker 打成独立可执行文件，冒烟测试后再执行 `npm run tauri build`。macOS/Linux 用 `./scripts/build_desktop.sh`。
+```bash
+./scripts/build_desktop.sh      # macOS / Linux
+```
 
-macOS `.app` 必须在 macOS 上构建，仓库中的 `Desktop builds` GitHub Actions 会在推送 `v*` tag 或手动触发时同时生成 Windows EXE 和 `ProcessStudio.app` 压缩包。macOS 产物当前未签名或 notarize，首次打开可能需要在 Finder 中右键选择 **Open**。
+脚本先用 PyInstaller 把 worker 打成独立可执行文件，跑一次 `describe` 冒烟测试，再执行 `npm run tauri build`。
+
+原来的 Tkinter EXE 不再由 CI 构建，`./scripts/build_windows.ps1` 仍可在本地生成。macOS 产物未签名或 notarize，首次打开可能需要在 Finder 中右键选择 **Open**。
 
 ## 已实现的 MVP
 
