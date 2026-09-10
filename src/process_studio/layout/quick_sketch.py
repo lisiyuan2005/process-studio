@@ -8,9 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from matplotlib.path import Path as MplPath
-
-from process_studio.kernel.masks import circle, intersect, merge, rectangle, subtract
+from .distance import polygon_distance, path_distance
 
 
 @dataclass
@@ -39,22 +37,26 @@ class QuickSketch:
         self.shapes.append(shape)
 
     def render(self, xx: np.ndarray, yy: np.ndarray) -> np.ndarray:
+        return self.signed_distance(xx, yy) <= 0
+
+    def signed_distance(self, xx: np.ndarray, yy: np.ndarray) -> np.ndarray:
+        """Return a continuous CSG level set for every supported primitive."""
         if xx.shape != yy.shape:
             raise ValueError("xx and yy must have matching shapes")
         result: np.ndarray | None = None
         for shape in self.shapes:
-            shape_mask = self._render_array(shape, xx, yy)
+            shape_phi = self._sdf_array(shape, xx, yy)
             if result is None:
-                result = shape_mask.copy() if shape.operation != "subtract" else ~shape_mask
+                result = shape_phi.copy() if shape.operation != "subtract" else -shape_phi
             elif shape.operation == "merge":
-                result = merge(result, shape_mask)
+                result = np.minimum(result, shape_phi)
             elif shape.operation == "subtract":
-                result = subtract(result, shape_mask)
+                result = np.maximum(result, -shape_phi)
             else:
-                result = intersect(result, shape_mask)
-        return np.zeros(xx.shape, dtype=bool) if result is None else result
+                result = np.maximum(result, shape_phi)
+        return np.full(xx.shape, np.inf) if result is None else result
 
-    def _render_array(
+    def _sdf_array(
         self, shape: SketchShape, xx: np.ndarray, yy: np.ndarray
     ) -> np.ndarray:
         nx, ny, pitch_x, pitch_y = shape.array
@@ -63,11 +65,11 @@ class QuickSketch:
             for ix in range(nx):
                 offset_x = (ix - (nx - 1) / 2.0) * pitch_x
                 offset_y = (iy - (ny - 1) / 2.0) * pitch_y
-                instances.append(self._render_one(shape, xx, yy, offset_x, offset_y))
-        return np.logical_or.reduce(instances)
+                instances.append(self._sdf_one(shape, xx, yy, offset_x, offset_y))
+        return np.minimum.reduce(instances)
 
-    @staticmethod
-    def _render_one(
+    def _sdf_one(
+        self,
         shape: SketchShape,
         xx: np.ndarray,
         yy: np.ndarray,
@@ -75,52 +77,28 @@ class QuickSketch:
         offset_y: float,
     ) -> np.ndarray:
         params = shape.parameters
-        if shape.kind == "rectangle":
-            cx, cy = params.get("center", (0.0, 0.0))
-            return rectangle(
-                xx,
-                yy,
-                center=(cx + offset_x, cy + offset_y),
-                size=tuple(params["size"]),
-            )
         if shape.kind == "circle":
             cx, cy = params.get("center", (0.0, 0.0))
-            return circle(
-                xx,
-                yy,
-                center=(cx + offset_x, cy + offset_y),
-                radius=float(params["radius"]),
+            if not np.isfinite(params["radius"]) or params["radius"] <= 0:
+                raise ValueError("circle radius must be positive and finite")
+            return np.hypot(xx - cx - offset_x, yy - cy - offset_y) - float(
+                params["radius"]
+            )
+        if shape.kind == "rectangle":
+            cx, cy = params.get("center", (0.0, 0.0))
+            width, height = tuple(params["size"])
+            if not np.isfinite([width, height]).all() or min(width, height) <= 0:
+                raise ValueError("rectangle size must be positive and finite")
+            qx = np.abs(xx - cx - offset_x) - width / 2.0
+            qy = np.abs(yy - cy - offset_y) - height / 2.0
+            return np.hypot(np.maximum(qx, 0.0), np.maximum(qy, 0.0)) + np.minimum(
+                np.maximum(qx, qy), 0.0
             )
 
-        points = np.asarray(params["points"], dtype=float).copy()
-        points[:, 0] += offset_x
-        points[:, 1] += offset_y
+        points = np.asarray(params["points"], dtype=float) + [offset_x, offset_y]
         if shape.kind == "polygon":
-            query = np.column_stack((xx.ravel(), yy.ravel()))
-            return MplPath(points, closed=True).contains_points(
-                query, radius=np.finfo(float).eps * 16
-            ).reshape(xx.shape)
-
-        width = float(params["width"])
-        if width <= 0 or len(points) < 2:
-            raise ValueError("path requires positive width and at least two points")
-        distance_sq = np.full(xx.shape, np.inf)
-        for start, end in zip(points[:-1], points[1:], strict=True):
-            vx, vy = end - start
-            length_sq = vx * vx + vy * vy
-            if length_sq == 0:
-                continue
-            projection = np.clip(
-                ((xx - start[0]) * vx + (yy - start[1]) * vy) / length_sq,
-                0.0,
-                1.0,
-            )
-            nearest_x = start[0] + projection * vx
-            nearest_y = start[1] + projection * vy
-            distance_sq = np.minimum(
-                distance_sq, (xx - nearest_x) ** 2 + (yy - nearest_y) ** 2
-            )
-        return distance_sq <= (width / 2.0) ** 2
+            return polygon_distance(xx, yy, points)
+        return path_distance(xx, yy, points, float(params["width"]))
 
     def save(self, path: str | Path) -> None:
         Path(path).write_text(

@@ -8,14 +8,13 @@ from collections.abc import Callable, Mapping
 import numpy as np
 
 from .kernel.material_state import MaterialState
-from .kernel.masks import full_exposure, invert
 from .kernel.multimaterial import (
     cmp_planarize,
     deposit_material,
     patterned_deposit,
     selective_etch,
 )
-from .layout.gds import rasterize_gds
+from .layout.gds import gds_level_set
 from .layout.quick_sketch import QuickSketch
 from .models import FlowBranch, ProcessStep, ProcessType, ProjectDefinition, Recipe
 from .storage import ProjectRepository
@@ -44,27 +43,64 @@ class ProcessEngine:
         step: ProcessStep,
         project: ProjectDefinition | None = None,
     ) -> np.ndarray:
+        return self.resolve_mask_level_set(state, step, project) <= 0
+
+    def resolve_mask_level_set(
+        self, state: MaterialState, step: ProcessStep,
+        project: ProjectDefinition | None = None,
+    ) -> np.ndarray:
+        """Evaluate every mask source on the requested grid without raster EDT."""
         grid = state.grid
         if step.mask_source == "none":
-            mask = full_exposure((grid.ny, grid.nx))
-        elif step.mask_source == "quick_sketch":
+            # 'No mask' always means blanket exposure, regardless of stale keep.
+            return np.full((grid.ny, grid.nx), -np.inf)
+        if step.mask_source == "quick_sketch":
             sketch_id = str(step.overrides.get("sketch_id", "default"))
             if sketch_id not in self.sketches:
                 raise KeyError(f"quick sketch {sketch_id!r} was not found")
-            mask = self.sketches[sketch_id].render(*grid.mesh_xy)
+            phi = self.sketches[sketch_id].signed_distance(*grid.mesh_xy)
         else:
             if project is None or not project.gds_path:
                 raise ValueError("the project has no GDS file")
             if step.layer is None or step.datatype is None:
                 raise ValueError("GDS steps require layer and datatype")
-            mask = rasterize_gds(
-                project.gds_path,
-                *grid.mesh_xy,
-                layer=step.layer,
-                datatype=step.datatype,
-                keep="inside",
+            phi = gds_level_set(
+                project.gds_path, *grid.mesh_xy,
+                layer=step.layer, datatype=step.datatype,
             )
-        return invert(mask) if step.keep == "outside" else mask
+        return -phi if step.keep == "outside" else phi
+
+    def plan_refinement(self, grid, project, branch, *, factor=4, max_nodes=20_000_000):
+        from .kernel.refinement import plan_refinement
+        return plan_refinement(self, grid, project, branch, factor=factor, max_nodes=max_nodes)
+
+    def run_refined_branch(
+        self, initializer, project, branch, *, factor=4, max_nodes=20_000_000,
+    ):
+        """Re-evaluate initial geometry and masks, never upsample old results.
+
+        initializer(grid) must describe the SAME physical initial state on any
+        grid. Refinement is an independent execution; it does not overwrite the
+        project's coarse snapshots.
+        """
+        from .kernel.grid import UniformGrid3D
+        from .kernel.adaptive import AdaptiveMaterialState, AdaptivePatch
+        grid = UniformGrid3D(**project.grid)
+        plan = self.plan_refinement(grid, project, branch, factor=factor, max_nodes=max_nodes)
+        self.logger(f"REFINE {plan.mode}: {plan.node_count:,} fine nodes, h={grid.dx/factor*1000:g} nm")
+        for reason in plan.reasons:
+            self.logger(f"REFINE reason: {reason}")
+        runner = ProcessEngine(self.recipes, sketches=self.sketches, logger=self.logger)
+        def replay(solve_grid):
+            initial = initializer(solve_grid)
+            if initial.grid != solve_grid:
+                raise ValueError("initializer must use the exact requested grid")
+            return runner.run_branch(initial, project, branch)
+        coarse = replay(grid)
+        patches = [
+            AdaptivePatch(box, replay(box.make_grid(grid))) for box in plan.boxes
+        ]
+        return AdaptiveMaterialState(coarse, patches), plan
 
     def run_step(
         self,
@@ -80,7 +116,8 @@ class ProcessEngine:
             raise KeyError(f"recipe {step.recipe_id!r} was not found")
         recipe = self.recipes[step.recipe_id]
         parameters = recipe.resolved_parameters(step.overrides)
-        mask = self.resolve_mask(state, step, project)
+        mask_level_set = self.resolve_mask_level_set(state, step, project)
+        mask = mask_level_set <= 0
         started = time.perf_counter()
         self.logger(f"RUN {step.name} [{recipe.process_type.value}]")
 
@@ -101,6 +138,7 @@ class ProcessEngine:
                         if parameters.get("base_z") is None
                         else float(parameters["base_z"])
                     ),
+                    exposure_sdf=mask_level_set,
                 )
             else:
                 result = deposit_material(state, material, thickness, rate=rate)
@@ -150,6 +188,7 @@ class ProcessEngine:
                 rates,
                 directional_fraction=float(parameters.get("directional_fraction", 1.0)),
                 surface_z=surface_z,
+                exposure_sdf=mask_level_set,
             )
         elif recipe.process_type is ProcessType.CMP:
             selected = parameters.get("materials")

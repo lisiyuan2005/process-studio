@@ -21,7 +21,7 @@ def _node_count(lower: float, upper: float, spacing: float) -> int:
 
 @dataclass(frozen=True)
 class RefinementBox:
-    """Axis-aligned fine-grid block aligned to a coarse Cartesian grid."""
+    """Fine solve block with an interior core used for AMR composition."""
 
     name: str
     x_min: float
@@ -31,6 +31,10 @@ class RefinementBox:
     z_min: float
     z_max: float
     factor: int = 2
+    core_x_min: float | None = None
+    core_x_max: float | None = None
+    core_y_min: float | None = None
+    core_y_max: float | None = None
 
     def __post_init__(self) -> None:
         if self.factor < 2 or self.factor & (self.factor - 1):
@@ -41,6 +45,25 @@ class RefinementBox:
             and self.z_min < self.z_max
         ):
             raise ValueError("refinement box bounds must have positive extent")
+        core = self.core_bounds
+        for name, value in zip(
+            ("core_x_min", "core_x_max", "core_y_min", "core_y_max"), core, strict=True
+        ):
+            object.__setattr__(self, name, value)
+        if not (
+            self.x_min <= core[0] < core[1] <= self.x_max
+            and self.y_min <= core[2] < core[3] <= self.y_max
+        ):
+            raise ValueError("refinement core must be contained by the solve box")
+
+    @property
+    def core_bounds(self) -> tuple[float, float, float, float]:
+        return (
+            self.x_min if self.core_x_min is None else self.core_x_min,
+            self.x_max if self.core_x_max is None else self.core_x_max,
+            self.y_min if self.core_y_min is None else self.core_y_min,
+            self.y_max if self.core_y_max is None else self.core_y_max,
+        )
 
     def make_grid(self, coarse: UniformGrid3D) -> UniformGrid3D:
         spacing = coarse.dx / self.factor
@@ -63,6 +86,16 @@ class RefinementBox:
             & (x <= self.x_max + tolerance)
             & (y >= self.y_min - tolerance)
             & (y <= self.y_max + tolerance)
+        )
+
+    def contains_core_xy(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+        tolerance = np.finfo(float).eps * 32
+        x_min, x_max, y_min, y_max = self.core_bounds
+        return (
+            (x >= x_min - tolerance)
+            & (x <= x_max + tolerance)
+            & (y >= y_min - tolerance)
+            & (y <= y_max + tolerance)
         )
 
 
@@ -103,7 +136,9 @@ def tiled_refinement_boxes(
     z_max: float,
     factor: int = 4,
 ) -> list[RefinementBox]:
-    """Create aligned AMR blocks around parameterized array cells.
+    """Legacy manual tiling helper; NOT a safe simulation planner.
+
+    Use ProcessEngine.run_refined_branch for flow-driven solve regions.
 
     The blocks refine only the device region.  The remainder of the project
     continues to use the coarse grid, so memory grows with feature area rather
@@ -170,9 +205,10 @@ class AdaptiveMaterialState:
         for patch in sorted(self.patches, key=lambda item: item.box.factor):
             box = patch.box
             tolerance = patch.state.grid.dx * 1e-9
-            if not box.y_min - tolerance <= section_y <= box.y_max + tolerance:
+            core_x_min, core_x_max, core_y_min, core_y_max = box.core_bounds
+            if not core_y_min - tolerance <= section_y <= core_y_max + tolerance:
                 continue
-            x_mask = (x >= box.x_min - tolerance) & (x <= box.x_max + tolerance)
+            x_mask = (x >= core_x_min - tolerance) & (x <= core_x_max + tolerance)
             z_mask = (z >= box.z_min - tolerance) & (z <= box.z_max + tolerance)
             if not x_mask.any() or not z_mask.any():
                 continue
@@ -210,8 +246,9 @@ class AdaptiveMaterialState:
         for patch in sorted(self.patches, key=lambda item: item.box.factor):
             box = patch.box
             tolerance = patch.state.grid.dx * 1e-9
-            x_mask = (x >= box.x_min - tolerance) & (x <= box.x_max + tolerance)
-            y_mask = (y >= box.y_min - tolerance) & (y <= box.y_max + tolerance)
+            core_x_min, core_x_max, core_y_min, core_y_max = box.core_bounds
+            x_mask = (x >= core_x_min - tolerance) & (x <= core_x_max + tolerance)
+            y_mask = (y >= core_y_min - tolerance) & (y <= core_y_max + tolerance)
             if not x_mask.any() or not y_mask.any():
                 continue
             patch_top = top_view_labels(patch.state)
@@ -230,7 +267,7 @@ class AdaptiveMaterialState:
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)
         self.coarse.save(directory / "coarse-state.npz")
-        manifest = {"version": 1, "patches": []}
+        manifest = {"version": 2, "patches": []}
         for index, patch in enumerate(self.patches):
             filename = f"patch-{index:02d}.npz"
             patch.state.save(directory / filename)
@@ -247,6 +284,7 @@ class AdaptiveMaterialState:
                         patch.box.z_max,
                     ],
                     "factor": patch.box.factor,
+                    "core_bounds": list(patch.box.core_bounds),
                 }
             )
         (directory / "adaptive-state.json").write_text(
@@ -260,6 +298,12 @@ class AdaptiveMaterialState:
         coarse = MaterialState.load(directory / "coarse-state.npz")
         patches = []
         for entry in manifest["patches"]:
-            box = RefinementBox(entry["name"], *entry["bounds"], entry["factor"])
+            core = entry.get("core_bounds", entry["bounds"][:4])
+            box = RefinementBox(
+                entry["name"],
+                *entry["bounds"],
+                entry["factor"],
+                *core,
+            )
             patches.append(AdaptivePatch(box, MaterialState.load(directory / entry["file"])))
         return cls(coarse, patches)

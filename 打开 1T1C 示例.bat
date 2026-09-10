@@ -2,7 +2,7 @@
 chcp 65001 >nul
 set "APP_DIR=%~dp0"
 cd /d "%APP_DIR%"
-python -c "import numpy, scipy, matplotlib, gdstk, openpyxl, PIL" >nul 2>&1
+python -c "import numpy, scipy, skfmm, matplotlib, gdstk, openpyxl, PIL" >nul 2>&1
 if errorlevel 1 (
   echo 正在安装 Process Studio 依赖，请稍候...
   python -m pip install -e .

@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
+from scipy.ndimage import binary_propagation
 
 from .level_set import (
     evolve_advection,
@@ -74,6 +75,7 @@ def mixed_trench_etch(
     isotropic_rate: float,
     surface_z: float = 0.0,
     cfl: float = 0.35,
+    exposure_sdf: np.ndarray | None = None,
 ) -> tuple[np.ndarray, int]:
     """Etch with independently controlled directional and isotropic rates.
 
@@ -112,13 +114,22 @@ def mixed_trench_etch(
 
     material = np.asarray(phi, dtype=float).copy()
     z_3d = np.broadcast_to(z[:, None, None], material.shape)
-    mask_3d = np.broadcast_to(mask[None, :, :], material.shape)
-    mask_phi = mask_signed_distance(mask, spacing)
+    if exposure_sdf is None:
+        mask_phi = mask_signed_distance(mask, spacing)
+    else:
+        mask_phi = np.asarray(exposure_sdf, dtype=float)
+        if mask_phi.shape != mask.shape:
+            raise ValueError("exposure_sdf shape must match the mask y/x plane")
+    if isotropic_rate == 0:
+        # Exact translation of the mask prism for spatially constant vertical
+        # etching. Applies to arbitrary masks, without a raster edge velocity.
+        void_phi = np.maximum(mask_phi[None, :, :], surface_z - target_depth - z_3d)
+        return np.maximum(material, -void_phi), 1
     void_phi = np.maximum(
         np.broadcast_to(mask_phi[None, :, :], material.shape),
         surface_z - z_3d,
     ).copy()
-    vertical_velocity = np.where(mask_3d, -directional_rate, 0.0)
+    vertical_velocity = -directional_rate
 
     for _ in range(steps):
         directional_term = upwind_advection_term(
@@ -133,10 +144,12 @@ def mixed_trench_etch(
         )
 
         void_phi -= dt * (directional_term + isotropic_term)
-
+    # The ideal mask protects the top surface, but not the subsurface undercut.
+    # Constraining every intermediate advection inlet would suppress undercut
+    # by continuously importing the original opening into the growing void.
+    inlet = z >= surface_z - spacing * 1e-9
+    void_phi[inlet] = np.maximum(void_phi[inlet], mask_phi[None, :, :])
     etched = np.maximum(material, -void_phi)
-    protected_top = (~mask_3d) & (np.abs(z_3d - surface_z) <= spacing * 0.25)
-    etched[protected_top] = np.minimum(material[protected_top], 0.0)
     return etched, steps
 
 
@@ -177,5 +190,19 @@ def conformal_deposition(
     # the exact level-set operation. It also handles front merging without the
     # small positive plateaus that explicit time integration can leave behind.
     combined = reference - target_thickness
-    film = np.maximum(combined, -reference)
-    return combined, film, 1
+    film = np.maximum(combined, -original)
+    # Ambient can enter through any open simulation boundary. A pre-existing
+    # sealed pore has no material supply and must not receive a new film.
+    # Connectivity is tested at this step's start; sub-step pinch-off transport
+    # is intentionally not claimed by this constant-thickness geometry model.
+    air = original > 0
+    seeds = np.zeros(original.shape, dtype=bool)
+    for axis in range(original.ndim):
+        for index in (0, -1):
+            face = [slice(None)] * original.ndim
+            face[axis] = index
+            seeds[tuple(face)] = air[tuple(face)]
+    reachable = binary_propagation(seeds, mask=air)
+    sealed = air & ~reachable
+    film[sealed] = np.maximum(film[sealed], original[sealed])
+    return np.minimum(original, film), film, 1

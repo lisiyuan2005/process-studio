@@ -6,7 +6,7 @@ import math
 
 import numpy as np
 from scipy.ndimage import distance_transform_edt
-from scipy.spatial import cKDTree
+import skfmm
 
 
 def _one_sided_differences(
@@ -155,9 +155,18 @@ def upwind_advection_term(
     if spacing <= 0:
         raise ValueError("spacing must be positive")
 
-    derivatives = _one_sided_differences(phi, spacing)
     transport = np.zeros_like(phi, dtype=float)
-    for component, (backward, forward) in zip(velocity, derivatives, strict=True):
+    for axis, component in enumerate(velocity):
+        if np.ndim(component) == 0 and component == 0:
+            continue
+        previous = np.roll(phi, 1, axis=axis)
+        following = np.roll(phi, -1, axis=axis)
+        first, last = [slice(None)] * phi.ndim, [slice(None)] * phi.ndim
+        first[axis], last[axis] = 0, -1
+        previous[tuple(first)] = phi[tuple(first)]
+        following[tuple(last)] = phi[tuple(last)]
+        backward = (phi - previous) / spacing
+        forward = (following - phi) / spacing
         component_array = np.broadcast_to(np.asarray(component, dtype=float), phi.shape)
         upwind = np.where(component_array >= 0, backward, forward)
         transport += component_array * upwind
@@ -181,53 +190,17 @@ def reinitialize_signed_distance(phi: np.ndarray, spacing: float) -> np.ndarray:
 
 
 def reinitialize_signed_distance_subcell(phi: np.ndarray, spacing: float) -> np.ndarray:
-    """Rebuild signed distance from linearly interpolated zero-crossing points.
+    """Second-order fast marching distance to the sampled zero interface.
 
-    This is slower than the binary distance-transform baseline but avoids its
-    half-cell interface shift, which matters when validating thin films.
+    This solves the Eikonal equation, not nearest distance to disconnected
+    crossing points. It remains a discretized approximation. Callers must not
+    overwrite existing material boundaries with the reconstructed field.
     """
+    phi = np.asarray(phi, dtype=float)
     if phi.ndim not in (2, 3):
         raise ValueError("phi must be a two- or three-dimensional array")
-    if spacing <= 0:
-        raise ValueError("spacing must be positive")
+    if not np.isfinite(spacing) or spacing <= 0 or not np.isfinite(phi).all():
+        raise ValueError("finite phi and positive finite spacing are required")
     if np.all(phi <= 0) or np.all(phi > 0):
         raise ValueError("reinitialization requires both inside and outside cells")
-
-    interface_points: list[np.ndarray] = []
-    for axis in range(phi.ndim):
-        lower_slices = [slice(None)] * phi.ndim
-        upper_slices = [slice(None)] * phi.ndim
-        lower_slices[axis] = slice(0, -1)
-        upper_slices[axis] = slice(1, None)
-        lower = phi[tuple(lower_slices)]
-        upper = phi[tuple(upper_slices)]
-        crossing = ((lower <= 0) & (upper >= 0)) | (
-            (lower >= 0) & (upper <= 0)
-        )
-        crossing &= ~((lower == 0) & (upper == 0))
-        indices = np.argwhere(crossing)
-        if indices.size == 0:
-            continue
-
-        lower_values = lower[crossing]
-        upper_values = upper[crossing]
-        denominator = np.abs(lower_values) + np.abs(upper_values)
-        fraction = np.divide(
-            np.abs(lower_values),
-            denominator,
-            out=np.full_like(lower_values, 0.5, dtype=float),
-            where=denominator > 0,
-        )
-        points = indices.astype(float)
-        points[:, axis] += fraction
-        interface_points.append(points * spacing)
-
-    if not interface_points:
-        raise ValueError("no zero-crossing edges were found")
-
-    tree = cKDTree(np.concatenate(interface_points, axis=0))
-    coordinates = np.indices(phi.shape, dtype=float).reshape(phi.ndim, -1).T
-    distances, _ = tree.query(coordinates * spacing, workers=-1)
-    signed = distances.reshape(phi.shape)
-    signed[phi <= 0] *= -1.0
-    return signed
+    return np.asarray(skfmm.distance(phi, dx=float(spacing), order=2))

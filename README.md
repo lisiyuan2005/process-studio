@@ -2,7 +2,7 @@
 
 面向实验室 3D integration 工艺推演的单用户桌面原型。它把版图或快速草图、工艺 Recipe、材料选择性、逐步快照和三维结构放在同一工程中，适合比较工艺分支、讨论器件结构和保存迭代过程。
 
-![2×2 3D 1T1C demo](docs/assets/1t1c-demo.png)
+![2×2 3D 1T1C demo — general engine](docs/assets/1t1c-general-engine.png)
 
 > 当前版本是几何与流程可视化工具，不是经过晶圆厂数据标定的 TCAD/设备仿真器。
 
@@ -30,7 +30,7 @@ macOS `.app` 必须在 macOS 上构建，仓库中的 `Desktop builds` GitHub Ac
 ## 已实现的 MVP
 
 - 多材料 3D 状态、确定性的材料覆盖优先级与独立显示/隐藏
-- 两级块状自适应网格：全局粗网格配合局部 Level Set 细网格，细化块会重新执行工艺而非插值放大
+- 流程驱动的细化执行 API：可证明数值影响范围时局部重算；全局依赖时统一细网格重算；不是动态 AMR
 - Level Set 干法刻蚀、方向性/各向同性混合刻蚀、简化湿法刻蚀
 - 等厚保形沉积、方向性图形沉积/填充、理想平面 CMP
 - Recipe 中定义材料速率、选择比和 stop layer；步骤可覆盖 Recipe 字段
@@ -84,18 +84,20 @@ python examples\build_1t1c_demo.py --output-dir ..\process-studio-1t1c-demo
 
 示例包含 9 个步骤：电容沟槽刻蚀、Al2O3/TiN 保形沉积、W 填充、CMP、层间介质、垂直沟道、栅介质和 TiN 字线。输出中包含可直接打开的工程数据库、9 个步骤快照、Quick Sketch、最终材料状态、日志、Excel Recipe 模板和总览图。
 
-从保存的 Level Set 状态重新运行 4× 局部细化，并生成统一材料标签的自适应网格曲面图：
+使用已保存状态的网格定义，从初始衬底重新执行 4× 细化（不会插值旧的最终结果）：
 
 ```powershell
 python -m pip install -e ".[render]"
 python examples\render_1t1c_adaptive.py `
   ..\process-studio-1t1c-demo\final-state.npz `
-  --adaptive-dir ..\process-studio-1t1c-demo\adaptive-state `
-  --output docs\assets\1t1c-demo.png `
+  --adaptive-dir ..\process-studio-1t1c-demo\general-engine-state `
+  --output docs\assets\1t1c-general-engine.png `
   --factor 4
 ```
 
-该示例的全局网格间距为 25 nm，圆孔、沟道和栅环所在的四个单元块使用 6.25 nm 网格；约 275 万个局部节点由同一套 9 步 Recipe 重新计算。截面与 Top View 从一个统一的材料标签场合成，因此不同材料的独立等值面不会再产生假的白色缝隙。
+该示例的基础网格间距为 25 nm。由于保形沉积需要全局距离重建，流程规划器自动选择全域 6.25 nm 网格，共 11,390,625 个节点，重新执行全部 9 步。没有按单元分块、圆心对齐或固定 halo。新执行 API 见 [通用引擎说明](docs/GENERAL_ENGINE.md)。桌面原有 Run 按钮仍使用项目网格；细化规划目前由 API/示例脚本调用。
+
+截面从材料零界面线性插值采样，3D 网格使用原始零等值面，不删除碎片、不补洞、不移动顶点。Top View 仍是原生网格标签；细化显示或提高图片 DPI 不等于提高计算精度。旧快照、旧图片和旧 EXE 不会自动升级。
 
 ## 验证
 
@@ -110,8 +112,8 @@ python -m process_studio --smoke-test --workspace work\ui-smoke
 
 - 湿法刻蚀目前是各向同性近似，不含晶向与晶面速率。
 - CMP 是理想平面截断，不含 dishing、erosion、pattern-density 或 pad/slurry 模型。
-- GDS/Quick Sketch 会栅格化到笛卡尔网格；重要的最小特征应在局部细化后至少覆盖约 3–5 个网格单元。
-- 当前自适应实现是两级、特征区域驱动的块状 AMR，尚不是随界面每一步自动移动和重新分块的动态八叉树 AMR。
+- GDS/Quick Sketch 均提供连续边界，再采样到笛卡尔网格；CSG 场保持零界面但并非处处严格距离。薄膜/小孔仍需多个计算单元解析并做收敛验证。
+- 当前没有动态稀疏 AMR/跨层 ghost-cell 同步；含全局依赖的流程退回全域细化，超出节点预算则报错，绝不静默降低精度。
 - 方向性通量沿垂直方向，不含角分布、shadowing、microloading、mask erosion 或 sidewall passivation。
 - 多材料选择性刻蚀采用逐材料 Level Set 响应，适合流程可视化；复杂界面反应仍需后续物理模型。
 - 当前是单机单用户桌面原型；按需求未加入多人协作、工艺报告和演化动画。

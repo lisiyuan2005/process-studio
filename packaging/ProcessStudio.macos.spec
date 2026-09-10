@@ -8,7 +8,7 @@ project_root = Path(SPECPATH).parent
 datas = []
 binaries = []
 hiddenimports = []
-for package in ("matplotlib", "scipy", "gdstk", "openpyxl", "PIL"):
+for package in ("matplotlib", "scipy", "skfmm", "gdstk", "openpyxl", "PIL"):
     package_datas, package_binaries, package_hiddenimports = collect_all(package)
     datas += package_datas
     binaries += package_binaries
