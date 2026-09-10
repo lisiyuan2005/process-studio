@@ -1,0 +1,42 @@
+name: Desktop builds
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Build and smoke-test EXE
+        shell: pwsh
+        run: ./scripts/build_windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ProcessStudio-Windows
+          path: release/windows/ProcessStudio.exe
+          if-no-files-found: error
+
+  macos-app:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Build and smoke-test app
+        run: bash scripts/build_macos.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ProcessStudio-macOS
+          path: release/macos/ProcessStudio-macOS.zip
+          if-no-files-found: error
+
