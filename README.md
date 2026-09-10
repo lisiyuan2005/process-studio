@@ -92,10 +92,12 @@ python examples\render_1t1c_adaptive.py `
   ..\process-studio-1t1c-demo\final-state.npz `
   --adaptive-dir ..\process-studio-1t1c-demo\adaptive-state `
   --output docs\assets\1t1c-demo.png `
-  --factor 4
+  --factor 4 `
+  --display-supersampling 4 `
+  --mesh-smoothing 6
 ```
 
-该示例的全局网格间距为 25 nm，圆孔、沟道和栅环所在的四个单元块使用 6.25 nm 网格；约 275 万个局部节点由同一套 9 步 Recipe 重新计算。截面与 Top View 从一个统一的材料标签场合成，因此不同材料的独立等值面不会再产生假的白色缝隙。
+该示例的全局网格间距为 25 nm，圆孔、沟道和栅环所在的四个单元块使用 6.25 nm 网格；约 275 万个局部节点由同一套 9 步 Recipe 重新计算。显示层从连续 Level Set 场做 1.56 nm 亚像素采样，并对 3D 曲面进行固定块边界的非收缩平滑。截面与 Top View 在统一占据场内分配材料，因此既不直接显示网格阶梯，也不会因独立等值面产生假的白色缝隙。显示平滑不会修改保存的仿真状态。
 
 ## 验证
 
