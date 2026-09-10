@@ -12,7 +12,7 @@ project_root = Path(SPECPATH).parent
 
 datas = []
 binaries = []
-hiddenimports = ["process_studio.worker", "process_studio.worker.__main__"]
+hiddenimports = ["process_studio.worker", "process_studio.worker.protocol"]
 for package in ("scipy", "skfmm", "gdstk", "openpyxl", "PIL", "skimage"):
     package_datas, package_binaries, package_hiddenimports = collect_all(package)
     datas += package_datas
@@ -20,7 +20,7 @@ for package in ("scipy", "skfmm", "gdstk", "openpyxl", "PIL", "skimage"):
     hiddenimports += package_hiddenimports
 
 analysis = Analysis(
-    [str(project_root / "src" / "process_studio" / "worker" / "__main__.py")],
+    [str(project_root / "src" / "process_studio" / "worker" / "run_worker.py")],
     pathex=[str(project_root / "src")],
     binaries=binaries,
     datas=datas,

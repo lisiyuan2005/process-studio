@@ -84,7 +84,9 @@ npm run tauri dev      # 需要本机能 import process_studio
 
 脚本先用 PyInstaller 把 worker 打成独立可执行文件放进 `desktop/src-tauri/resources/worker`，做一次 `describe` 冒烟测试，再执行 `npm run tauri build`。发布版通过 `PROCESS_STUDIO_WORKER` 可以覆盖 worker 路径。
 
-原有的 Tkinter EXE 构建（`scripts/build_windows.ps1`）不受影响，仍然可用。
+`Desktop builds` 工作流跑的就是这两个脚本，构建前先执行 `python -m pytest -q`，前端测试由脚本里的 `npm run test` 负责。Windows 侧另外打一个免安装 zip：`ProcessStudio.exe` 和 `resources/` 必须保持同级，exe 在自己所在目录下找 worker。
+
+原有的 Tkinter EXE 构建（`scripts/build_windows.ps1`）已从 CI 移除，脚本保留，可在本地构建。
 
 ## 尚未实现
 
