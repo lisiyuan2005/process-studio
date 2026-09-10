@@ -8,7 +8,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.colors import ListedColormap, to_rgb
+from matplotlib.colors import to_rgb
 from matplotlib.patches import Patch
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from scipy.ndimage import map_coordinates
@@ -28,6 +28,15 @@ from process_studio.models import ProjectDefinition
 
 COLORS = {material.name: material.color for material in MATERIALS}
 ALPHAS = {"Si": 0.62, "SiO2": 0.46, "Al2O3": 0.98, "TiN": 1.0, "W": 1.0}
+
+
+def _labels_to_rgb(labels: np.ndarray, names: list[str]) -> np.ndarray:
+    """Convert phase labels before resampling so colors cannot create false voids."""
+    rgb = np.empty((*labels.shape, 3), dtype=np.float32)
+    rgb[:] = to_rgb("#F7F9FC")
+    for index, name in enumerate(names):
+        rgb[labels == index] = to_rgb(COLORS.get(name, "#87929D"))
+    return rgb
 
 
 def _sample_field_section(
@@ -330,12 +339,14 @@ def _add_patch_surfaces(
 def render(
     adaptive: AdaptiveMaterialState,
     output: Path,
-    display_supersampling: int = 4,
-    smoothing_iterations: int = 6,
+    interface_spacing_nm: float = 1.0,
+    smoothing_iterations: int = 8,
 ) -> None:
     coarse = adaptive.coarse.grid
     fine_spacing = min(patch.state.grid.dx for patch in adaptive.patches)
-    display_spacing = fine_spacing / display_supersampling
+    if interface_spacing_nm <= 0:
+        raise ValueError("interface spacing must be positive")
+    display_spacing = interface_spacing_nm / 1000.0
     x = np.arange(coarse.x_min, coarse.x_max + display_spacing / 2.0, display_spacing)
     y = np.arange(coarse.y_min, coarse.y_max + display_spacing / 2.0, display_spacing)
     z = np.arange(-0.50, 0.30 + display_spacing / 2.0, display_spacing)
@@ -345,8 +356,8 @@ def render(
     if top_names != names:
         raise RuntimeError("adaptive views produced inconsistent material order")
 
-    colors = ["#F7F9FC", *[COLORS.get(name, "#87929D") for name in names]]
-    cmap = ListedColormap(colors)
+    section_rgb = _labels_to_rgb(section, names)
+    top_rgb = _labels_to_rgb(top, names)
     plt.rcParams.update(
         {
             "font.family": "DejaVu Sans",
@@ -391,31 +402,27 @@ def render(
 
     axis_section = figure.add_subplot(layout[0, 1])
     axis_section.imshow(
-        section + 1,
+        section_rgb,
         origin="lower",
         extent=(x[0], x[-1], z[0], z[-1]),
-        cmap=cmap,
-        vmin=0,
-        vmax=len(colors) - 1,
-        interpolation="nearest",
+        interpolation="lanczos",
+        resample=True,
         aspect="equal",
     )
     axis_section.set_xlim(coarse.x_min, coarse.x_max)
     axis_section.set_ylim(-0.50, 0.30)
     axis_section.set_xlabel("x (µm)")
     axis_section.set_ylabel("z (µm)")
-    axis_section.set_title("AA section · unified labels (no false gaps)")
+    axis_section.set_title(f"AA section · {interface_spacing_nm:g} nm interface sampling")
     axis_section.grid(alpha=0.12, linewidth=0.5)
 
     axis_top = figure.add_subplot(layout[1, 1])
     axis_top.imshow(
-        top + 1,
+        top_rgb,
         origin="lower",
         extent=(x[0], x[-1], y[0], y[-1]),
-        cmap=cmap,
-        vmin=0,
-        vmax=len(colors) - 1,
-        interpolation="nearest",
+        interpolation="lanczos",
+        resample=True,
     )
     for patch in adaptive.patches:
         axis_top.add_patch(
@@ -470,8 +477,8 @@ def main() -> None:
     parser.add_argument("--array", type=int, default=2)
     parser.add_argument("--pitch", type=float, default=0.45)
     parser.add_argument("--factor", type=int, default=4)
-    parser.add_argument("--display-supersampling", type=int, default=4, choices=range(1, 9))
-    parser.add_argument("--mesh-smoothing", type=int, default=6, choices=range(0, 9))
+    parser.add_argument("--interface-spacing-nm", type=float, default=1.0)
+    parser.add_argument("--mesh-smoothing", type=int, default=8, choices=range(0, 17))
     parser.add_argument("--reuse", action="store_true")
     args = parser.parse_args()
 
@@ -490,7 +497,7 @@ def main() -> None:
     render(
         adaptive,
         args.output,
-        display_supersampling=args.display_supersampling,
+        interface_spacing_nm=args.interface_spacing_nm,
         smoothing_iterations=args.mesh_smoothing,
     )
 
