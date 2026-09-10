@@ -98,6 +98,16 @@ jobs:
       - name: Build the desktop shell
         run: bash scripts/build_desktop.sh
 
+      # Without a Developer ID the best available is an ad-hoc signature. It
+      # does not avoid Gatekeeper, but it makes the bundle internally
+      # consistent, so the failure the user sees is the honest "unidentified
+      # developer" prompt rather than "the application is damaged".
+      - name: Ad-hoc sign the bundle
+        run: |
+          APP="desktop/src-tauri/target/release/bundle/macos/Process Studio.app"
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
       # A .app is a directory, so it is zipped once here; GitHub would
       # otherwise flatten it and lose the executable bit.
       - name: Collect the application

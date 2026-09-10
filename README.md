@@ -46,7 +46,13 @@ Windows 产物必须整个目录一起用：exe 会在自己同级的 `resources
 
 脚本先用 PyInstaller 把 worker 打成独立可执行文件，跑一次 `describe` 冒烟测试，再执行 `npm run tauri build`。
 
-macOS 产物未签名或 notarize，首次打开可能需要在 Finder 中右键选择 **Open**。
+macOS 产物只有临时签名，没有 Developer ID 也没有 notarize。从网上下载的文件带 `com.apple.quarantine` 标记，Apple Silicon 上会直接报「应用已损坏」，这不是包坏了。解压后执行一次：
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Process Studio.app"
+```
+
+之后正常双击即可。要彻底免掉这一步，需要用付费的 Developer ID 签名并 notarize。
 
 ## 已实现的 MVP
 
