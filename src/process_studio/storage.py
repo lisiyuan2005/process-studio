@@ -335,6 +335,25 @@ class ProjectRepository:
             raise KeyError((branch_id, step_id))
         return MaterialState.load(row["path"])
 
+    def delete_project_snapshots(self, project_id: str) -> int:
+        """Remove every cached state for a project while preserving its flow."""
+        with self.connect() as connection:
+            snapshot_ids = [
+                row[0]
+                for row in connection.execute(
+                    "SELECT id FROM snapshots WHERE project_id=?", (project_id,)
+                )
+            ]
+            if snapshot_ids:
+                placeholders = ",".join("?" for _ in snapshot_ids)
+                connection.execute(
+                    f"DELETE FROM branch_snapshots WHERE snapshot_id IN ({placeholders})",
+                    snapshot_ids,
+                )
+        for snapshot_id in snapshot_ids:
+            self._delete_snapshot_if_unreferenced(snapshot_id)
+        return len(snapshot_ids)
+
     def delete_step_and_dependents(self, branch_id: str, step_id: str) -> list[str]:
         branch = self.load_branch(branch_id)
         ids = [step.id for step in branch.steps]

@@ -1,0 +1,26 @@
+{
+  "grid_spacing_nm": 6.25,
+  "grid_shape": [225, 225, 225],
+  "node_count": 11390625,
+  "solver_order": 2,
+  "execution_tile_shape": [24, 24, 24],
+  "step_1_elapsed_seconds": 364.8378170999931,
+  "reference": "previous independently completed 6.25 nm second-order final state",
+  "final_state_grid_equal": true,
+  "final_state_priority_equal": true,
+  "maximum_absolute_field_difference": {
+    "W": 0.0,
+    "SiO2": 0.0,
+    "Si": 0.0,
+    "Al2O3": 0.0,
+    "TiN": 0.0
+  },
+  "rendering": {
+    "aa_section": "continuous level-set fields sampled at one quarter of solver spacing",
+    "top_view": "native solver-grid labels",
+    "three_dimensional": "raw zero-isosurfaces from marching cubes",
+    "symmetry_correction": false,
+    "interface_smoothing": false,
+    "hole_filling": false
+  }
+}

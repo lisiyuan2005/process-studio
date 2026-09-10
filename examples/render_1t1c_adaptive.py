@@ -21,6 +21,7 @@ from process_studio.kernel.adaptive import (
 )
 from process_studio.kernel.material_state import MaterialState
 from process_studio.models import ProjectDefinition
+from process_studio.visualization import top_view_labels
 
 
 COLORS = {material.name: material.color for material in MATERIALS}
@@ -201,6 +202,216 @@ def _add_patch_surfaces(axis, adaptive: AdaptiveMaterialState, cut_y: float) -> 
             )
             triangle_count += len(triangles)
     return triangle_count
+
+
+def _add_state_surfaces(axis, state: MaterialState, cut_y: float) -> int:
+    """Draw raw zero-isosurfaces from one uniform-grid state."""
+    triangle_count = 0
+    order = [
+        name for name in ["Si", "SiO2", "Al2O3", "TiN", "W"]
+        if name in state.fields
+    ]
+    for material in order:
+        vertices, faces = _surface_mesh(state, material)
+        if not len(faces):
+            continue
+        triangles = vertices[faces]
+        keep = triangles.mean(axis=1)[:, 1] >= cut_y
+        triangles = triangles[keep]
+        if not len(triangles):
+            continue
+        axis.add_collection3d(
+            Poly3DCollection(
+                triangles,
+                facecolors=_lit_facecolors(
+                    vertices,
+                    faces,
+                    COLORS.get(material, "#87929D"),
+                    ALPHAS.get(material, 0.95),
+                )[keep],
+                edgecolors="none",
+                linewidths=0.0,
+                antialiased=True,
+            )
+        )
+        triangle_count += len(triangles)
+    return triangle_count
+
+
+def render_step_state(
+    state: MaterialState,
+    output: Path,
+    *,
+    step_number: int,
+    step_name: str,
+    section_y: float = 0.225,
+) -> None:
+    """Render a consistent 3D/AA/top-view plate for one saved process step."""
+    grid = state.grid
+    names = state.priority
+    display_spacing = grid.dx / 4.0
+    x = np.arange(grid.x_min, grid.x_max + display_spacing / 2.0, display_spacing)
+    z = np.arange(-0.50, 0.30 + display_spacing / 2.0, display_spacing)
+    section = _sample_section(state, section_y, x, z, names)
+    top = top_view_labels(state)
+
+    plt.rcParams.update(
+        {
+            "font.family": "DejaVu Sans",
+            "axes.titlesize": 12,
+            "axes.labelsize": 9,
+            "figure.facecolor": "#F7F9FC",
+            "axes.facecolor": "#F7F9FC",
+        }
+    )
+    figure = plt.figure(figsize=(14, 8.2))
+    figure.subplots_adjust(
+        left=0.05, right=0.98, bottom=0.105, top=0.87, wspace=0.22, hspace=0.34
+    )
+    layout = figure.add_gridspec(2, 2, width_ratios=(1.08, 1.0))
+    figure.suptitle(
+        f"1T1C process result {step_number:02d}/09 — {step_name}",
+        fontsize=17,
+        fontweight="bold",
+    )
+
+    axis_3d = figure.add_subplot(layout[:, 0], projection="3d")
+    triangle_count = _add_state_surfaces(axis_3d, state, cut_y=0.0)
+    axis_3d.set_xlim(grid.x_min, grid.x_max)
+    axis_3d.set_ylim(0.0, grid.y_max)
+    axis_3d.set_zlim(-0.50, 0.30)
+    axis_3d.set_xlabel("x (µm)")
+    axis_3d.set_ylabel("y (µm)")
+    axis_3d.set_zlabel("z (µm)")
+    axis_3d.set_title("Raw zero-isosurface · front-half cutaway", pad=14)
+    axis_3d.view_init(elev=25, azim=-56)
+    axis_3d.set_box_aspect((1.0, 0.55, 0.82))
+    axis_3d.grid(alpha=0.16)
+    axis_3d.legend(
+        handles=[
+            Patch(facecolor=COLORS.get(name, "#87929D"), label=name,
+                  alpha=ALPHAS.get(name, 1.0))
+            for name in names
+        ],
+        loc="upper left",
+        framealpha=0.92,
+    )
+
+    axis_section = figure.add_subplot(layout[0, 1])
+    axis_section.imshow(
+        _labels_to_rgb(section, names),
+        origin="lower",
+        extent=(x[0], x[-1], z[0], z[-1]),
+        interpolation="nearest",
+        aspect="equal",
+    )
+    axis_section.set_xlim(grid.x_min, grid.x_max)
+    axis_section.set_ylim(-0.50, 0.30)
+    axis_section.set_xlabel("x (µm)")
+    axis_section.set_ylabel("z (µm)")
+    axis_section.set_title(f"AA section at y={section_y:g} µm · continuous field sample")
+    axis_section.grid(alpha=0.12, linewidth=0.5)
+
+    axis_top = figure.add_subplot(layout[1, 1])
+    axis_top.imshow(
+        _labels_to_rgb(top, names),
+        origin="lower",
+        extent=(grid.x_min, grid.x_max, grid.y_min, grid.y_max),
+        interpolation="nearest",
+    )
+    axis_top.axhline(section_y, color="#D64045", linewidth=1.25, linestyle="--")
+    axis_top.text(grid.x_min + 0.03, section_y + 0.025, "A", color="#B11F2A", weight="bold")
+    axis_top.text(grid.x_max - 0.06, section_y + 0.025, "A", color="#B11F2A", weight="bold")
+    axis_top.set_xlim(grid.x_min, grid.x_max)
+    axis_top.set_ylim(grid.y_min, grid.y_max)
+    axis_top.set_aspect("equal", adjustable="box")
+    axis_top.set_xlabel("x (µm)")
+    axis_top.set_ylabel("y (µm)")
+    axis_top.set_title("Top view · native solver-grid labels")
+
+    figure.text(
+        0.5,
+        0.027,
+        f"actual solver grid: {grid.dx*1000:g} nm · {grid.nx}×{grid.ny}×{grid.nz} "
+        f"({grid.nx*grid.ny*grid.nz:,} nodes) · no interface smoothing · "
+        f"{triangle_count:,} rendered triangles",
+        ha="center",
+        color="#46515B",
+        fontsize=9.2,
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(output, dpi=180, facecolor=figure.get_facecolor(), bbox_inches="tight")
+    plt.close(figure)
+    print(f"saved {output}; triangles={triangle_count:,}", flush=True)
+
+
+def render_step_contact_sheet(
+    state_paths: list[Path],
+    step_names: list[str],
+    output: Path,
+    *,
+    section_y: float = 0.225,
+) -> None:
+    """Render all AA sections with identical bounds in one comparison image."""
+    if len(state_paths) != len(step_names) or not state_paths:
+        raise ValueError("state paths and step names must have the same non-zero length")
+    plates: list[np.ndarray] = []
+    spacing_nm = 0.0
+    x = z = None
+    for path in state_paths:
+        state = MaterialState.load(path)
+        spacing_nm = state.grid.dx * 1000.0
+        display_spacing = state.grid.dx / 4.0
+        x = np.arange(
+            state.grid.x_min,
+            state.grid.x_max + display_spacing / 2.0,
+            display_spacing,
+        )
+        z = np.arange(-0.50, 0.30 + display_spacing / 2.0, display_spacing)
+        section = _sample_section(state, section_y, x, z, state.priority)
+        plates.append(_labels_to_rgb(section, state.priority))
+    assert x is not None and z is not None
+
+    figure, axes = plt.subplots(3, 3, figsize=(15, 9), sharex=True, sharey=True)
+    figure.subplots_adjust(
+        left=0.06, right=0.985, bottom=0.085, top=0.89, wspace=0.13, hspace=0.28
+    )
+    figure.suptitle(
+        "1T1C process evolution — AA section after each saved step",
+        fontsize=18,
+        fontweight="bold",
+    )
+    for index, (axis, plate, name) in enumerate(
+        zip(axes.flat, plates, step_names, strict=True), start=1
+    ):
+        axis.imshow(
+            plate,
+            origin="lower",
+            extent=(x[0], x[-1], z[0], z[-1]),
+            interpolation="nearest",
+            aspect="equal",
+        )
+        axis.set_title(f"{index:02d}  {name}", fontsize=10.5)
+        axis.set_xlim(x[0], x[-1])
+        axis.set_ylim(z[0], z[-1])
+        axis.grid(alpha=.10, linewidth=.4)
+    for axis in axes[-1, :]:
+        axis.set_xlabel("x (µm)")
+    for axis in axes[:, 0]:
+        axis.set_ylabel("z (µm)")
+    figure.text(
+        .5,
+        .025,
+        f"AA y={section_y:g} µm · actual solver grid {spacing_nm:g} nm · "
+        "continuous-field sampling · no symmetry correction or interface smoothing",
+        ha="center",
+        color="#46515B",
+        fontsize=9.5,
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(output, dpi=180, facecolor=figure.get_facecolor(), bbox_inches="tight")
+    plt.close(figure)
+    print(f"saved {output}", flush=True)
 
 
 def render(adaptive: AdaptiveMaterialState, output: Path) -> None:

@@ -47,6 +47,7 @@ from process_studio.models import (
     ProjectDefinition,
     Recipe,
 )
+from process_studio.simulation_settings import estimate_grid, grid_for_target_spacing
 from process_studio.storage import ProjectRepository
 from process_studio.visualization import (
     downsampled_material_voxels,
@@ -262,6 +263,7 @@ class ProcessStudioApp:
         menu = tk.Menu(self.root)
         project_menu = tk.Menu(menu, tearoff=False)
         project_menu.add_command(label="Save Project", command=self.save_project)
+        project_menu.add_command(label="Simulation Settings…", command=self.edit_simulation_settings)
         project_menu.add_command(label="Import GDS…", command=self.import_gds)
         project_menu.add_separator()
         project_menu.add_command(label="Exit", command=self.root.destroy)
@@ -799,6 +801,142 @@ class ProcessStudioApp:
         self.repository.save_project(self.project)
         self.repository.save_branch(self.project.id, self.branch)
         self._append_log("Project saved")
+
+    def edit_simulation_settings(self) -> None:
+        if self.running:
+            messagebox.showinfo("Simulation running", "Wait for the current run to finish first.")
+            return
+        window = Toplevel(self.root)
+        window.title("Simulation Settings")
+        window.resizable(False, False)
+        body = ttk.Frame(window, padding=14)
+        body.pack(fill=BOTH, expand=True)
+
+        preset_values = {
+            "Draft — 25 nm": 25.0,
+            "Standard — 12.5 nm": 12.5,
+            "Accurate — 6.25 nm": 6.25,
+            "Custom": None,
+        }
+        current_nm = self.grid.dx * 1000.0
+        preset_var = StringVar(value="Custom")
+        for label, value in preset_values.items():
+            if value is not None and np.isclose(value, current_nm):
+                preset_var.set(label)
+                break
+        spacing_var = StringVar(value=f"{current_nm:g}")
+        summary_var = StringVar()
+
+        ttk.Label(body, text="Spatial calculation grid", font=("Segoe UI", 11, "bold")).grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 10)
+        )
+        ttk.Label(body, text="Preset").grid(row=1, column=0, sticky="w", pady=4)
+        preset = ttk.Combobox(
+            body, textvariable=preset_var, values=list(preset_values), state="readonly", width=25
+        )
+        preset.grid(row=1, column=1, sticky="ew", padx=(12, 0), pady=4)
+        ttk.Label(body, text="Target spacing (nm)").grid(row=2, column=0, sticky="w", pady=4)
+        spacing_entry = ttk.Entry(body, textvariable=spacing_var, width=18)
+        spacing_entry.grid(row=2, column=1, sticky="ew", padx=(12, 0), pady=4)
+        ttk.Label(
+            body,
+            textvariable=summary_var,
+            justify="left",
+            foreground="#46515B",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 8))
+        ttk.Label(
+            body,
+            text=(
+                "This changes the actual 3D solver grid, not image DPI.\n"
+                "Existing snapshots are invalid at another spacing and will be cleared."
+            ),
+            justify="left",
+            wraplength=430,
+        ).grid(row=4, column=0, columnspan=2, sticky="w", pady=(0, 12))
+
+        candidate: list[UniformGrid3D | None] = [None]
+
+        def readable_bytes(value: int) -> str:
+            return f"{value / 1024**3:.2f} GB"
+
+        def refresh_estimate(*_args) -> None:
+            try:
+                proposed = grid_for_target_spacing(self.grid, float(spacing_var.get()))
+                estimate = estimate_grid(proposed, len(self.material_library.materials))
+                candidate[0] = proposed
+                summary_var.set(
+                    f"Actual spacing: {estimate.spacing_nm:g} nm\n"
+                    f"Grid: {estimate.shape[0]} × {estimate.shape[1]} × {estimate.shape[2]} "
+                    f"= {estimate.node_count:,} nodes\n"
+                    f"Saved material fields: about {readable_bytes(estimate.state_bytes)}\n"
+                    f"Recommended free RAM: at least {readable_bytes(estimate.recommended_bytes)}"
+                )
+            except (TypeError, ValueError) as error:
+                candidate[0] = None
+                summary_var.set(f"Invalid setting: {error}")
+
+        def choose_preset(_event=None) -> None:
+            value = preset_values[preset_var.get()]
+            if value is not None:
+                spacing_var.set(f"{value:g}")
+            refresh_estimate()
+
+        def mark_custom(*_args) -> None:
+            value = preset_values.get(preset_var.get())
+            try:
+                entered = float(spacing_var.get())
+            except ValueError:
+                entered = None
+            if value is not None and entered is not None and not np.isclose(value, entered):
+                preset_var.set("Custom")
+            refresh_estimate()
+
+        def apply() -> None:
+            proposed = candidate[0]
+            if proposed is None:
+                messagebox.showerror("Invalid grid", "Enter a valid spatial spacing.", parent=window)
+                return
+            estimate = estimate_grid(proposed, len(self.material_library.materials))
+            if estimate.node_count > 20_000_000:
+                messagebox.showerror(
+                    "Grid too large",
+                    f"This grid needs {estimate.node_count:,} nodes. The desktop safety limit is "
+                    "20,000,000 nodes. Enlarge the spacing or reduce the project bounds.",
+                    parent=window,
+                )
+                return
+            if proposed == self.grid:
+                window.destroy()
+                return
+            if not messagebox.askyesno(
+                "Change calculation grid",
+                "Changing spatial precision requires a full rerun. Clear all saved snapshots "
+                "for this project and apply the new grid?",
+                parent=window,
+            ):
+                return
+            removed = self.repository.delete_project_snapshots(self.project.id)
+            self.grid = proposed
+            self.project.grid = dict(proposed.__dict__)
+            self.initial_state = MaterialState(proposed)
+            self.initial_state.add_material("Si", proposed.substrate())
+            self.current_state = self.initial_state.clone()
+            self.repository.save_project(self.project)
+            self._append_log(
+                f"GRID spacing={proposed.dx*1000:g} nm, "
+                f"shape={proposed.nx}x{proposed.ny}x{proposed.nz}; "
+                f"cleared {removed} incompatible snapshots"
+            )
+            window.destroy()
+            self.refresh_all()
+
+        preset.bind("<<ComboboxSelected>>", choose_preset)
+        spacing_var.trace_add("write", mark_custom)
+        buttons = ttk.Frame(body)
+        buttons.grid(row=5, column=0, columnspan=2, sticky="e")
+        ttk.Button(buttons, text="Cancel", command=window.destroy).pack(side=RIGHT)
+        ttk.Button(buttons, text="Apply", command=apply).pack(side=RIGHT, padx=(0, 8))
+        refresh_estimate()
 
     def import_gds(self) -> None:
         path = filedialog.askopenfilename(filetypes=[("GDSII", "*.gds"), ("All files", "*.*")])
