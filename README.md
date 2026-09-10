@@ -37,7 +37,7 @@ macOS `.app` 必须在 macOS 上构建，仓库中的 `Desktop builds` GitHub Ac
 - 可按时间运行，也可直接输入目标厚度或目标深度
 - 每个项目一个 GDS；步骤选择 layer/datatype、保留图形内或图形外
 - 未选择 mask 时默认整片暴露
-- Quick Sketch：矩形、圆、多边形、路径，merge/subtract/intersect 和参数化阵列；圆与矩形 mask 保留解析 signed-distance 亚网格边界
+- Quick Sketch：矩形、圆、多边形、路径，merge/subtract/intersect 和参数化阵列
 - Process Flow：增删步骤、运行到选中步骤、运行全部、从当前步骤创建分支
 - 每步自动保存快照；删除某一步时同步删除该步及下游无引用快照
 - 3D 旋转/缩放、材料显隐、Top View、任意画线 AA–BB 截面
@@ -92,12 +92,10 @@ python examples\render_1t1c_adaptive.py `
   ..\process-studio-1t1c-demo\final-state.npz `
   --adaptive-dir ..\process-studio-1t1c-demo\adaptive-state `
   --output docs\assets\1t1c-demo.png `
-  --factor 4 `
-  --interface-spacing-nm 1 `
-  --mesh-smoothing 8
+  --factor 4
 ```
 
-该示例的全局网格间距为 25 nm，圆孔、沟道和栅环所在的四个单元块使用 6.25 nm 网格；约 275 万个局部节点由同一套 9 步 Recipe 重新计算。圆形 Quick Sketch 直接生成解析距离函数，刻蚀后保留连续零交叉，不再从二值占据体素重建侧壁。显示层从连续 Level Set 场做 1.00 nm 界面采样，并对 3D 曲面进行固定块边界的非收缩平滑。截面与 Top View 在统一占据场内分配材料并以抗锯齿 RGB 合成，因此既不直接显示网格阶梯，也不会因独立等值面产生假的白色缝隙。1 nm 指界面窄带/轮廓采样精度，并非内存不可承受的全域 1 nm 致密体素；显示平滑不会修改保存的仿真状态。
+该示例的全局网格间距为 25 nm，圆孔、沟道和栅环所在的四个单元块使用 6.25 nm 网格；约 275 万个局部节点由同一套 9 步 Recipe 重新计算。截面与 Top View 从一个统一的材料标签场合成，因此不同材料的独立等值面不会再产生假的白色缝隙。
 
 ## 验证
 

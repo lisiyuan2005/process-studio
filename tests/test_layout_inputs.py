@@ -33,21 +33,6 @@ def test_quick_sketch_boolean_array_and_round_trip(tmp_path) -> None:
     assert np.array_equal(restored.render(*grid.mesh), mask)
 
 
-def test_quick_sketch_circle_retains_analytic_subcell_boundary() -> None:
-    grid = UniformGrid2D(-0.2, 0.2, -0.2, 0.2, 17, 17)
-    sketch = QuickSketch(
-        "analytic circle",
-        [SketchShape("circle", parameters={"center": (0.013, -0.007), "radius": 0.083})],
-    )
-    xx, yy = grid.mesh
-    phi = sketch.signed_distance(xx, yy)
-    expected = np.hypot(xx - 0.013, yy + 0.007) - 0.083
-
-    assert np.allclose(phi, expected)
-    center_value_in_cells = phi[grid.ny // 2, grid.nx // 2] / grid.dx
-    assert not np.isclose(center_value_in_cells, round(center_value_in_cells))
-
-
 def test_gds_layer_discovery_and_rasterization(tmp_path) -> None:
     library = gdstk.Library()
     cell = library.new_cell("TOP")

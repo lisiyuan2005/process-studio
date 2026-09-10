@@ -37,7 +37,6 @@ def patterned_deposit(
     thickness: float,
     *,
     base_z: float | None = None,
-    exposure_sdf: np.ndarray | None = None,
 ) -> MaterialState:
     """Deposit a vertical prism through a mask, approximating evaporation/fill."""
     if exposure_mask.shape != (state.grid.ny, state.grid.nx):
@@ -54,12 +53,7 @@ def patterned_deposit(
             else 0.0
         )
     top_z = base_z + thickness
-    if exposure_sdf is None:
-        mask_phi = mask_signed_distance(exposure_mask, state.grid.dx)
-    else:
-        mask_phi = np.asarray(exposure_sdf, dtype=float)
-        if mask_phi.shape != exposure_mask.shape:
-            raise ValueError("exposure_sdf must match the grid y/x plane")
+    mask_phi = mask_signed_distance(exposure_mask, state.grid.dx)
     z = state.grid.z[:, None, None]
     slab_phi = np.maximum(base_z - z, z - top_z)
     prism = np.maximum(mask_phi[None, :, :], slab_phi)
@@ -76,7 +70,6 @@ def selective_etch(
     *,
     directional_fraction: float = 1.0,
     surface_z: float = 0.0,
-    exposure_sdf: np.ndarray | None = None,
 ) -> MaterialState:
     """Apply a rate-scaled etch volume only to materials with nonzero response."""
     if not 0.0 <= directional_fraction <= 1.0:
@@ -103,12 +96,10 @@ def selective_etch(
             directional_rate=max(rate * directional_fraction, 0.0),
             isotropic_rate=max(rate * (1.0 - directional_fraction), 0.0),
             surface_z=surface_z,
-            exposure_sdf=exposure_sdf,
         )
-        # Retain the continuous zero crossing from the evolved void. Rebuilding
-        # from binary occupancy here used to quantize curved sidewalls to whole
-        # grid cells and was the primary source of visible stair steps.
-        result.fields[name] = np.maximum(state.fields[name], etched_union)
+        removed = (original_union <= 0.0) & (etched_union > 0.0)
+        remaining = (state.fields[name] <= 0.0) & ~removed
+        result.rebuild_from_occupancy(name, remaining)
     return result
 
 
