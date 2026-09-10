@@ -83,6 +83,15 @@ python examples\build_1t1c_demo.py --output-dir ..\process-studio-1t1c-demo
 
 示例包含 9 个步骤：电容沟槽刻蚀、Al2O3/TiN 保形沉积、W 填充、CMP、层间介质、垂直沟道、栅介质和 TiN 字线。输出中包含可直接打开的工程数据库、9 个步骤快照、Quick Sketch、最终材料状态、日志、Excel Recipe 模板和总览图。
 
+从保存的 Level Set 状态生成无体素降采样的平滑高精度曲面图：
+
+```powershell
+python -m pip install -e ".[render]"
+python examples\render_1t1c_accurate.py `
+  ..\process-studio-1t1c-demo\final-state.npz `
+  --output docs\assets\1t1c-demo.png
+```
+
 ## 验证
 
 ```powershell

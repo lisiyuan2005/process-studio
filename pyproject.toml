@@ -21,6 +21,7 @@ process-studio = "process_studio.ui.app:main"
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
+render = ["scikit-image>=0.25"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
