@@ -10,6 +10,7 @@ import {
   Palette,
   Play,
   Save,
+  Square,
   TerminalSquare,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -89,6 +90,8 @@ export default function App() {
 
   const skipNextAutosave = useRef(false);
   const runningStepId = useRef<string | undefined>(undefined);
+  // The id of the run in flight, so the Stop button can name it.
+  const runRequestId = useRef<string | undefined>(undefined);
   // Only the newest view request may write to the view; a slower earlier one
   // must not land on top of it and show another step's geometry.
   const viewToken = useRef(0);
@@ -292,6 +295,8 @@ export default function App() {
     if (!document || !branch || busy) return;
     setBusy(true);
     runningStepId.current = undefined;
+    const requestId = `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    runRequestId.current = requestId;
     let working: WorkspaceDocument = document;
     if (throughStepId) working = markStep(working, throughStepId, "running");
     setDocumentState(working);
@@ -300,7 +305,11 @@ export default function App() {
       const saved = await bridge.saveDocument(document);
       skipNextAutosave.current = true;
       setSaveState("saved");
-      const result = await bridge.runFlow(saved.root, { branchId: branch.id, throughStepId });
+      const result = await bridge.runFlow(
+        saved.root,
+        { branchId: branch.id, throughStepId },
+        requestId,
+      );
       skipNextAutosave.current = true;
       setDocumentState(setStepStatuses(saved, result.branchId, result.stepStatuses));
       setEvents((current) => [
@@ -311,20 +320,42 @@ export default function App() {
         },
       ]);
     } catch (reason) {
-      const failed = runningStepId.current;
-      if (failed) {
+      const message = errorMessage(reason);
+      const stopped = /cancelled|Stopped before/i.test(message);
+      const failed = stopped ? undefined : runningStepId.current;
+      // Whatever finished before the failure is stored; the worker's own
+      // statuses say which steps those are.
+      try {
+        const refreshed = await bridge.saveDocument(document);
         skipNextAutosave.current = true;
-        setDocumentState((current) => (current ? markStep(current, failed, "failed") : current));
-        setSelectedStepId(failed);
+        setDocumentState(failed ? markStep(refreshed, failed, "failed") : refreshed);
+      } catch {
+        if (failed) {
+          skipNextAutosave.current = true;
+          setDocumentState((current) => (current ? markStep(current, failed, "failed") : current));
+        }
       }
+      if (failed) setSelectedStepId(failed);
       setEvents((current) => [
         ...current,
-        { kind: "log", message: `Run failed: ${errorMessage(reason)}` },
+        { kind: "log", message: stopped ? `Run stopped: ${message}` : `Run failed: ${message}` },
       ]);
-      setShowLog(true);
+      if (!stopped) setShowLog(true);
     } finally {
+      runRequestId.current = undefined;
       setBusy(false);
     }
+  };
+
+  const stopRun = () => {
+    const requestId = runRequestId.current;
+    if (!requestId) return;
+    void bridge.cancel(requestId).catch((reason) =>
+      setEvents((current) => [
+        ...current,
+        { kind: "log", message: `Could not stop the run: ${errorMessage(reason)}` },
+      ]),
+    );
   };
 
   const handleImportGds = async () => {
@@ -526,21 +557,33 @@ export default function App() {
           <TerminalSquare size={15} />
           Log{events.length > 0 && <span>{events.length}</span>}
         </button>
-        <button
-          type="button"
-          className="primary-button run-button"
-          disabled={busy || !hasDirtySteps(document)}
-          onClick={() => runFlow()}
-        >
-          {busy ? (
-            <LoaderCircle className="spin" size={15} />
-          ) : hasDirtySteps(document) ? (
-            <Play size={15} fill="currentColor" />
-          ) : (
-            <CheckCircle2 size={15} />
-          )}
-          {busy ? "Running" : hasDirtySteps(document) ? "Run stale" : "Up to date"}
-        </button>
+        {busy && runRequestId.current ? (
+          <button
+            type="button"
+            className="primary-button run-button stop-button"
+            title="Stop after the step that is running now; finished steps stay stored"
+            onClick={stopRun}
+          >
+            <Square size={13} fill="currentColor" />
+            Stop
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="primary-button run-button"
+            disabled={busy || !hasDirtySteps(document)}
+            onClick={() => runFlow()}
+          >
+            {busy ? (
+              <LoaderCircle className="spin" size={15} />
+            ) : hasDirtySteps(document) ? (
+              <Play size={15} fill="currentColor" />
+            ) : (
+              <CheckCircle2 size={15} />
+            )}
+            {busy ? "Working" : hasDirtySteps(document) ? "Run stale" : "Up to date"}
+          </button>
+        )}
       </header>
 
       {busy && progress?.total ? (

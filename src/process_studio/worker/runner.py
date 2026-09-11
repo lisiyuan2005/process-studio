@@ -11,7 +11,8 @@ from ..kernels import Kernel, get_kernel
 from ..layout.quick_sketch import QuickSketch
 from ..models import FlowBranch, ProjectDefinition, Recipe
 from ..storage import ProjectRepository
-from .errors import InvalidRequest, WorkspaceError
+from .errors import Cancelled, InvalidRequest, WorkspaceError
+from .state_cache import STATE_CACHE
 from .serialize import (
     branch_to_json,
     grid_dict,
@@ -127,9 +128,15 @@ def run_flow(
     through_step_id: str | None = None,
     force: bool = False,
     progress: ProgressCallback | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
-    """Execute the branch, reusing snapshots whose digest still matches."""
+    """Execute the branch, reusing snapshots whose digest still matches.
+
+    ``should_cancel`` is consulted between steps. A step that has finished
+    stays stored, so a cancelled run resumes from where it stopped.
+    """
     emit = progress or (lambda _event: None)
+    cancelled = should_cancel or (lambda: False)
     repository = open_repository(root)
     project = load_project(repository, project_id)
     branch = _branch_or_fail(repository, branch_id or project.active_branch_id or "")
@@ -159,9 +166,13 @@ def run_flow(
     for index, (step, digest) in enumerate(zip(branch.steps, digests)):
         if index >= total:
             break
+        if cancelled():
+            raise Cancelled(
+                f"Stopped before {step.name}; {len(executed)} step(s) ran and are kept."
+            )
         if reusable and stored.get(step.id) == digest:
             try:
-                state = kernel.load_state(repository.snapshot_path(branch.id, step.id))
+                state = _load_state(kernel, repository.snapshot_path(branch.id, step.id))
                 cached.append(step.id)
                 emit(
                     {
@@ -202,6 +213,10 @@ def run_flow(
             step.id,
             state,
             suffix=kernel.info.snapshot_suffix,
+        )
+        # The state just computed is what the views will ask for next.
+        STATE_CACHE.put(
+            repository.snapshot_path(branch.id, step.id), state, kernel.state_bytes(state)
         )
         repository.log(
             project.id,
@@ -251,7 +266,17 @@ def state_for_step(
         raise InvalidRequest(
             "This step has no stored result yet. Run the flow first."
         ) from error
-    return kernel.load_state(path), repository, project, kernel
+    return _load_state(kernel, path), repository, project, kernel
+
+
+def _load_state(kernel: Kernel, path: Path) -> Any:
+    """A stored state, from memory when it was seen recently."""
+    cached = STATE_CACHE.get(path)
+    if cached is not None:
+        return cached
+    state = kernel.load_state(path)
+    STATE_CACHE.put(path, state, kernel.state_bytes(state))
+    return state
 
 
 def discard_results(repository: ProjectRepository, project: ProjectDefinition) -> None:

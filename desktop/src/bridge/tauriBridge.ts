@@ -17,8 +17,12 @@ import type {
 
 const WORKER_EVENT = "process-studio-worker";
 
-function call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-  return invoke<T>("worker_invoke", { method, params });
+function call<T>(
+  method: string,
+  params: Record<string, unknown> = {},
+  requestId?: string,
+): Promise<T> {
+  return invoke<T>("worker_invoke", { method, params, requestId: requestId ?? null });
 }
 
 function safeFileName(name: string) {
@@ -76,8 +80,12 @@ export class TauriBridge implements DesktopBridge {
     });
   }
 
-  runFlow(root: string, options: RunOptions): Promise<RunResult> {
-    return call<RunResult>("run_flow", { root, ...options });
+  runFlow(root: string, options: RunOptions, requestId?: string): Promise<RunResult> {
+    return call<RunResult>("run_flow", { root, ...options }, requestId);
+  }
+
+  cancel(requestId: string): Promise<void> {
+    return invoke<void>("worker_cancel", { requestId });
   }
 
   getSurfaces(root: string, request: ViewRequest): Promise<SurfaceDocument> {

@@ -119,6 +119,10 @@ export class BrowserBridge implements DesktopBridge {
     throw new Error(NO_KERNEL);
   }
 
+  async cancel(): Promise<void> {
+    // Nothing runs in the preview, so there is nothing to stop.
+  }
+
   async getSurfaces(_root: string, _request: ViewRequest): Promise<SurfaceDocument> {
     throw new Error(NO_KERNEL);
   }

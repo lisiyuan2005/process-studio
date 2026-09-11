@@ -257,6 +257,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .kernel-summary { color: #8a97a3; font-size: 9.5px; line-height: 1.5; }
 .kernel-lock { display: flex; align-items: flex-start; gap: 6px; margin: 10px 0 0 !important; color: #a0885c !important; font-size: 9px !important; line-height: 1.5; }
 .kernel-lock svg { flex: 0 0 auto; margin-top: 1px; }
+.stop-button { background: linear-gradient(145deg, #d9636b, #b8434b) !important; box-shadow: 0 6px 18px rgba(184, 67, 75, 0.25) !important; }
 .kernel-badge { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); font-size: 9.5px; }
 .home-divider { display: flex; align-items: center; gap: 9px; margin: 17px 0; color: #56636f; font-size: 8px; }
 .home-divider::before, .home-divider::after { content: ""; flex: 1; height: 1px; background: #29333c; }

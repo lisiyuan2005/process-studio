@@ -102,6 +102,9 @@ class Kernel(Protocol):
     def state_materials(self, state: Any) -> list[str]:
         """Materials present in the state, in the kernel's own order."""
 
+    def state_bytes(self, state: Any) -> int:
+        """Roughly what the state costs to keep in memory, for the cache budget."""
+
     def surfaces(
         self,
         state: Any,

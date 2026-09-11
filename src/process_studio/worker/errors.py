@@ -13,3 +13,7 @@ class InvalidRequest(WorkerError):
 
 class WorkspaceError(WorkerError):
     """The workspace directory could not be opened or written."""
+
+
+class Cancelled(WorkerError):
+    """The client withdrew the request before it finished."""

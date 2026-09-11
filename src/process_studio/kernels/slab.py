@@ -541,6 +541,16 @@ class SlabKernel:
     def state_materials(self, state: SlabState) -> list[str]:
         return state.priority
 
+    def state_bytes(self, state: SlabState) -> int:
+        # Polygons are the bulk of a slab state: two doubles per coordinate
+        # plus shapely's bookkeeping, which the factor of four stands in for.
+        coordinates = sum(
+            int(shapely.get_num_coordinates(region))
+            for slab in state.device._state.slabs
+            for region in slab.regions.values()
+        )
+        return 64 * 1024 + coordinates * 4 * 16
+
     # -- views -------------------------------------------------------------
 
     def surfaces(

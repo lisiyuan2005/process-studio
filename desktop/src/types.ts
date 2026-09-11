@@ -158,6 +158,8 @@ export interface RunResult {
 
 export interface WorkerEvent {
   kind: "progress" | "log";
+  /** The request this event belongs to, when the worker was answering one. */
+  requestId?: string;
   stepId?: string;
   message: string;
   completed?: number;

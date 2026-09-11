@@ -5,6 +5,8 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
+import time
 
 import numpy as np
 import pytest
@@ -409,10 +411,84 @@ def test_serve_answers_line_by_line_and_reports_errors(tmp_path):
     )
     output = io.StringIO()
     assert serve(io.StringIO(requests), output) == 0
-    answers = [json.loads(line) for line in output.getvalue().splitlines()]
-    assert [answer["id"] for answer in answers] == ["a", "b", "c", None]
-    assert [answer["ok"] for answer in answers] == [True, False, True, False]
-    assert answers[1]["error"]["code"] == "InvalidRequest"
+    answers = {
+        json.loads(line)["id"]: json.loads(line) for line in output.getvalue().splitlines()
+    }
+    # Requests are answered in order; a line that is not even JSON is refused
+    # by the reader as soon as it arrives, ahead of whatever is still queued.
+    executed = [answer["id"] for answer in map(json.loads, output.getvalue().splitlines()) if answer["id"]]
+    assert executed == ["a", "b", "c"]
+    assert [answers[key]["ok"] for key in ("a", "b", "c", None)] == [True, False, True, False]
+    assert answers["b"]["error"]["code"] == "InvalidRequest"
+
+
+def test_a_newer_view_request_supersedes_a_queued_one(workspace):
+    """Five quick clicks should cost one computation, not five."""
+    import threading
+    from process_studio.worker.server import Server
+
+    document = call("open_workspace", root=str(workspace))
+    branch = document["branches"][0]
+    call("run_flow", root=str(workspace))
+    read_end, write_end = os.pipe()
+    input_stream = os.fdopen(read_end, "r")
+    writer = os.fdopen(write_end, "w")
+    output = io.StringIO()
+    server = Server(input_stream, output)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    # A slow request first, so the view requests queue up behind it.
+    writer.write(json.dumps({"id": "run", "method": "run_flow", "params": {"root": str(workspace), "force": True}}) + "\n")
+    for index, step in enumerate(branch["steps"]):
+        writer.write(json.dumps({
+            "id": f"view-{index}", "method": "get_section",
+            "params": {"root": str(workspace), "branchId": branch["id"], "stepId": step["id"], "axis": "y"},
+        }) + "\n")
+    writer.close()
+    thread.join(timeout=120)
+    assert not thread.is_alive()
+    answers = {
+        message["id"]: message
+        for message in map(json.loads, output.getvalue().splitlines())
+        if message["kind"] == "response"
+    }
+    assert answers["run"]["ok"]
+    superseded = [key for key, answer in answers.items() if not answer["ok"] and answer["error"]["code"] == "Superseded"]
+    assert sorted(superseded) == ["view-0", "view-1", "view-2"]
+    assert answers["view-3"]["ok"] and "image" in answers["view-3"]["result"]
+
+
+def test_a_run_can_be_cancelled_between_steps_and_keeps_what_ran(workspace):
+    import threading
+    from process_studio.worker.server import Server
+
+    document = call("open_workspace", root=str(workspace))
+    branch = document["branches"][0]
+    read_end, write_end = os.pipe()
+    input_stream = os.fdopen(read_end, "r")
+    writer = os.fdopen(write_end, "w")
+    output = io.StringIO()
+    server = Server(input_stream, output)
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    writer.write(json.dumps({"id": "run", "method": "run_flow", "params": {"root": str(workspace)}}) + "\n")
+    writer.flush()
+    # Cancel as soon as the first step reports it is running.
+    deadline = time.time() + 60
+    while time.time() < deadline and "Running" not in output.getvalue():
+        time.sleep(0.02)
+    writer.write(json.dumps({"kind": "cancel", "id": "run"}) + "\n")
+    writer.close()
+    thread.join(timeout=120)
+    answers = [m for m in map(json.loads, output.getvalue().splitlines()) if m["kind"] == "response"]
+    assert answers[0]["ok"] is False
+    assert answers[0]["error"]["code"] == "Cancelled"
+    statuses = call("open_workspace", root=str(workspace))["stepStatuses"][branch["id"]]
+    ran = [step["id"] for step in branch["steps"] if statuses[step["id"]] == "clean"]
+    # At least the step that was running when the cancel arrived finished and
+    # stayed stored; the ones after it never started.
+    assert 1 <= len(ran) < len(branch["steps"])
+    assert ran == [step["id"] for step in branch["steps"][: len(ran)]]
 
 
 def test_project_id_cannot_be_swapped(workspace):

@@ -86,6 +86,9 @@ class LevelSetKernel:
     def state_materials(self, state: MaterialState) -> list[str]:
         return list(state.priority)
 
+    def state_bytes(self, state: MaterialState) -> int:
+        return sum(int(field.nbytes) for field in state.fields.values())
+
     def surfaces(
         self,
         state: MaterialState,

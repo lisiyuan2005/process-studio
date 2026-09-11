@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import shutil
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, IO, Mapping
@@ -350,7 +351,16 @@ def _import_recipes(parameters: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def dispatch(request: Mapping[str, Any], output: IO[str]) -> Any:
+def dispatch(
+    request: Mapping[str, Any],
+    output: IO[str],
+    cancel: threading.Event | None = None,
+) -> Any:
+    """Execute one request, writing progress events to ``output`` as it goes.
+
+    ``cancel`` is set by the server when the client withdraws the request; a
+    long method checks it at its natural boundaries and stops there.
+    """
     method = request.get("method")
     parameters = request.get("params", {})
     if not isinstance(parameters, Mapping):
@@ -389,7 +399,9 @@ def dispatch(request: Mapping[str, Any], output: IO[str]) -> Any:
         root = _root(parameters)
 
         def progress(event: dict[str, Any]) -> None:
-            _write(output, {"kind": "event", "event": event})
+            # Carrying the id lets the shell attribute progress to the run
+            # that produced it, now that several requests can be in flight.
+            _write(output, {"kind": "event", "id": request.get("id"), "event": event})
 
         return run_flow(
             root,
@@ -398,6 +410,7 @@ def dispatch(request: Mapping[str, Any], output: IO[str]) -> Any:
             through_step_id=parameters.get("throughStepId"),
             force=bool(parameters.get("force", False)),
             progress=progress,
+            should_cancel=(lambda: False) if cancel is None else cancel.is_set,
         )
     if method == "get_surfaces":
         state, repository, project, kernel = _view_state(parameters)
@@ -452,50 +465,7 @@ def dispatch(request: Mapping[str, Any], output: IO[str]) -> Any:
 
 
 def serve(input_stream: IO[str] = sys.stdin, output_stream: IO[str] = sys.stdout) -> int:
-    for raw_line in input_stream:
-        if not raw_line.strip():
-            continue
-        request_id: Any = None
-        try:
-            request = json.loads(raw_line)
-            if not isinstance(request, dict):
-                raise InvalidRequest("Each input line must contain a JSON object.")
-            request_id = request.get("id")
-            if request.get("kind") not in (None, "request"):
-                raise InvalidRequest("Input kind must be 'request'.")
-            result = dispatch(request, output_stream)
-            _write(
-                output_stream,
-                {"kind": "response", "id": request_id, "ok": True, "result": result},
-            )
-        except WorkerError as error:
-            _write(
-                output_stream,
-                {
-                    "kind": "response",
-                    "id": request_id,
-                    "ok": False,
-                    "error": {"code": type(error).__name__, "message": str(error)},
-                },
-            )
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
-            _write(
-                output_stream,
-                {
-                    "kind": "response",
-                    "id": request_id,
-                    "ok": False,
-                    "error": {"code": "InvalidRequest", "message": str(error)},
-                },
-            )
-        except Exception as error:  # fail closed without leaking a traceback
-            _write(
-                output_stream,
-                {
-                    "kind": "response",
-                    "id": request_id,
-                    "ok": False,
-                    "error": {"code": "InternalError", "message": str(error)},
-                },
-            )
-    return 0
+    """Serve requests until the input closes. See :mod:`.server`."""
+    from .server import Server
+
+    return Server(input_stream, output_stream).run()

@@ -26,7 +26,16 @@ src/process_studio/kernel   Level Set 内核，未改动
 
 ## RPC 协议
 
-一行一个 JSON 请求写入 stdin，一行一个响应写回 stdout。执行过程中的进度以 `{"kind":"event"}` 行实时输出，Rust 侧转成 `process-studio-worker` 窗口事件。
+worker 是一个常驻进程，整个会话只启动一次，进程退出时（崩溃或被杀）Rust 侧让所有等待中的请求失败并附上 stderr 尾部，下一次请求再起一个新的。启动一次打包版 worker 约 3 秒（解压、解释器、numpy/scipy/shapely/trimesh 的 import），常驻之后一次视图请求只要几十毫秒，所以不要回到每次调用起一个进程的做法。
+
+一行一个 JSON 请求写入 stdin，一行一个响应写回 stdout，请求和响应靠 `id` 配对，多个请求可以同时在途。执行过程中的进度以 `{"kind":"event","id":…}` 行实时输出，带着所属请求的 id，Rust 侧转成 `process-studio-worker` 窗口事件，事件里的 `requestId` 就是它。
+
+worker 内部读线程和执行线程分开：请求按到达顺序逐个执行，但有两个例外。
+
+- `{"kind":"cancel","id":…}` 撤回一个请求：还在排队的立刻以 `Cancelled` 回复；正在执行的运行在下一步之前停下，已经算完的步骤连快照带摘要都保留，下次运行从那里续。
+- 视图类请求（`get_surfaces`、`get_section`、`get_top_view`、`plan_grid`）同一工作目录只保留最新一个待执行的，被替代的立刻以 `Superseded` 回复，不再计算。连点五个步骤只算最后一个。
+
+最近用过的状态留在 worker 内存里（`state_cache.py`），按快照文件路径为键，预算默认 1 GB，可用环境变量 `PROCESS_STUDIO_STATE_CACHE_MB` 改。细网格工程一个状态几百 MB，读一次压缩快照要几秒，缓存命中后视图不再付这个代价。
 
 | 方法 | 作用 |
 | --- | --- |
@@ -42,7 +51,9 @@ src/process_studio/kernel   Level Set 内核，未改动
 | `import_gds` / `gds_layers` | 导入布局并列出 layer/datatype |
 | `export_recipes_xlsx` / `import_recipes_xlsx` | Recipe 库 Excel 往返 |
 
-Rust 侧只放行上表中的方法名，并把 `root` 规范化成绝对路径后才交给 worker。
+Rust 侧只放行上表中的方法名，并把 `root` 规范化成绝对路径后才交给 worker。前端可以自带 `requestId`，运行流程时就是这样做的，这样顶栏的 **Stop** 才知道要撤回哪一个。
+
+`desktop/src-tauri/src/lib.rs` 里的 `Worker` 有 `cargo test` 覆盖：它真的起一个 Python worker，验证多个请求各自拿到自己的答案、进度事件带对 id、取消后进程仍然可用、进程被杀后等待者收到失败。
 
 ## 增量执行
 
