@@ -126,6 +126,45 @@ export function removeStep(document: WorkspaceDocument, stepId: string): Workspa
   );
 }
 
+/** A copy of a step, placed right after it: the same settings under a new id, nothing run yet. */
+export function duplicateStep(
+  document: WorkspaceDocument,
+  stepId: string,
+): { document: WorkspaceDocument; step: ProcessStep } | null {
+  const steps = [...getSteps(document)];
+  const index = steps.findIndex((step) => step.id === stepId);
+  if (index < 0) return null;
+  const source = steps[index];
+  const step: ProcessStep = {
+    ...source,
+    id: newId("step"),
+    name: `${source.name} copy`,
+    parameters: { ...source.parameters },
+    materialResponses: copyResponses(source.materialResponses),
+  };
+  steps.splice(index + 1, 0, step);
+  const branch = getActiveBranch(document);
+  const statuses = { ...(document.stepStatuses[branch.id] ?? {}), [step.id]: "dirty" as StepStatus };
+  const updated = {
+    ...withSteps(document, steps),
+    stepStatuses: { ...document.stepStatuses, [branch.id]: statuses },
+  };
+  return { document: invalidateFrom(updated, step.id), step };
+}
+
+/** Move a step one place up (-1) or down (+1); it and the step it passes need a re-run. */
+export function moveStep(
+  document: WorkspaceDocument,
+  stepId: string,
+  direction: -1 | 1,
+): WorkspaceDocument {
+  const steps = getSteps(document);
+  const index = steps.findIndex((step) => step.id === stepId);
+  const target = index < 0 ? undefined : steps[index + direction];
+  if (!target) return document;
+  return reorderSteps(document, stepId, target.id);
+}
+
 export function renameStep(
   document: WorkspaceDocument,
   stepId: string,

@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import { demoDocument } from "../bridge/browserBridge";
 import {
   addStep,
+  duplicateStep,
   getActiveBranch,
   getSteps,
   hasDirtySteps,
   loadRecipeIntoStep,
+  moveStep,
   recipeFromStep,
   removeRecipe,
   removeStep,
@@ -104,6 +106,41 @@ describe("result invalidation", () => {
   it("ignores an empty rename", () => {
     const document = renameStep(cleanDocument(), "step-etch", "   ");
     expect(getSteps(document)[1].name).toBe("Trench Etch");
+  });
+
+  it("duplicates a step right after the original, with nothing run for the copy", () => {
+    const result = duplicateStep(cleanDocument(), "step-etch");
+    expect(result).not.toBeNull();
+    const steps = getSteps(result!.document);
+    const index = steps.findIndex((step) => step.id === "step-etch");
+    const copy = steps[index + 1];
+    expect(copy.id).toBe(result!.step.id);
+    expect(copy.id).not.toBe("step-etch");
+    expect(copy.name).toBe(`${steps[index].name} copy`);
+    expect(copy.parameters).toEqual(steps[index].parameters);
+    expect(copy.materialResponses).toEqual(steps[index].materialResponses);
+    // The copy has never run; the original keeps its result, and what follows
+    // the copy is built on a different stack now.
+    expect(stepStatus(result!.document, copy.id)).toBe("dirty");
+    expect(stepStatus(result!.document, "step-etch")).toBe("clean");
+    expect(stepStatus(result!.document, "step-strip")).toBe("stale");
+    expect(duplicateStep(cleanDocument(), "missing")).toBeNull();
+  });
+
+  it("moves a step one place and leaves the ends where they are", () => {
+    const document = cleanDocument();
+    const moved = moveStep(document, "step-strip", -1);
+    expect(getSteps(moved).map((step) => step.id)).toEqual([
+      "step-litho",
+      "step-strip",
+      "step-etch",
+      "step-ald",
+    ]);
+    expect(stepStatus(moved, "step-litho")).toBe("clean");
+    expect(stepStatus(moved, "step-strip")).toBe("stale");
+    expect(stepStatus(moved, "step-etch")).toBe("stale");
+    expect(moveStep(document, "step-litho", -1)).toBe(document);
+    expect(moveStep(document, "step-ald", 1)).toBe(document);
   });
 
   it("dirties from the earliest moved position when steps are reordered", () => {

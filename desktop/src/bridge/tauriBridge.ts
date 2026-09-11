@@ -65,6 +65,10 @@ export class TauriBridge implements DesktopBridge {
     return call<WorkspaceDocument>("open_workspace", { root });
   }
 
+  openWorkspaceAt(root: string): Promise<WorkspaceDocument> {
+    return call<WorkspaceDocument>("open_workspace", { root });
+  }
+
   saveDocument(document: WorkspaceDocument): Promise<WorkspaceDocument> {
     return call<WorkspaceDocument>("save_document", { root: document.root, document });
   }

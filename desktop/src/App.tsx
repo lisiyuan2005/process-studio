@@ -25,6 +25,7 @@ import { StepList } from "./components/StepList";
 import { Viewport, type ViewMode } from "./components/Viewport";
 import {
   addStep,
+  duplicateStep,
   getActiveBranch,
   newId,
   getSteps,
@@ -34,6 +35,7 @@ import {
   recipeFromStep,
   removeMaterial,
   removeRecipe,
+  moveStep,
   removeStep,
   renameStep,
   reorderSteps,
@@ -62,6 +64,15 @@ import type {
   WorkspaceDocument,
 } from "./types";
 
+import {
+  clearLastWorkspace,
+  forgetWorkspace,
+  lastWorkspace,
+  recentWorkspaces,
+  rememberWorkspace,
+  type RecentWorkspace,
+} from "./domain/recent";
+
 type SaveState = "saved" | "saving" | "unsaved" | "error";
 
 const AUTOSAVE_DELAY_MS = 600;
@@ -77,6 +88,13 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>("saved");
   const [homeError, setHomeError] = useState<string>();
+  const [recent, setRecent] = useState<RecentWorkspace[]>(recentWorkspaces);
+  // A reload of the window must not land on the home page: the workspace
+  // that was open is reopened first, and the home page shows only if that
+  // fails or nothing was open.
+  const [restoring, setRestoring] = useState(
+    () => bridge.runtime === "tauri" && lastWorkspace() !== null,
+  );
   const [events, setEvents] = useState<WorkerEvent[]>([]);
   const [showLog, setShowLog] = useState(false);
   const [showMaterials, setShowMaterials] = useState(false);
@@ -201,6 +219,7 @@ export default function App() {
     skipNextAutosave.current = true;
     setDocumentState(next);
     setSaveState("saved");
+    setRecent(rememberWorkspace(next.root, next.project.name));
     const first = getSteps(next)[0]?.id ?? "";
     setSelectedStepId(first);
     setSectionIndex(null);
@@ -231,6 +250,61 @@ export default function App() {
       setHomeError(errorMessage(reason));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleOpenRecent = async (rootPath: string) => {
+    setBusy(true);
+    setHomeError(undefined);
+    try {
+      openDocument(await bridge.openWorkspaceAt(rootPath));
+    } catch (reason) {
+      setHomeError(`Could not open ${rootPath}: ${errorMessage(reason)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!restoring) return;
+    const rootPath = lastWorkspace();
+    if (!rootPath) {
+      setRestoring(false);
+      return;
+    }
+    let disposed = false;
+    bridge
+      .openWorkspaceAt(rootPath)
+      .then((opened) => {
+        if (!disposed) openDocument(opened);
+      })
+      .catch((reason) => {
+        if (disposed) return;
+        // Do not try again on the next reload; the entry stays in the recent
+        // list so the user can retry or forget it.
+        clearLastWorkspace();
+        setHomeError(`Could not reopen ${rootPath}: ${errorMessage(reason)}`);
+      })
+      .finally(() => {
+        if (!disposed) setRestoring(false);
+      });
+    return () => {
+      disposed = true;
+    };
+    // Runs once, for the workspace that was open when the window loaded.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const removeStepById = (stepId: string) => {
+    if (!document) return;
+    const target = steps.find((step) => step.id === stepId);
+    if (!target) return;
+    if (!window.confirm(`Delete ${target.name} and its stored result?`)) return;
+    const index = steps.indexOf(target);
+    const next = removeStep(document, stepId);
+    setDocument(next);
+    if (selectedStepId === stepId) {
+      setSelectedStepId(getSteps(next)[Math.max(0, index - 1)]?.id ?? "");
     }
   };
 
@@ -509,6 +583,15 @@ export default function App() {
     return names;
   }, [document?.recipes, document?.branches]);
 
+  if (restoring) {
+    return (
+      <div className="restore-splash">
+        <LoaderCircle className="spin" size={16} />
+        <span>Reopening the last workspace…</span>
+      </div>
+    );
+  }
+
   if (!document || !branch) {
     return (
       <ProjectHome
@@ -517,8 +600,11 @@ export default function App() {
         error={homeError}
         kernels={capabilities?.kernels ?? []}
         defaultKernel={capabilities?.defaultKernel ?? "levelset"}
+        recent={recent}
         onCreate={handleCreate}
         onOpen={handleOpen}
+        onOpenRecent={(rootPath) => void handleOpenRecent(rootPath)}
+        onForgetRecent={(rootPath) => setRecent(forgetWorkspace(rootPath))}
       />
     );
   }
@@ -670,6 +756,7 @@ export default function App() {
           statuses={statuses}
           accentFor={(step) => stepAccentColor(document, step)}
           selectedStepId={selectedStepId}
+          busy={busy}
           onSelect={setSelectedStepId}
           onAdd={(processType) => {
             const { document: next, step } = addStep(document, processType, selectedStepId);
@@ -678,6 +765,15 @@ export default function App() {
           }}
           onToggle={(stepId) => setDocument(toggleStep(document, stepId))}
           onReorder={(activeId, overId) => setDocument(reorderSteps(document, activeId, overId))}
+          onRunToHere={(stepId) => void runFlow(stepId)}
+          onDuplicate={(stepId) => {
+            const result = duplicateStep(document, stepId);
+            if (!result) return;
+            setDocument(result.document);
+            setSelectedStepId(result.step.id);
+          }}
+          onMove={(stepId, direction) => setDocument(moveStep(document, stepId, direction))}
+          onRemove={removeStepById}
         />
         <Viewport
           mode={mode}
@@ -766,14 +862,7 @@ export default function App() {
           }
           onEditSketch={(sketchId) => void openSketchEditor(sketchId)}
           onRunToHere={() => selectedStep && void runFlow(selectedStep.id)}
-          onRemove={() => {
-            if (!selectedStep) return;
-            if (!window.confirm(`Delete ${selectedStep.name} and its stored result?`)) return;
-            const index = steps.indexOf(selectedStep);
-            const next = removeStep(document, selectedStep.id);
-            setDocument(next);
-            setSelectedStepId(getSteps(next)[Math.max(0, index - 1)]?.id ?? "");
-          }}
+          onRemove={() => selectedStep && removeStepById(selectedStep.id)}
         />
       </div>
 

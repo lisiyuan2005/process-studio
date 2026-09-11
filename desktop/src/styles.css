@@ -527,3 +527,32 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .step-card { grid-template-columns: 26px 3px minmax(0, 1fr) auto auto; }
 .step-toggle { width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--faint); cursor: pointer; }
 .step-toggle:hover { border-color: var(--line); color: var(--text); }
+
+/* Step actions: the menu a right-click or the step's own button opens. */
+.step-menu-button { position: absolute; top: 6px; right: 6px; width: 20px; height: 20px; display: grid; place-items: center; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--faint); cursor: pointer; opacity: 0; transition: opacity 120ms; }
+.step-card:hover .step-menu-button, .step-card.selected .step-menu-button, .step-menu-button:focus-visible { opacity: 1; }
+.step-menu-button:hover { border-color: var(--line); color: var(--text); background: var(--panel-raised); }
+.step-card .step-title-row .step-index { margin-right: 18px; }
+.context-menu { position: fixed; z-index: 60; min-width: 188px; padding: 5px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); color: var(--text); box-shadow: 0 14px 40px rgba(36, 53, 67, 0.22); }
+.context-menu-title { display: flex; align-items: center; gap: 7px; padding: 5px 9px 7px; color: var(--muted); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.context-menu-title .step-index { color: var(--faint); }
+.context-menu button { width: 100%; display: flex; align-items: center; gap: 9px; height: 28px; padding: 0 9px; border: 0; border-radius: 6px; background: transparent; color: var(--text); font-size: 11.5px; text-align: left; cursor: pointer; }
+.context-menu button:hover:not(:disabled), .context-menu button:focus-visible { background: var(--accent-soft); outline: none; }
+.context-menu button:disabled { color: var(--faint); cursor: default; }
+.context-menu button.danger { color: var(--red); }
+.context-menu button.danger:hover:not(:disabled) { background: rgba(201, 71, 80, 0.1); }
+.context-menu-divider { height: 1px; margin: 4px 6px; background: var(--line-soft); }
+
+/* The workspaces this machine opened last, and the reload that reopens one. */
+.recent-list { display: grid; gap: 4px; margin-top: 16px; }
+.recent-list .section-label { margin-bottom: 4px; }
+.recent-row { display: flex; align-items: center; gap: 4px; }
+.recent-open { flex: 1; min-width: 0; display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 8px; height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-raised); color: var(--text); font-size: 11px; text-align: left; cursor: pointer; }
+.recent-open:hover:not(:disabled) { border-color: var(--accent); }
+.recent-open:disabled { cursor: default; opacity: 0.6; }
+.recent-open svg { color: var(--faint); }
+.recent-name { white-space: nowrap; }
+.recent-root { color: var(--faint); font-size: 9.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+.recent-forget { width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--faint); cursor: pointer; }
+.recent-forget:hover { border-color: var(--line); color: var(--red); }
+.restore-splash { height: 100vh; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--muted); font-size: 12px; background: var(--bg); }

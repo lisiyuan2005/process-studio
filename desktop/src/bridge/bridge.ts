@@ -35,6 +35,8 @@ export interface DesktopBridge {
   /** The kernel is chosen here and only here: a project keeps it for life. */
   createWorkspace(name: string, kernel: string): Promise<WorkspaceDocument | null>;
   openWorkspace(): Promise<WorkspaceDocument | null>;
+  /** Open a workspace whose directory is already known, as on a reload. */
+  openWorkspaceAt(root: string): Promise<WorkspaceDocument>;
   saveDocument(document: WorkspaceDocument): Promise<WorkspaceDocument>;
   /** `bounds` is the project window in µm; omitted means keep the current one. */
   planGrid(root: string, targetSpacingNm: number, bounds?: WindowBounds): Promise<GridPlan>;

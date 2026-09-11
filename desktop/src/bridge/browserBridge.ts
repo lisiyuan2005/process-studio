@@ -93,6 +93,10 @@ export class BrowserBridge implements DesktopBridge {
     return this.document;
   }
 
+  async openWorkspaceAt(): Promise<WorkspaceDocument> {
+    return this.document ?? demoDocument();
+  }
+
   async saveDocument(document: WorkspaceDocument): Promise<WorkspaceDocument> {
     this.document = document;
     return document;

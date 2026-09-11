@@ -15,20 +15,28 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  ArrowDown,
+  ArrowUp,
   Check,
   ClipboardList,
   CircleAlert,
   Clock3,
+  Copy,
+  EllipsisVertical,
   GripVertical,
   Layers3,
   LoaderCircle,
   Minimize2,
+  Play,
   Plus,
   Scissors,
   Sparkles,
   Square,
   SquareCheck,
+  Trash,
 } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
+import { createPortal } from "react-dom";
 import type { ProcessType, ProcessStep, StepStatus } from "../types";
 
 interface StepListProps {
@@ -36,10 +44,22 @@ interface StepListProps {
   statuses: Record<string, StepStatus>;
   accentFor: (step: ProcessStep) => string;
   selectedStepId: string;
+  busy: boolean;
   onSelect: (stepId: string) => void;
   onAdd: (processType: ProcessType) => void;
   onToggle: (stepId: string) => void;
   onReorder: (activeId: string, overId: string) => void;
+  onRunToHere: (stepId: string) => void;
+  onDuplicate: (stepId: string) => void;
+  onMove: (stepId: string, direction: -1 | 1) => void;
+  onRemove: (stepId: string) => void;
+}
+
+/** Where a step's menu was asked for: the pointer, or the step's own button. */
+interface MenuAnchor {
+  stepId: string;
+  x: number;
+  y: number;
 }
 
 const STATUS_LABELS: Record<StepStatus, string> = {
@@ -73,6 +93,7 @@ function SortableStep({
   selected,
   onSelect,
   onToggle,
+  onMenu,
 }: {
   step: ProcessStep;
   index: number;
@@ -81,6 +102,7 @@ function SortableStep({
   selected: boolean;
   onSelect: () => void;
   onToggle: () => void;
+  onMenu: (x: number, y: number) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: step.id,
@@ -98,6 +120,11 @@ function SortableStep({
       style={style}
       className={`step-card ${selected ? "selected" : ""} ${step.enabled ? "" : "muted"}`}
       onClick={onSelect}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onSelect();
+        onMenu(event.clientX, event.clientY);
+      }}
     >
       <button
         type="button"
@@ -146,7 +173,134 @@ function SortableStep({
         <StatusIcon status={status} />
         <span>{STATUS_LABELS[status]}</span>
       </div>
+      <button
+        type="button"
+        className="step-menu-button"
+        aria-label={`Actions for ${step.name}`}
+        aria-haspopup="menu"
+        title="Actions (or right-click the step)"
+        onClick={(event: MouseEvent<HTMLButtonElement>) => {
+          event.stopPropagation();
+          onSelect();
+          const box = event.currentTarget.getBoundingClientRect();
+          onMenu(box.right, box.bottom + 4);
+        }}
+      >
+        <EllipsisVertical size={14} />
+      </button>
     </div>
+  );
+}
+
+function StepMenu({
+  step,
+  index,
+  count,
+  busy,
+  anchor,
+  onClose,
+  onRunToHere,
+  onDuplicate,
+  onMove,
+  onToggle,
+  onRemove,
+}: {
+  step: ProcessStep;
+  index: number;
+  count: number;
+  busy: boolean;
+  anchor: MenuAnchor;
+  onClose: () => void;
+  onRunToHere: () => void;
+  onDuplicate: () => void;
+  onMove: (direction: -1 | 1) => void;
+  onToggle: () => void;
+  onRemove: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [place, setPlace] = useState({ left: anchor.x, top: anchor.y });
+
+  // Keep the whole menu on screen: near the bottom or right edge it opens
+  // towards the middle instead of running off.
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const box = element.getBoundingClientRect();
+    setPlace({
+      left: Math.max(8, Math.min(anchor.x, window.innerWidth - box.width - 8)),
+      top: Math.max(8, Math.min(anchor.y, window.innerHeight - box.height - 8)),
+    });
+  }, [anchor]);
+
+  useEffect(() => {
+    const away = (event: Event) => {
+      if (event.target instanceof Node && ref.current?.contains(event.target)) return;
+      onClose();
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("pointerdown", away, true);
+    window.addEventListener("keydown", key);
+    window.addEventListener("resize", onClose);
+    window.addEventListener("scroll", onClose, true);
+    return () => {
+      window.removeEventListener("pointerdown", away, true);
+      window.removeEventListener("keydown", key);
+      window.removeEventListener("resize", onClose);
+      window.removeEventListener("scroll", onClose, true);
+    };
+  }, [onClose]);
+
+  const item = (
+    label: string,
+    icon: React.ReactNode,
+    action: () => void,
+    options: { disabled?: boolean; danger?: boolean } = {},
+  ) => (
+    <button
+      type="button"
+      role="menuitem"
+      className={options.danger ? "danger" : ""}
+      disabled={options.disabled}
+      onClick={() => {
+        onClose();
+        action();
+      }}
+    >
+      {icon}
+      <span>{label}</span>
+    </button>
+  );
+
+  return createPortal(
+    <div
+      ref={ref}
+      className="context-menu"
+      role="menu"
+      aria-label={`Actions for ${step.name}`}
+      style={{ left: place.left, top: place.top }}
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      <div className="context-menu-title">
+        <span className="step-index">{index + 1}</span>
+        <span>{step.name}</span>
+      </div>
+      {item("Run to here", <Play size={13} />, onRunToHere, { disabled: busy })}
+      {item("Duplicate", <Copy size={13} />, onDuplicate)}
+      {item("Move up", <ArrowUp size={13} />, () => onMove(-1), { disabled: index === 0 })}
+      {item("Move down", <ArrowDown size={13} />, () => onMove(1), {
+        disabled: index === count - 1,
+      })}
+      {item(
+        step.enabled ? "Skip in the run" : "Include in the run",
+        step.enabled ? <Square size={13} /> : <SquareCheck size={13} />,
+        onToggle,
+      )}
+      <div className="context-menu-divider" />
+      {item("Delete…", <Trash size={13} />, onRemove, { danger: true, disabled: busy })}
+    </div>,
+    document.body,
   );
 }
 
@@ -155,11 +309,19 @@ export function StepList({
   statuses,
   accentFor,
   selectedStepId,
+  busy,
   onSelect,
   onAdd,
   onToggle,
   onReorder,
+  onRunToHere,
+  onDuplicate,
+  onMove,
+  onRemove,
 }: StepListProps) {
+  const [menu, setMenu] = useState<MenuAnchor | null>(null);
+  const menuIndex = menu ? steps.findIndex((step) => step.id === menu.stepId) : -1;
+  const menuStep = menuIndex >= 0 ? steps[menuIndex] : undefined;
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -193,6 +355,7 @@ export function StepList({
                   selected={step.id === selectedStepId}
                   onSelect={() => onSelect(step.id)}
                   onToggle={() => onToggle(step.id)}
+                  onMenu={(x, y) => setMenu({ stepId: step.id, x, y })}
                 />
               ))}
               {steps.length === 0 && (
@@ -202,6 +365,22 @@ export function StepList({
           </SortableContext>
         </DndContext>
       </div>
+
+      {menu && menuStep && (
+        <StepMenu
+          step={menuStep}
+          index={menuIndex}
+          count={steps.length}
+          busy={busy}
+          anchor={menu}
+          onClose={() => setMenu(null)}
+          onRunToHere={() => onRunToHere(menuStep.id)}
+          onDuplicate={() => onDuplicate(menuStep.id)}
+          onMove={(direction) => onMove(menuStep.id, direction)}
+          onToggle={() => onToggle(menuStep.id)}
+          onRemove={() => onRemove(menuStep.id)}
+        />
+      )}
 
       <div className="add-step-wrap">
         <label className="add-step-control">

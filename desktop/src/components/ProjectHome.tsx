@@ -1,5 +1,6 @@
-import { ArrowRight, Boxes, FolderOpen, Layers3, Lock, Plus } from "lucide-react";
+import { ArrowRight, Boxes, Clock3, FolderOpen, Layers3, Lock, Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import type { RecentWorkspace } from "../domain/recent";
 import type { KernelDescription } from "../types";
 
 interface ProjectHomeProps {
@@ -8,8 +9,11 @@ interface ProjectHomeProps {
   error?: string;
   kernels: KernelDescription[];
   defaultKernel: string;
+  recent: RecentWorkspace[];
   onCreate: (name: string, kernel: string) => void;
   onOpen: () => void;
+  onOpenRecent: (root: string) => void;
+  onForgetRecent: (root: string) => void;
 }
 
 export function ProjectHome({
@@ -18,8 +22,11 @@ export function ProjectHome({
   error,
   kernels,
   defaultKernel,
+  recent,
   onCreate,
   onOpen,
+  onOpenRecent,
+  onForgetRecent,
 }: ProjectHomeProps) {
   const [name, setName] = useState("Process Studio Project");
   const [kernel, setKernel] = useState(defaultKernel);
@@ -134,6 +141,35 @@ export function ProjectHome({
             <FolderOpen size={16} />
             Open existing workspace
           </button>
+          {recent.length > 0 && (
+            <div className="recent-list">
+              <span className="section-label">RECENT</span>
+              {recent.map((item) => (
+                <div key={item.root} className="recent-row">
+                  <button
+                    type="button"
+                    className="recent-open"
+                    disabled={busy}
+                    title={item.root}
+                    onClick={() => onOpenRecent(item.root)}
+                  >
+                    <Clock3 size={13} />
+                    <span className="recent-name">{item.name}</span>
+                    <span className="recent-root">{item.root}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="recent-forget"
+                    aria-label={`Forget ${item.name}`}
+                    title="Remove from this list"
+                    onClick={() => onForgetRecent(item.root)}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           {error && <p className="home-error">{error}</p>}
           {runtime === "browser" && (
             <p className="browser-note">
