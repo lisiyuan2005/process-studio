@@ -5,10 +5,13 @@ on stdout, but reading and executing are separate threads so that a cancel
 message can reach a run that is already under way, and so that a view request
 which a newer one has made pointless can be dropped before it is computed.
 
-Ordering: requests execute one at a time, in arrival order, except that a
-request the client has superseded or cancelled is answered at once and never
-executed. Every line written to the output goes through one lock, so progress
-events from the executor and answers from the reader never interleave.
+Ordering: requests execute in arrival order on two lanes. Views (surfaces,
+sections, the top view) run on their own lane, so a step that has finished
+can be looked at while a run is still working on the ones after it; every
+other request runs on the main lane, one at a time. A request the client has
+superseded or cancelled is answered at once and never executed. Every line
+written to the output goes through one lock, so progress events from a run
+and answers from the other lane never interleave.
 """
 
 from __future__ import annotations
@@ -26,6 +29,10 @@ from .errors import Cancelled, InvalidRequest, WorkerError
 #: the client shows one view at a time, and a later request means it moved on.
 COALESCED_METHODS = frozenset({"get_surfaces", "get_section", "get_top_view", "plan_grid"})
 
+#: Methods that only read stored results, run beside whatever else is going on.
+VIEW_METHODS = frozenset({"get_surfaces", "get_section", "get_top_view"})
+LANES = ("main", "views")
+
 
 @dataclass
 class Pending:
@@ -36,6 +43,10 @@ class Pending:
     @property
     def method(self) -> str:
         return str(self.request.get("method"))
+
+    @property
+    def lane(self) -> str:
+        return "views" if self.method in VIEW_METHODS else "main"
 
     def coalescing_key(self) -> tuple[str, str] | None:
         if self.method not in COALESCED_METHODS:
@@ -81,14 +92,18 @@ class Server:
         self.output = LockedStream(output_stream)
         self._queue: deque[Pending] = deque()
         self._condition = threading.Condition()
-        self._in_flight: Pending | None = None
+        self._in_flight: dict[str, Pending | None] = {lane: None for lane in LANES}
         self._closed = False
 
     # -- reader side --------------------------------------------------------
 
     def run(self) -> int:
-        executor = threading.Thread(target=self._execute_forever, name="executor", daemon=True)
-        executor.start()
+        executors = [
+            threading.Thread(target=self._execute_forever, args=(lane,), name=f"executor-{lane}", daemon=True)
+            for lane in LANES
+        ]
+        for executor in executors:
+            executor.start()
         try:
             for raw_line in self.input:
                 if raw_line.strip():
@@ -97,10 +112,12 @@ class Server:
             with self._condition:
                 self._closed = True
                 # Whoever is still computing has nobody left to answer.
-                if self._in_flight is not None:
-                    self._in_flight.cancel.set()
+                for pending in self._in_flight.values():
+                    if pending is not None:
+                        pending.cancel.set()
                 self._condition.notify_all()
-            executor.join()
+            for executor in executors:
+                executor.join()
         return 0
 
     def _accept(self, raw_line: str) -> None:
@@ -132,7 +149,7 @@ class Server:
                         _failure(older.id, "Superseded", "A newer request replaced this one."),
                     )
             self._queue.append(pending)
-            self._condition.notify()
+            self._condition.notify_all()  # both lanes look; the one it is for takes it
 
     def _cancel(self, request_id: Any) -> None:
         with self._condition:
@@ -144,25 +161,35 @@ class Server:
                         _failure(item.id, "Cancelled", "The request was cancelled before it ran."),
                     )
                     return
-            if self._in_flight is not None and self._in_flight.id == request_id:
-                self._in_flight.cancel.set()
+            for pending in self._in_flight.values():
+                if pending is not None and pending.id == request_id:
+                    pending.cancel.set()
 
     # -- executor side ------------------------------------------------------
 
-    def _execute_forever(self) -> None:
+    def _execute_forever(self, lane: str) -> None:
         while True:
             with self._condition:
-                while not self._queue and not self._closed:
+                pending = self._next_for(lane)
+                while pending is None and not self._closed:
                     self._condition.wait()
-                if not self._queue:
+                    pending = self._next_for(lane)
+                if pending is None:
                     return
-                pending = self._queue.popleft()
-                self._in_flight = pending
+                self._in_flight[lane] = pending
             try:
                 self._execute(pending)
             finally:
                 with self._condition:
-                    self._in_flight = None
+                    self._in_flight[lane] = None
+
+    def _next_for(self, lane: str) -> Pending | None:
+        """The oldest queued request for this lane, taken off the queue."""
+        for item in self._queue:
+            if item.lane == lane:
+                self._queue.remove(item)
+                return item
+        return None
 
     def _execute(self, pending: Pending) -> None:
         from .protocol import dispatch

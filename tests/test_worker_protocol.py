@@ -512,14 +512,11 @@ def test_serve_answers_line_by_line_and_reports_errors(tmp_path):
     assert answers["b"]["error"]["code"] == "InvalidRequest"
 
 
-def test_a_newer_view_request_supersedes_a_queued_one(workspace):
-    """Five quick clicks should cost one computation, not five."""
+def _server_over_pipe():
+    """A server reading from a pipe we write to, with its output captured."""
     import threading
     from process_studio.worker.server import Server
 
-    document = call("open_workspace", root=str(workspace))
-    branch = document["branches"][0]
-    call("run_flow", root=str(workspace))
     read_end, write_end = os.pipe()
     input_stream = os.fdopen(read_end, "r")
     writer = os.fdopen(write_end, "w")
@@ -527,31 +524,106 @@ def test_a_newer_view_request_supersedes_a_queued_one(workspace):
     server = Server(input_stream, output)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
-    # A slow request first, so the view requests queue up behind it.
-    writer.write(json.dumps({"id": "run", "method": "run_flow", "params": {"root": str(workspace), "force": True}}) + "\n")
+    return writer, output, thread
+
+
+def _responses(output):
+    return {
+        message["id"]: message
+        for message in map(json.loads, output.getvalue().splitlines())
+        if message["kind"] == "response"
+    }
+
+
+def _wait_for(output, request_id, timeout=120):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if request_id in _responses(output):
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def test_a_newer_view_request_supersedes_a_queued_one(workspace, monkeypatch):
+    """Five quick clicks should cost one computation, not five: while one
+    view is being drawn, the ones queued behind it collapse to the newest."""
+    import threading
+
+    document = call("open_workspace", root=str(workspace))
+    branch = document["branches"][0]
+    call("run_flow", root=str(workspace))
+    # The first view holds until told to go on, so the rest queue behind it.
+    release = threading.Event()
+    from process_studio.worker import protocol
+
+    real_dispatch = protocol.dispatch
+
+    def held_dispatch(request, output, cancel=None):
+        result = real_dispatch(request, output, cancel=cancel)
+        if request.get("id") == "view-0":
+            release.wait(timeout=60)
+        return result
+
+    monkeypatch.setattr(protocol, "dispatch", held_dispatch)
+    writer, output, thread = _server_over_pipe()
     for index, step in enumerate(branch["steps"]):
         writer.write(json.dumps({
             "id": f"view-{index}", "method": "get_section",
             "params": {"root": str(workspace), "branchId": branch["id"], "stepId": step["id"], "axis": "y"},
         }) + "\n")
-    writer.flush()
-    # Closing the input tells the server its client is gone, which cancels
-    # whatever is running; keep it open until the last answer has arrived.
-    deadline = time.time() + 120
-    while time.time() < deadline and '"id":"view-3"' not in output.getvalue().replace(" ", ""):
-        time.sleep(0.02)
+        writer.flush()
+        time.sleep(0.05)  # let the reader take each line before the next arrives
+    release.set()
+    assert _wait_for(output, "view-3")
     writer.close()
     thread.join(timeout=120)
     assert not thread.is_alive()
-    answers = {
-        message["id"]: message
-        for message in map(json.loads, output.getvalue().splitlines())
-        if message["kind"] == "response"
-    }
-    assert answers["run"]["ok"]
+    answers = _responses(output)
     superseded = [key for key, answer in answers.items() if not answer["ok"] and answer["error"]["code"] == "Superseded"]
-    assert sorted(superseded) == ["view-0", "view-1", "view-2"]
-    assert answers["view-3"]["ok"] and "image" in answers["view-3"]["result"]
+    assert sorted(superseded) == ["view-1", "view-2"]
+    assert answers["view-0"]["ok"] and answers["view-3"]["ok"] and "image" in answers["view-3"]["result"]
+
+
+def test_a_finished_step_can_be_viewed_while_a_run_is_under_way(workspace, monkeypatch):
+    """A run holds the main lane for as long as it takes; the views have a
+    lane of their own, so the steps that are done can be looked at meanwhile."""
+    import threading
+    from process_studio.kernels.levelset import LevelSetKernel
+
+    document = call("open_workspace", root=str(workspace))
+    branch = document["branches"][0]
+    call("run_flow", root=str(workspace))  # every step stored
+    # The re-run's first step holds until the view has been answered.
+    release = threading.Event()
+    step_started = threading.Event()
+    real_run_step = LevelSetKernel.run_step
+
+    def held_run_step(self, state, step, **kwargs):
+        step_started.set()
+        assert release.wait(timeout=120), "the view never arrived"
+        return real_run_step(self, state, step, **kwargs)
+
+    monkeypatch.setattr(LevelSetKernel, "run_step", held_run_step)
+    writer, output, thread = _server_over_pipe()
+    writer.write(json.dumps({"id": "run", "method": "run_flow", "params": {"root": str(workspace), "force": True}}) + "\n")
+    writer.flush()
+    assert step_started.wait(timeout=60)
+    last = branch["steps"][-1]["id"]
+    writer.write(json.dumps({
+        "id": "view", "method": "get_section",
+        "params": {"root": str(workspace), "branchId": branch["id"], "stepId": last, "axis": "y"},
+    }) + "\n")
+    writer.flush()
+    # The view is answered while the run is still on its first step.
+    assert _wait_for(output, "view", timeout=60)
+    assert "run" not in _responses(output)
+    release.set()
+    assert _wait_for(output, "run")
+    writer.close()
+    thread.join(timeout=120)
+    answers = _responses(output)
+    assert answers["view"]["ok"] and "image" in answers["view"]["result"]
+    assert answers["run"]["ok"]
 
 
 def test_a_run_can_be_cancelled_between_steps_and_keeps_what_ran(workspace, monkeypatch):

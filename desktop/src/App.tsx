@@ -152,6 +152,12 @@ export default function App() {
 
   const skipNextAutosave = useRef(false);
   const runningStepId = useRef<string | undefined>(undefined);
+  // The selected step as the worker-event listener sees it; the listener is
+  // attached once and must not close over a stale value.
+  const selectedStepRef = useRef("");
+  // Bumped when a step the view is showing finishes inside a run, so the
+  // view is fetched again although nothing else about the request changed.
+  const [viewNonce, setViewNonce] = useState(0);
   // The id of the run in flight, so the Stop button can name it.
   const runRequestId = useRef<string | undefined>(undefined);
   // Only the newest view request may write to the view; a slower earlier one
@@ -182,6 +188,21 @@ export default function App() {
     (item) => item.id === document?.project.kernel,
   );
 
+  /** Drop every view fetched of this step; its stored result has changed. */
+  const forgetViews = (stepId: string) => {
+    for (const key of [...viewCache.current.keys()]) {
+      if (key.includes(`:${stepId}:`) || key.endsWith(`:${stepId}`)) viewCache.current.delete(key);
+    }
+  };
+
+  /** A step's result was just stored by a run that is still going. */
+  const stepFinished = (stepId: string) => {
+    forgetViews(stepId);
+    skipNextAutosave.current = true;
+    setDocumentState((current) => (current ? markStep(current, stepId, "clean") : current));
+    if (selectedStepRef.current === stepId) setViewNonce((nonce) => nonce + 1);
+  };
+
   const setDocument = (next: WorkspaceDocument, persist = true) => {
     if (!persist) skipNextAutosave.current = true;
     setDocumentState(next);
@@ -200,8 +221,20 @@ export default function App() {
     let unsubscribe: (() => void) | undefined;
     bridge
       .subscribeToWorkerEvents((event) => {
-        if (event.kind === "progress" && event.stepId && event.message.startsWith("Running")) {
-          runningStepId.current = event.stepId;
+        if (event.kind === "progress" && event.stepId) {
+          // A run stores each step as it finishes, so the finished ones can
+          // be looked at while the rest are still computing: mark them as
+          // the run goes, and forget any view fetched of an older result.
+          const finished = runningStepId.current;
+          const running = event.message.startsWith("Running") ? event.stepId : undefined;
+          runningStepId.current = running;
+          if (finished && finished !== running) stepFinished(finished);
+          if (event.message.startsWith("Cached")) stepFinished(event.stepId);
+          if (running) {
+            forgetViews(running);
+            skipNextAutosave.current = true;
+            setDocumentState((current) => (current ? markStep(current, running, "running") : current));
+          }
         }
         setEvents((current) => [...current.slice(-149), event]);
       })
@@ -380,8 +413,9 @@ export default function App() {
   };
 
   const refreshViews = useCallback(async () => {
-    // A run holds the project database open; read the views once it is done.
-    if (!root || !branchId || busy) return;
+    // Views are read beside a run: the worker answers them on a lane of its
+    // own, and a step that has finished is stored before the next begins.
+    if (!root || !branchId) return;
     const token = (viewToken.current += 1);
     const target = `${branchId}:${selectedStepId}`;
     if (shownTarget.current !== target) {
@@ -466,12 +500,14 @@ export default function App() {
       if (token === viewToken.current) setViewLoading(false);
     }
     // Edits do not change what a run stored, so the document identity is not a
-    // trigger here: a finished run flips `busy`, which is.
+    // trigger here: a finished run flips `busy`, which is, and a step that
+    // finishes mid-run bumps `viewNonce`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     root,
     branchId,
     busy,
+    viewNonce,
     selectedStepId,
     selectedStatus,
     mode,
@@ -484,6 +520,10 @@ export default function App() {
   useEffect(() => {
     void refreshViews();
   }, [refreshViews]);
+
+  useEffect(() => {
+    selectedStepRef.current = selectedStepId;
+  }, [selectedStepId]);
 
   const runFlow = async (throughStepId?: string) => {
     if (!document || !branch || busy) return;
@@ -538,6 +578,7 @@ export default function App() {
       ]);
       if (!stopped) setShowLog(true);
     } finally {
+      if (runningStepId.current) forgetViews(runningStepId.current);
       runRequestId.current = undefined;
       setBusy(false);
     }
