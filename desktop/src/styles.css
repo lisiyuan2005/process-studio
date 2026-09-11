@@ -455,7 +455,13 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .line-dot { position: absolute; width: 9px; height: 9px; margin: -5px 0 0 -5px; border: 2px solid #ffffff; border-radius: 50%; background: #e04e5a; box-shadow: 0 1px 4px rgba(0,0,0,0.3); pointer-events: none; }
 .line-dot.pending { background: #ffffff; border-color: #e04e5a; }
 .line-label { position: absolute; transform: translate(7px, -19px); padding: 0 4px; border-radius: 3px; background: #e04e5a; color: #ffffff; font-size: 9px; font-weight: 700; line-height: 14px; pointer-events: none; }
-.line-ends { color: var(--muted); font-size: 9px; }
+.line-ends, .cursor-readout { color: var(--muted); font-size: 9px; white-space: nowrap; }
+.image-overlay line.measure { stroke: #1f7ae0; }
+.line-dot.measure { background: #1f7ae0; }
+.line-dot.measure.pending { background: #ffffff; border-color: #1f7ae0; }
+.measure-label { position: absolute; display: grid; transform: translate(-50%, calc(-100% - 9px)); padding: 3px 6px; border-radius: 4px; background: rgba(31, 122, 224, 0.92); color: #ffffff; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 9.5px; font-weight: 600; line-height: 1.3; white-space: nowrap; pointer-events: none; }
+.measure-label small { font-size: 8px; font-weight: 400; opacity: 0.85; }
+.scale-bar { position: absolute; right: 12px; bottom: 12px; height: 0; border-bottom: 3px solid #1c2733; box-shadow: 0 0 0 2px rgba(255,255,255,0.75); color: #1c2733; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 9px; font-weight: 600; line-height: 14px; text-align: center; text-shadow: 0 0 3px #ffffff, 0 0 3px #ffffff; transform: translateY(-14px); pointer-events: none; }
 .draw-tools { margin-left: 8px; }
 .image-view img { display: block; width: 100%; height: 100%; border: 1px solid var(--line); background: var(--panel); image-rendering: pixelated; box-shadow: 0 8px 24px rgba(50, 68, 83, 0.1); }
 .view-placeholder { display: grid; place-items: center; gap: 9px; height: 100%; padding: 24px; color: var(--muted); font-size: 10.5px; text-align: center; }

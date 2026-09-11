@@ -78,7 +78,7 @@ xattr -dr com.apple.quarantine "/Applications/Process Studio.app"
 - Quick Sketch：矩形、圆、多边形、路径，merge/subtract/intersect 和参数化阵列
 - Process Flow：增删步骤、运行到选中步骤、运行全部、从当前步骤创建分支
 - 每步自动保存快照；删除某一步时同步删除该步及下游无引用快照
-- 3D 旋转/缩放、材料显隐、Top View、任意画线 AA–BB 截面
+- 3D 旋转/缩放、材料显隐、Top View、任意画线 AA–BB 截面、截面与俯视图上的距离测量、坐标读数和比例尺
 - Material Library、Process/Recipe Library、简化 Excel 导入导出
 - 底部 Process Log 记录每步耗时和错误信息
 - 嵌入式 SQLite 持久化；无需数据库服务器

@@ -164,22 +164,27 @@ class ProjectRepository:
         return [self.load_project(project_id) for project_id in ids]
 
     def save_material(self, material: MaterialDefinition) -> None:
+        """Write a material by id, so a rename updates it rather than inserting.
+
+        Looking the row up by name meant a renamed material was not found and
+        was inserted again under its existing id, which the primary key
+        refused on every autosave. The id is the identity; the name is a
+        label that must merely be unique.
+        """
         payload = asdict(material)
         with self.connect() as connection:
-            existing = connection.execute(
-                "SELECT id FROM materials WHERE name=?", (material.name,)
+            clash = connection.execute(
+                "SELECT id FROM materials WHERE name=? AND id<>?",
+                (material.name, material.id),
             ).fetchone()
-            if existing is None:
-                connection.execute(
-                    "INSERT INTO materials(id, name, payload_json) VALUES (?, ?, ?)",
-                    (material.id, material.name, json.dumps(payload)),
-                )
-            else:
-                payload["id"] = existing["id"]
-                connection.execute(
-                    "UPDATE materials SET payload_json=? WHERE name=?",
-                    (json.dumps(payload), material.name),
-                )
+            if clash is not None:
+                raise ValueError(f"A material named {material.name!r} already exists.")
+            connection.execute(
+                """INSERT INTO materials(id, name, payload_json) VALUES (?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET name=excluded.name,
+                payload_json=excluded.payload_json""",
+                (material.id, material.name, json.dumps(payload)),
+            )
 
     def load_materials(self) -> list[MaterialDefinition]:
         with self.connect() as connection:

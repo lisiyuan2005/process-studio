@@ -583,6 +583,30 @@ def test_a_run_can_be_cancelled_between_steps_and_keeps_what_ran(workspace, monk
     assert ran == [branch["steps"][0]["id"]]
 
 
+def test_a_material_can_be_added_and_then_renamed(workspace):
+    """Adding a material then renaming it used to fail every autosave."""
+    document = call("open_workspace", root=str(workspace))
+    document["materials"].append(
+        {"id": "material-new", "name": "New material", "category": "Other", "color": "#7c83a0", "opacity": 1.0}
+    )
+    saved = call("save_document", root=str(workspace), document=document)
+    names = {material["id"]: material["name"] for material in saved["materials"]}
+    assert names["material-new"] == "New material"
+    for material in saved["materials"]:
+        if material["id"] == "material-new":
+            material["name"] = "HfO2"
+    renamed = call("save_document", root=str(workspace), document=saved)
+    names = {material["id"]: material["name"] for material in renamed["materials"]}
+    assert names["material-new"] == "HfO2"
+    assert "New material" not in names.values()
+    # Two materials cannot share a name; the second one is refused, by name.
+    for material in renamed["materials"]:
+        if material["id"] == "material-new":
+            material["name"] = "Si"
+    with pytest.raises(ValueError, match="named 'Si' already exists"):
+        call("save_document", root=str(workspace), document=renamed)
+
+
 def test_project_id_cannot_be_swapped(workspace):
     document = call("open_workspace", root=str(workspace))
     document["project"]["id"] = "someone-elses-project"

@@ -7,8 +7,8 @@ import {
   EyeOff,
   Image as ImageIcon,
   LoaderCircle,
-  PenLine,
   Ruler,
+  Scissors,
   TriangleAlert,
   X,
 } from "lucide-react";
@@ -188,79 +188,164 @@ function useFittedSize(
   return size;
 }
 
-/** A section or top-view picture, scaled to fill the view without distortion. */
-function FittedImage({ image, width, height, alt }: { image: string; width: number; height: number; alt: string }) {
+/** Two points on a picture, in the picture's own units (µm). */
+export interface Measurement {
+  start: [number, number];
+  end: [number, number];
+}
+
+function formatLength(um: number) {
+  return Math.abs(um) < 1 ? `${(um * 1000).toFixed(1)} nm` : `${um.toFixed(3)} µm`;
+}
+
+/** The longest round length that fits in a quarter of the picture's width. */
+function scaleBarLength(extentWidth: number) {
+  const candidates = [0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10];
+  let chosen = candidates[0];
+  for (const candidate of candidates) if (candidate <= extentWidth / 4) chosen = candidate;
+  return chosen;
+}
+
+/**
+ * A section or top-view picture, scaled to fill the view without distortion,
+ * with a scale bar, a live cursor readout and a two-click measurement.
+ *
+ * Positions are fractions of the frame, and the frame is the picture
+ * exactly, so a click maps to µm through the extent alone.
+ */
+function PictureView({
+  image,
+  width,
+  height,
+  extent,
+  axes,
+  alt,
+  measuring,
+  measurement,
+  pendingStart,
+  onPoint,
+  onHover,
+  onClickCapture,
+  children,
+}: {
+  image: string;
+  width: number;
+  height: number;
+  extent: ImageExtent;
+  /** Names of the horizontal and vertical axes, for the readout. */
+  axes: [string, string];
+  alt: string;
+  measuring: boolean;
+  measurement: Measurement | null;
+  pendingStart: [number, number] | null;
+  onPoint: (point: [number, number]) => void;
+  onHover: (point: [number, number] | null) => void;
+  /** Takes the click instead of the measurement when it returns true. */
+  onClickCapture?: (point: [number, number]) => boolean;
+  children?: React.ReactNode;
+}) {
   const container = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLDivElement>(null);
   const size = useFittedSize(container, width, height);
+  const spanH = extent.horizontalMax - extent.horizontalMin;
+  const spanV = extent.verticalMax - extent.verticalMin;
+  const toFraction = ([h, v]: [number, number]): [number, number] => [
+    (h - extent.horizontalMin) / spanH,
+    (extent.verticalMax - v) / spanV,
+  ];
+  const fromEvent = (event: React.MouseEvent<HTMLElement>): [number, number] | null => {
+    const box = frame.current?.getBoundingClientRect();
+    if (!box || box.width === 0 || box.height === 0) return null;
+    const u = Math.min(1, Math.max(0, (event.clientX - box.left) / box.width));
+    const w = Math.min(1, Math.max(0, (event.clientY - box.top) / box.height));
+    return [extent.horizontalMin + u * spanH, extent.verticalMax - w * spanV];
+  };
+  const click = (event: React.MouseEvent<HTMLElement>) => {
+    const point = fromEvent(event);
+    if (!point) return;
+    if (onClickCapture?.(point)) return;
+    if (measuring) onPoint(point);
+  };
+  const bar = scaleBarLength(spanH);
+  const ends = measurement ? [toFraction(measurement.start), toFraction(measurement.end)] : null;
+  const pending = pendingStart ? toFraction(pendingStart) : null;
+  const delta = measurement
+    ? [measurement.end[0] - measurement.start[0], measurement.end[1] - measurement.start[1]]
+    : null;
   return (
     <div className="image-view" ref={container}>
-      <div className="image-frame" style={size ?? undefined}>
+      <div
+        ref={frame}
+        className={`image-frame ${measuring || onClickCapture ? "drawing" : ""}`}
+        style={size ?? undefined}
+        onClick={click}
+        onMouseMove={(event) => onHover(fromEvent(event))}
+        onMouseLeave={() => onHover(null)}
+      >
         <img src={`data:image/png;base64,${image}`} alt={alt} />
+        {children}
+        {ends && delta && (
+          <>
+            <svg className="image-overlay" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true">
+              <line className="measure" x1={ends[0][0]} y1={ends[0][1]} x2={ends[1][0]} y2={ends[1][1]} />
+            </svg>
+            <i className="line-dot measure" style={percent(ends[0])} />
+            <i className="line-dot measure" style={percent(ends[1])} />
+            <span
+              className="measure-label"
+              style={percent([(ends[0][0] + ends[1][0]) / 2, (ends[0][1] + ends[1][1]) / 2])}
+            >
+              {formatLength(Math.hypot(delta[0], delta[1]))}
+              <small>
+                Δ{axes[0]} {formatLength(delta[0])} · Δ{axes[1]} {formatLength(delta[1])}
+              </small>
+            </span>
+          </>
+        )}
+        {pending && <i className="line-dot measure pending" style={percent(pending)} />}
+        <span className="scale-bar" style={{ width: `${(bar / spanH) * 100}%` }}>
+          {formatLength(bar)}
+        </span>
       </div>
     </div>
   );
 }
 
-/** The top view, with the AA–BB line over it and a way to draw a new one. */
-function TopViewImage({
-  topView,
+/** The AA–BB line drawn over the top view, as fractions of the frame. */
+function SectionLineOverlay({
+  extent,
   line,
-  drawing,
   pendingStart,
-  onPick,
 }: {
-  topView: TopViewDocument;
+  extent: ImageExtent;
   line: SectionLine | null;
-  drawing: boolean;
   pendingStart: [number, number] | null;
-  onPick: (point: [number, number]) => void;
 }) {
-  const container = useRef<HTMLDivElement>(null);
-  const frame = useRef<HTMLDivElement>(null);
-  const size = useFittedSize(container, topView.width, topView.height);
-  const extent: ImageExtent = topView.extent;
   const width = extent.horizontalMax - extent.horizontalMin;
   const height = extent.verticalMax - extent.verticalMin;
-  // The picture is drawn top-down with y increasing upward, like the section;
-  // positions on it are fractions of the frame, which is the picture exactly.
   const toFraction = ([x, y]: [number, number]): [number, number] => [
     (x - extent.horizontalMin) / width,
     (extent.verticalMax - y) / height,
   ];
-  const pick = (event: React.MouseEvent<HTMLElement>) => {
-    const box = frame.current?.getBoundingClientRect();
-    if (!box || box.width === 0 || box.height === 0) return;
-    const u = Math.min(1, Math.max(0, (event.clientX - box.left) / box.width));
-    const v = Math.min(1, Math.max(0, (event.clientY - box.top) / box.height));
-    onPick([extent.horizontalMin + u * width, extent.verticalMax - v * height]);
-  };
   const ends = line ? [toFraction(line.start), toFraction(line.end)] : null;
   const pending = pendingStart ? toFraction(pendingStart) : null;
   return (
-    <div className="image-view" ref={container}>
-      <div
-        ref={frame}
-        className={`image-frame ${drawing ? "drawing" : ""}`}
-        style={size ?? undefined}
-        onClick={drawing ? pick : undefined}
-      >
-        <img src={`data:image/png;base64,${topView.image}`} alt="Top view" />
-        {ends && (
-          <svg className="image-overlay" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true">
-            <line x1={ends[0][0]} y1={ends[0][1]} x2={ends[1][0]} y2={ends[1][1]} />
-          </svg>
-        )}
-        {ends && (
-          <>
-            <i className="line-dot" style={percent(ends[0])} />
-            <i className="line-dot" style={percent(ends[1])} />
-            <span className="line-label" style={percent(ends[0])}>A</span>
-            <span className="line-label" style={percent(ends[1])}>B</span>
-          </>
-        )}
-        {pending && <i className="line-dot pending" style={percent(pending)} />}
-      </div>
-    </div>
+    <>
+      {ends && (
+        <svg className="image-overlay" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true">
+          <line x1={ends[0][0]} y1={ends[0][1]} x2={ends[1][0]} y2={ends[1][1]} />
+        </svg>
+      )}
+      {ends && (
+        <>
+          <i className="line-dot" style={percent(ends[0])} />
+          <i className="line-dot" style={percent(ends[1])} />
+          <span className="line-label" style={percent(ends[0])}>A</span>
+          <span className="line-label" style={percent(ends[1])}>B</span>
+        </>
+      )}
+      {pending && <i className="line-dot pending" style={percent(pending)} />}
+    </>
   );
 }
 
@@ -309,6 +394,30 @@ export function Viewport({
     setDrawing(false);
     setPendingStart(null);
   };
+
+  // The ruler: two clicks measure a distance on the picture, and the cursor
+  // position is read out in the footer. Both reset when the view changes.
+  const [measuring, setMeasuring] = useState(false);
+  const [measurement, setMeasurement] = useState<Measurement | null>(null);
+  const [measureStart, setMeasureStart] = useState<[number, number] | null>(null);
+  const [cursor, setCursor] = useState<[number, number] | null>(null);
+  useEffect(() => {
+    setMeasuring(false);
+    setMeasurement(null);
+    setMeasureStart(null);
+    setCursor(null);
+  }, [mode]);
+  const measurePoint = (point: [number, number]) => {
+    if (!measureStart) {
+      setMeasureStart(point);
+      return;
+    }
+    setMeasurement({ start: measureStart, end: point });
+    setMeasureStart(null);
+    setMeasuring(false);
+  };
+  const axesFor = (horizontal: string): [string, string] =>
+    mode === "top" ? ["x", "y"] : [horizontal, "z"];
   const triangles = surfaces?.surfaces.reduce((total, item) => total + item.triangleCount, 0) ?? 0;
   const shownMaterials = (
     mode === "surfaces" ? surfaces?.surfaces.map((surface) => surface.material) : undefined
@@ -354,21 +463,53 @@ export function Viewport({
             Top view
           </button>
         </div>
-        {mode === "top" && topView && (
+        {((mode === "top" && topView) || (mode === "section" && section)) && (
           <div className="view-tabs draw-tools">
-            <button
-              type="button"
-              className={drawing ? "active" : ""}
-              title="Draw the AA–BB section line: click A, then B"
-              onClick={() => (drawing ? stopDrawing() : setDrawing(true))}
-            >
-              <PenLine size={13} />
-              {drawing ? (pendingStart ? "Click B" : "Click A") : "Draw AA–BB"}
-            </button>
-            {sectionLine && !drawing && (
+            {mode === "top" && (
+              <button
+                type="button"
+                className={drawing ? "active" : ""}
+                title="Draw the AA–BB section line: click A, then B"
+                onClick={() => {
+                  if (drawing) stopDrawing();
+                  else {
+                    setMeasuring(false);
+                    setMeasureStart(null);
+                    setDrawing(true);
+                  }
+                }}
+              >
+                <Scissors size={13} />
+                {drawing ? (pendingStart ? "Click B" : "Click A") : "Draw AA–BB"}
+              </button>
+            )}
+            {mode === "top" && sectionLine && !drawing && (
               <button type="button" title="Remove the AA–BB line" onClick={() => onSectionLineChange(null)}>
                 <X size={13} />
                 Clear line
+              </button>
+            )}
+            <button
+              type="button"
+              className={measuring ? "active" : ""}
+              title="Measure a distance on the picture: click two points"
+              onClick={() => {
+                if (measuring) {
+                  setMeasuring(false);
+                  setMeasureStart(null);
+                } else {
+                  stopDrawing();
+                  setMeasuring(true);
+                }
+              }}
+            >
+              <Ruler size={13} />
+              {measuring ? (measureStart ? "Click the end" : "Click the start") : "Measure"}
+            </button>
+            {measurement && !measuring && (
+              <button type="button" title="Remove the measurement" onClick={() => setMeasurement(null)}>
+                <X size={13} />
+                Clear measure
               </button>
             )}
           </div>
@@ -413,15 +554,22 @@ export function Viewport({
           )
         ) : mode === "section" ? (
           section ? (
-            <FittedImage
+            <PictureView
               image={section.image}
               width={section.width}
               height={section.height}
+              extent={section.extent}
+              axes={axesFor(section.horizontalAxis)}
               alt={
                 section.axis === "line"
                   ? "Section along the AA–BB line"
                   : `Section at ${section.axis} = ${section.position.toFixed(3)} µm`
               }
+              measuring={measuring}
+              measurement={measurement}
+              pendingStart={measureStart}
+              onPoint={measurePoint}
+              onHover={setCursor}
             />
           ) : (
             <div className="view-placeholder">
@@ -429,13 +577,29 @@ export function Viewport({
             </div>
           )
         ) : topView ? (
-          <TopViewImage
-            topView={topView}
-            line={sectionLine}
-            drawing={drawing}
-            pendingStart={pendingStart}
-            onPick={pickPoint}
-          />
+          <PictureView
+            image={topView.image}
+            width={topView.width}
+            height={topView.height}
+            extent={topView.extent}
+            axes={["x", "y"]}
+            alt="Top view"
+            measuring={measuring}
+            measurement={measurement}
+            pendingStart={measureStart}
+            onPoint={measurePoint}
+            onHover={setCursor}
+            onClickCapture={
+              drawing
+                ? (point) => {
+                    pickPoint(point);
+                    return true;
+                  }
+                : undefined
+            }
+          >
+            <SectionLineOverlay extent={topView.extent} line={sectionLine} pendingStart={pendingStart} />
+          </PictureView>
         ) : (
           <div className="view-placeholder">
             <p>Run the flow to see the top view.</p>
@@ -510,6 +674,12 @@ export function Viewport({
               ))}
             </select>
           </label>
+        )}
+        {mode !== "surfaces" && cursor && (
+          <code className="cursor-readout">
+            {axesFor(section?.horizontalAxis ?? "x")[0]} {cursor[0].toFixed(3)} ·{" "}
+            {axesFor(section?.horizontalAxis ?? "x")[1]} {cursor[1].toFixed(3)} µm
+          </code>
         )}
         <div className="footer-spacer" />
         <div className="legend">
