@@ -656,6 +656,54 @@ def test_a_film_taller_than_the_window_is_refused_with_the_unit(workspace):
         call("run_flow", root=str(workspace))
 
 
+def test_the_project_window_can_be_resized(workspace):
+    """A taller window, for a thicker stack; the stored results go with it."""
+    call("run_flow", root=str(workspace))
+    bounds = {"xMin": -1.0, "xMax": 1.0, "yMin": -1.0, "yMax": 1.0, "zMin": -1.0, "zMax": 2.0}
+    plan = call("plan_grid", root=str(workspace), targetSpacingNm=25.0, bounds=bounds)
+    assert plan["grid"]["zMax"] == pytest.approx(2.0)
+    assert plan["grid"]["nz"] == 121 and plan["grid"]["nx"] == 81
+    assert plan["unchanged"] is False
+    updated = call("set_grid", root=str(workspace), targetSpacingNm=25.0, bounds=bounds)
+    grid = updated["project"]["grid"]
+    assert (grid["zMin"], grid["zMax"]) == (-1.0, 2.0)
+    assert grid["spacingUm"] == pytest.approx(0.025)
+    assert set(updated["stepStatuses"][updated["branches"][0]["id"]].values()) == {"dirty"}
+    # A 1.5 µm film now fits where the 1.2 µm window refused it.
+    document = call("open_workspace", root=str(workspace))
+    document["branches"][0]["steps"][3]["parameters"]["target"] = 1.5
+    call("save_document", root=str(workspace), document=document)
+    call("run_flow", root=str(workspace))
+
+
+def test_a_window_that_misses_the_wafer_surface_is_refused(workspace):
+    with pytest.raises(InvalidRequest, match="wafer surface is z = 0"):
+        call(
+            "plan_grid", root=str(workspace), targetSpacingNm=25.0,
+            bounds={"xMin": -1, "xMax": 1, "yMin": -1, "yMax": 1, "zMin": 0.5, "zMax": 2.0},
+        )
+    with pytest.raises(InvalidRequest, match="micrometres"):
+        call(
+            "plan_grid", root=str(workspace), targetSpacingNm=25.0,
+            bounds={"xMin": -500, "xMax": 500, "yMin": -1, "yMax": 1, "zMin": -1, "zMax": 1},
+        )
+
+
+def test_a_slab_window_can_be_resized_too(tmp_path):
+    root = tmp_path / "slab-window"
+    call("create_workspace", root=str(root), name="Slab", kernel="slab")
+    updated = call(
+        "set_grid", root=str(root), targetSpacingNm=10.0,
+        bounds={"xMin": -2, "xMax": 2, "yMin": -2, "yMax": 2, "zMin": -0.5, "zMax": 3.0},
+    )
+    grid = updated["project"]["grid"]
+    assert (grid["xMin"], grid["zMax"]) == (-2.0, 3.0)
+    assert updated["project"]["resolutionUm"] == pytest.approx(0.01)
+    # The substrate is as deep as the window: 0.5 µm now, its top still at 0.
+    result = call("run_flow", root=str(root))
+    assert result["materials"] == ["Si", "Al2O3"]
+
+
 def test_project_id_cannot_be_swapped(workspace):
     document = call("open_workspace", root=str(workspace))
     document["project"]["id"] = "someone-elses-project"

@@ -10,6 +10,7 @@ import type {
   SectionLine,
   SurfaceDocument,
   TopViewDocument,
+  WindowBounds,
   WorkerCapabilities,
   WorkerEvent,
   WorkspaceDocument,
@@ -35,8 +36,9 @@ export interface DesktopBridge {
   createWorkspace(name: string, kernel: string): Promise<WorkspaceDocument | null>;
   openWorkspace(): Promise<WorkspaceDocument | null>;
   saveDocument(document: WorkspaceDocument): Promise<WorkspaceDocument>;
-  planGrid(root: string, targetSpacingNm: number): Promise<GridPlan>;
-  setGrid(root: string, targetSpacingNm: number): Promise<WorkspaceDocument>;
+  /** `bounds` is the project window in µm; omitted means keep the current one. */
+  planGrid(root: string, targetSpacingNm: number, bounds?: WindowBounds): Promise<GridPlan>;
+  setGrid(root: string, targetSpacingNm: number, bounds?: WindowBounds): Promise<WorkspaceDocument>;
   saveSketch(root: string, sketch: QuickSketch): Promise<WorkspaceDocument>;
   /** The kernel's own reading of an unsaved sketch, for the editor's fill. */
   previewMask(root: string, sketch: QuickSketch, keep: MaskKeep): Promise<MaskPreview>;

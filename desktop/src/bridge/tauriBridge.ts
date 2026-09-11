@@ -14,6 +14,7 @@ import type {
   SectionLine,
   SurfaceDocument,
   TopViewDocument,
+  WindowBounds,
   WorkerCapabilities,
   WorkerEvent,
   WorkspaceDocument,
@@ -68,12 +69,12 @@ export class TauriBridge implements DesktopBridge {
     return call<WorkspaceDocument>("save_document", { root: document.root, document });
   }
 
-  planGrid(root: string, targetSpacingNm: number): Promise<GridPlan> {
-    return call<GridPlan>("plan_grid", { root, targetSpacingNm });
+  planGrid(root: string, targetSpacingNm: number, bounds?: WindowBounds): Promise<GridPlan> {
+    return call<GridPlan>("plan_grid", { root, targetSpacingNm, bounds: bounds ?? null });
   }
 
-  setGrid(root: string, targetSpacingNm: number): Promise<WorkspaceDocument> {
-    return call<WorkspaceDocument>("set_grid", { root, targetSpacingNm });
+  setGrid(root: string, targetSpacingNm: number, bounds?: WindowBounds): Promise<WorkspaceDocument> {
+    return call<WorkspaceDocument>("set_grid", { root, targetSpacingNm, bounds: bounds ?? null });
   }
 
   saveSketch(root: string, sketch: QuickSketch): Promise<WorkspaceDocument> {

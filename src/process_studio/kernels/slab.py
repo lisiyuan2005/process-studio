@@ -328,7 +328,13 @@ def _etch_rates(recipe: Recipe, parameters: Mapping[str, Any]) -> dict[str, floa
 
 
 def _deposit(
-    device: Device, step: ProcessStep, recipe: Recipe, parameters, logger, project: ProjectDefinition
+    device: Device,
+    step: ProcessStep,
+    recipe: Recipe,
+    parameters,
+    logger,
+    project: ProjectDefinition,
+    mask: Mask | None,
 ) -> None:
     material = str(parameters.get("material") or recipe.output_material or "")
     if not material:
@@ -345,14 +351,49 @@ def _deposit(
         )
     if mode not in {"conformal", "planar"}:
         raise SlabError(f"unknown deposition mode {mode!r}; expected 'conformal' or 'planar'")
-    if step.mask_source != "none":
-        raise SlabError(
-            "the slab kernel deposits over the whole window and cannot use a mask; "
-            "deposit blanket and pattern it with an etch step."
-        )
     _ensure_material(device, material)
-    logger(f"SLAB deposit {material} {thickness:g} um {mode}")
-    device.deposit(material, thickness, mode=mode)
+    if mask is None:
+        logger(f"SLAB deposit {material} {thickness:g} um {mode}")
+        device.deposit(material, thickness, mode=mode)
+        return
+    logger(f"SLAB deposit {material} {thickness:g} um {mode} inside the mask")
+    _masked_deposit(device, material, thickness, mode, mask)
+
+
+def _masked_deposit(device: Device, material: str, thickness: float, mode: str, mask: Mask) -> None:
+    """Deposit only where the mask is open: the lift-off result, exactly.
+
+    DeviceFlow deposits over the whole window. The film is therefore grown
+    as a stand-in material, then cut down to the mask's columns slab by slab
+    and handed to the real material. That is what a lift-off leaves behind:
+    the film wherever the resist was open, including the sidewalls inside
+    the opening, and nothing where it was covered. The stand-in never keeps
+    any geometry, so it appears in no view and no material list.
+    """
+    registry = device._materials
+    real = registry.resolve(material)
+    stand_in_name = f"{material} (masked deposit)"
+    if stand_in_name not in registry:
+        registry.add(stand_in_name, role=real.role)
+    stand_in = registry.resolve(stand_in_name)
+    device.deposit(stand_in_name, thickness, mode=mode)
+    state = device._state
+    opening = state.clean(mask._geom)
+    changed = []
+    for slab in state.slabs:
+        grown = slab.regions.pop(stand_in, None)
+        if grown is None:
+            continue
+        kept = state.clean(grown.intersection(opening))
+        if not kept.is_empty:
+            existing = slab.regions.get(real)
+            slab.regions[real] = (
+                kept if existing is None else state.clean(shapely.union_all([existing, kept]))
+            )
+        changed.append(slab)
+    state.harmonize(changed)
+    state.consolidate()
+    state.validate()
 
 
 def _etch(
@@ -509,8 +550,9 @@ class SlabKernel:
         summary=(
             "Exact polygon slabs from the DeviceFlow core, the engine "
             "ProcessFlow-Emulator runs. Planar and conformal deposition, "
-            "vertical and isotropic etching, unselective CMP. No grid to "
-            "converge; conformal deposition is walked at the set resolution."
+            "blanket or inside a mask, vertical and isotropic etching, "
+            "unselective CMP. No grid to converge; conformal deposition is "
+            "walked at the set resolution."
         ),
         process_types=("deposit", "etch", "cmp", "no_geometry"),
         mask_sources=("none", "quick_sketch", "gds"),
@@ -567,7 +609,10 @@ class SlabKernel:
         logger(f"RUN {step.name} [{recipe.process_type.value}]")
         try:
             if recipe.process_type is ProcessType.DEPOSIT:
-                _deposit(device, step, recipe, parameters, logger, project)
+                mask = step_mask(
+                    device, step, project=project, parameters=parameters, sketches=sketches
+                )
+                _deposit(device, step, recipe, parameters, logger, project, mask)
             elif recipe.process_type is ProcessType.ETCH:
                 mask = step_mask(
                     device, step, project=project, parameters=parameters, sketches=sketches

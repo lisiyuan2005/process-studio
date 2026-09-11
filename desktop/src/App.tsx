@@ -56,6 +56,7 @@ import type {
   SectionLine,
   SurfaceDocument,
   TopViewDocument,
+  WindowBounds,
   WorkerCapabilities,
   WorkerEvent,
   WorkspaceDocument,
@@ -457,19 +458,19 @@ export default function App() {
   };
 
   const planGrid = useCallback(
-    (targetSpacingNm: number) => {
+    (targetSpacingNm: number, bounds: WindowBounds) => {
       if (!document) return Promise.reject(new Error("No workspace is open."));
-      return bridge.planGrid(document.root, targetSpacingNm);
+      return bridge.planGrid(document.root, targetSpacingNm, bounds);
     },
     [document?.root],
   );
 
-  const handleApplyGrid = async (targetSpacingNm: number) => {
+  const handleApplyGrid = async (targetSpacingNm: number, bounds: WindowBounds) => {
     if (!document || busy) return;
     setBusy(true);
     try {
       const saved = await bridge.saveDocument(document);
-      const updated = await bridge.setGrid(saved.root, targetSpacingNm);
+      const updated = await bridge.setGrid(saved.root, targetSpacingNm, bounds);
       skipNextAutosave.current = true;
       setDocumentState(updated);
       setSaveState("saved");
@@ -479,7 +480,7 @@ export default function App() {
         ...current,
         {
           kind: "log",
-          message: `Grid set to ${grid.nx}×${grid.ny}×${grid.nz} (${(
+          message: `Window ${grid.xMin}..${grid.xMax} × ${grid.yMin}..${grid.yMax} × ${grid.zMin}..${grid.zMax} µm, grid ${grid.nx}×${grid.ny}×${grid.nz} (${(
             grid.spacingUm * 1000
           ).toFixed(3)} nm). Stored results were discarded.`,
         },

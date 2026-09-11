@@ -302,3 +302,79 @@ def test_a_film_taller_than_the_window_is_a_unit_slip_and_says_so(kernel, projec
             logger=lambda _message: None,
             materials=materials,
         )
+
+
+def test_a_masked_deposition_leaves_the_film_only_inside_the_opening(kernel, project, sketches):
+    """The lift-off result: film in the circle, bare wafer around it."""
+    materials = default_materials()
+    state = kernel.initial_state(project, materials=materials)
+    grown = kernel.run_step(
+        state,
+        step(
+            ProcessType.DEPOSIT,
+            mask_source="quick_sketch",
+            parameters={"target": 0.04, "mode": "conformal", "sketch_id": "default"},
+            output_material="Al2O3",
+        ),
+        project=project,
+        recipes={},
+        sketches=sketches,
+        logger=lambda _message: None,
+        materials=materials,
+    )
+    section = grown.device.cross_section((-0.8, 0.0), (0.8, 0.0))
+    # Inside the 0.22 µm circle the film sits on the wafer; outside there is none.
+    assert section.surface_z(0.8) == pytest.approx(0.8 + 0.04)
+    assert section.surface_z(0.1) == pytest.approx(0.8)
+    assert grown.device.volume("Al2O3") == pytest.approx(3.14159 * 0.22**2 * 0.04, rel=0.02)
+    # The stand-in the kernel grew the film as is nowhere to be seen.
+    assert grown.priority == ["Si", "Al2O3"]
+    assert [s["material"] for s in kernel.surfaces(grown, project=project)["surfaces"]] == ["Si", "Al2O3"]
+
+    # Keep "outside" deposits everywhere but the circle.
+    inverse = kernel.run_step(
+        state,
+        step(
+            ProcessType.DEPOSIT,
+            mask_source="quick_sketch",
+            keep="outside",
+            parameters={"target": 0.04, "mode": "planar", "sketch_id": "default"},
+            output_material="SiO2",
+        ),
+        project=project,
+        recipes={},
+        sketches=sketches,
+        logger=lambda _message: None,
+        materials=materials,
+    )
+    section = inverse.device.cross_section((-0.8, 0.0), (0.8, 0.0))
+    assert section.surface_z(0.8) == pytest.approx(0.8)
+    assert section.surface_z(0.1) == pytest.approx(0.8 + 0.04)
+
+
+def test_a_masked_film_survives_a_save_and_a_later_step(tmp_path, kernel, project, sketches):
+    materials = default_materials()
+    state = kernel.initial_state(project, materials=materials)
+    grown = kernel.run_step(
+        state,
+        step(
+            ProcessType.DEPOSIT,
+            mask_source="quick_sketch",
+            parameters={"target": 0.05, "mode": "planar", "sketch_id": "default"},
+            output_material="TiN",
+        ),
+        project=project, recipes={}, sketches=sketches, logger=lambda _m: None, materials=materials,
+    )
+    path = tmp_path / "masked.dfz"
+    grown.save(path)
+    restored = kernel.load_state(path)
+    assert restored.priority == ["Si", "TiN"]
+    # A blanket film over it lands on the patch and on the wafer beside it.
+    covered = kernel.run_step(
+        restored,
+        step(ProcessType.DEPOSIT, parameters={"target": 0.02, "mode": "conformal"}, output_material="Al2O3"),
+        project=project, recipes={}, sketches=sketches, logger=lambda _m: None, materials=materials,
+    )
+    section = covered.device.cross_section((-0.8, 0.0), (0.8, 0.0))
+    assert section.surface_z(0.8) == pytest.approx(0.8 + 0.05 + 0.02)
+    assert section.surface_z(0.1) == pytest.approx(0.8 + 0.02)

@@ -23,6 +23,16 @@ export interface GridDefinition {
   nodeCount: number;
 }
 
+/** The project window in micrometres. The wafer surface is z = 0 inside it. */
+export interface WindowBounds {
+  xMin: number;
+  xMax: number;
+  yMin: number;
+  yMax: number;
+  zMin: number;
+  zMax: number;
+}
+
 export interface GridEstimate {
   spacingNm: number;
   shape: [number, number, number];

@@ -8,6 +8,7 @@ going quiet.
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import sys
 import threading
@@ -34,6 +35,7 @@ from .runner import (
 )
 from .serialize import (
     branch_from_json,
+    grid_dict,
     grid_from_json,
     grid_to_json,
     material_from_json,
@@ -187,6 +189,100 @@ def _target_spacing(parameters: Mapping[str, Any]) -> float:
     return spacing
 
 
+#: The widest window the desktop will take, per axis, in micrometres. A
+#: bigger one is a unit slip far more often than a real device.
+MAXIMUM_WINDOW_UM = 200.0
+
+
+def _window_from(parameters: Mapping[str, Any], current: UniformGrid3D) -> UniformGrid3D:
+    """The project window a request asks for, or the current one.
+
+    ``bounds`` carries xMin..zMax in micrometres. The wafer surface is z = 0
+    in both kernels, with the substrate below it, so a window has to reach
+    below zero to hold a wafer and above it to hold what is built on top.
+    """
+    bounds = parameters.get("bounds")
+    if bounds is None:
+        return current
+    if not isinstance(bounds, Mapping):
+        raise InvalidRequest("bounds must be an object with xMin..zMax in micrometres.")
+    values = {}
+    for key in ("xMin", "xMax", "yMin", "yMax", "zMin", "zMax"):
+        try:
+            values[key] = float(bounds[key])
+        except (KeyError, TypeError, ValueError) as error:
+            raise InvalidRequest(f"bounds.{key} must be a number in micrometres.") from error
+        if not math.isfinite(values[key]):
+            raise InvalidRequest(f"bounds.{key} must be finite.")
+    for axis in ("x", "y", "z"):
+        low, high = values[f"{axis}Min"], values[f"{axis}Max"]
+        if high <= low:
+            raise InvalidRequest(f"{axis}Max must be greater than {axis}Min.")
+        if high - low > MAXIMUM_WINDOW_UM:
+            raise InvalidRequest(
+                f"The {axis} extent is {high - low:g} µm; the desktop takes at most "
+                f"{MAXIMUM_WINDOW_UM:g} µm per axis. Lengths are in micrometres."
+            )
+    if not values["zMin"] < 0.0 < values["zMax"]:
+        raise InvalidRequest(
+            "The z range must reach below 0 (the substrate) and above 0 (what is built "
+            "on it): the wafer surface is z = 0."
+        )
+    # The lattice counts are placeholders; the caller fits the real ones.
+    return UniformGrid3D(
+        values["xMin"], values["xMax"], values["yMin"], values["yMax"],
+        values["zMin"], values["zMax"], current.nx, current.ny, current.nz,
+    ) if _equal_spacing(values, current) else _placeholder_grid(values)
+
+
+def _equal_spacing(values: Mapping[str, float], current: UniformGrid3D) -> bool:
+    try:
+        UniformGrid3D(
+            values["xMin"], values["xMax"], values["yMin"], values["yMax"],
+            values["zMin"], values["zMax"], current.nx, current.ny, current.nz,
+        )
+    except ValueError:
+        return False
+    return True
+
+
+def _placeholder_grid(values: Mapping[str, float]) -> UniformGrid3D:
+    """A valid lattice over the window at roughly 25 nm, for the fit to start from."""
+    spacing = 0.025
+    counts = [
+        max(3, int(round((values[f"{axis}Max"] - values[f"{axis}Min"]) / spacing)) + 1)
+        for axis in ("x", "y", "z")
+    ]
+    # Equal spacing is a class invariant; derive every count from x's spacing.
+    dx = (values["xMax"] - values["xMin"]) / (counts[0] - 1)
+    ny = max(3, int(round((values["yMax"] - values["yMin"]) / dx)) + 1)
+    nz = max(3, int(round((values["zMax"] - values["zMin"]) / dx)) + 1)
+    try:
+        return UniformGrid3D(
+            values["xMin"], values["xMax"], values["yMin"], values["yMax"],
+            values["zMin"], values["zMax"], counts[0], ny, nz,
+        )
+    except ValueError as error:
+        raise InvalidRequest(
+            "Those bounds cannot be covered by one uniform spacing; use extents that "
+            f"share a common step (for example multiples of 0.1 µm): {error}"
+        ) from error
+
+
+def _same_bounds(a: UniformGrid3D, b: UniformGrid3D) -> bool:
+    return all(
+        math.isclose(getattr(a, name), getattr(b, name), abs_tol=1e-12)
+        for name in ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")
+    )
+
+
+def _fit_grid(window: UniformGrid3D, spacing_nm: float) -> UniformGrid3D:
+    try:
+        return grid_for_target_spacing(window, spacing_nm)
+    except ValueError as error:
+        raise InvalidRequest(str(error)) from error
+
+
 def _plan_grid(parameters: Mapping[str, Any]) -> dict[str, Any]:
     """Report what a target spacing would mean, and what it would cost.
 
@@ -201,21 +297,24 @@ def _plan_grid(parameters: Mapping[str, Any]) -> dict[str, Any]:
     project = load_project(repository, parameters.get("projectId"))
     kernel = project_kernel(project)
     current = UniformGrid3D(**project.grid)
+    window = _window_from(parameters, current)
+    same_window = _same_bounds(window, current)
     if kernel.info.spacing_role != "grid":
         spacing = _target_spacing(parameters)
+        # The slab kernel has no lattice, but the stored grid must still be a
+        # valid one; any modest spacing over the new window serves.
+        proposed = current if same_window else _fit_grid(window, 25.0)
         return {
             "kernel": kernel.info.id,
             "spacingRole": kernel.info.spacing_role,
-            "grid": grid_to_json(current),
+            "grid": grid_to_json(proposed),
             "estimate": {"spacingNm": spacing},
             "maximumNodes": None,
             "withinLimit": True,
-            "unchanged": abs(spacing / 1000.0 - (project.resolution_um or 0.0)) < 1e-12,
+            "unchanged": same_window
+            and abs(spacing / 1000.0 - (project.resolution_um or 0.0)) < 1e-12,
         }
-    try:
-        proposed = grid_for_target_spacing(current, _target_spacing(parameters))
-    except ValueError as error:
-        raise InvalidRequest(str(error)) from error
+    proposed = _fit_grid(window, _target_spacing(parameters))
     estimate = estimate_grid(proposed, len(repository.load_materials()))
     return {
         "kernel": kernel.info.id,
@@ -240,21 +339,22 @@ def _set_grid(parameters: Mapping[str, Any]) -> dict[str, Any]:
     repository = open_repository(root)
     project = load_project(repository, parameters.get("projectId"))
     kernel = project_kernel(project)
+    current = UniformGrid3D(**project.grid)
+    window = _window_from(parameters, current)
     if kernel.info.spacing_role != "grid":
         if parameters.get("targetSpacingNm") is None:
             raise InvalidRequest(
                 f"The {kernel.info.name} kernel has no grid to set; give targetSpacingNm "
                 "to change the resolution it works at."
             )
+        if not _same_bounds(window, current):
+            # A new window is a new wafer: the substrate is as thick as the
+            # window is deep, so the stored results are gone either way.
+            project.grid = grid_dict(_fit_grid(window, 25.0))
         apply_resolution(repository, project, _target_spacing(parameters) / 1000.0)
         return build_document(root, repository, project)
     if parameters.get("targetSpacingNm") is not None:
-        try:
-            grid = grid_for_target_spacing(
-                UniformGrid3D(**project.grid), _target_spacing(parameters)
-            )
-        except ValueError as error:
-            raise InvalidRequest(str(error)) from error
+        grid = _fit_grid(window, _target_spacing(parameters))
     else:
         grid = grid_from_json(parameters.get("grid", {}))
     node_count = grid.nx * grid.ny * grid.nz
