@@ -244,9 +244,18 @@ function PictureView({
   onClickCapture?: (point: [number, number]) => boolean;
   children?: React.ReactNode;
 }) {
+  // The cursor readout floats over the picture rather than sitting in the
+  // footer: text that appears only while the pointer is over the picture
+  // would reflow the footer on every entry and exit, and the picture would
+  // refit and jump each time.
   const container = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLDivElement>(null);
   const size = useFittedSize(container, width, height);
+  const [hover, setHover] = useState<[number, number] | null>(null);
+  const moved = (point: [number, number] | null) => {
+    setHover(point);
+    onHover(point);
+  };
   const spanH = extent.horizontalMax - extent.horizontalMin;
   const spanV = extent.verticalMax - extent.verticalMin;
   const toFraction = ([h, v]: [number, number]): [number, number] => [
@@ -279,11 +288,16 @@ function PictureView({
         className={`image-frame ${measuring || onClickCapture ? "drawing" : ""}`}
         style={size ?? undefined}
         onClick={click}
-        onMouseMove={(event) => onHover(fromEvent(event))}
-        onMouseLeave={() => onHover(null)}
+        onMouseMove={(event) => moved(fromEvent(event))}
+        onMouseLeave={() => moved(null)}
       >
         <img src={`data:image/png;base64,${image}`} alt={alt} />
         {children}
+        {hover && (
+          <code className="cursor-readout">
+            {axes[0]} {hover[0].toFixed(3)} · {axes[1]} {hover[1].toFixed(3)} µm
+          </code>
+        )}
         {ends && delta && (
           <>
             <svg className="image-overlay" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true">
@@ -674,12 +688,6 @@ export function Viewport({
               ))}
             </select>
           </label>
-        )}
-        {mode !== "surfaces" && cursor && (
-          <code className="cursor-readout">
-            {axesFor(section?.horizontalAxis ?? "x")[0]} {cursor[0].toFixed(3)} ·{" "}
-            {axesFor(section?.horizontalAxis ?? "x")[1]} {cursor[1].toFixed(3)} µm
-          </code>
         )}
         <div className="footer-spacer" />
         <div className="legend">

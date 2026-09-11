@@ -12,6 +12,7 @@ import {
   Save,
   Square,
   TerminalSquare,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { bridge } from "./bridge";
@@ -958,7 +959,20 @@ export default function App() {
         <section className="log-drawer">
           <div className="log-heading">
             <span>Worker activity</span>
-            <button onClick={() => setEvents([])}>Clear</button>
+            <span className="log-heading-actions">
+              <button type="button" onClick={() => setEvents([])}>
+                Clear
+              </button>
+              <button
+                type="button"
+                className="log-close"
+                aria-label="Close the log"
+                title="Close"
+                onClick={() => setShowLog(false)}
+              >
+                <X size={13} />
+              </button>
+            </span>
           </div>
           <div className="log-lines">
             {events.length === 0 ? (

@@ -225,6 +225,9 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .log-drawer { position: fixed; z-index: 50; left: 286px; right: 306px; bottom: 0; height: 180px; border-top: 1px solid #34414c; background: rgba(13, 18, 23, 0.97); box-shadow: 0 -8px 30px rgba(0,0,0,0.22); }
 .log-heading { height: 34px; display: flex; align-items: center; justify-content: space-between; padding: 0 11px; border-bottom: 1px solid #232d36; color: #8997a4; font-size: 9.5px; }
 .log-heading button { border: 0; background: transparent; color: #61707e; cursor: pointer; font-size: 9px; }
+.log-heading-actions { display: flex; align-items: center; gap: 4px; }
+.log-heading .log-close { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 5px; color: var(--muted); }
+.log-heading .log-close:hover { background: var(--accent-soft); color: var(--text); }
 .log-lines { height: calc(100% - 34px); overflow-y: auto; padding: 7px 11px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .log-lines p { color: #56636f; font-size: 9px; }
 .log-lines div { display: grid; grid-template-columns: 28px 1fr; gap: 7px; margin: 3px 0; font-size: 9px; }
@@ -455,7 +458,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .view-tabs button.active { background: var(--accent-soft); color: var(--accent); }
 .view-tabs button:disabled { opacity: 0.45; cursor: default; }
 
-.viewport-footer { display: flex; align-items: center; gap: 14px; min-height: 40px; padding: 6px 13px; border-top: 1px solid var(--line-soft); background: var(--panel); }
+.viewport-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; min-height: 40px; padding: 6px 13px; border-top: 1px solid var(--line-soft); background: var(--panel); }
 .viewport-footer label { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 9px; }
 .viewport-footer select, .viewport-footer input[type="range"] { accent-color: var(--accent); }
 .viewport-footer select { height: 26px; padding: 0 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-raised); color: var(--text); font-size: 9px; }
@@ -471,7 +474,8 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .line-dot { position: absolute; width: 9px; height: 9px; margin: -5px 0 0 -5px; border: 2px solid #ffffff; border-radius: 50%; background: #e04e5a; box-shadow: 0 1px 4px rgba(0,0,0,0.3); pointer-events: none; }
 .line-dot.pending { background: #ffffff; border-color: #e04e5a; }
 .line-label { position: absolute; transform: translate(7px, -19px); padding: 0 4px; border-radius: 3px; background: #e04e5a; color: #ffffff; font-size: 9px; font-weight: 700; line-height: 14px; pointer-events: none; }
-.line-ends, .cursor-readout { color: var(--muted); font-size: 9px; white-space: nowrap; }
+.line-ends { color: var(--muted); font-size: 9px; white-space: nowrap; }
+.cursor-readout { position: absolute; top: 8px; right: 8px; padding: 3px 6px; border-radius: 5px; background: rgba(255, 255, 255, 0.88); color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 9px; line-height: 1.3; white-space: nowrap; pointer-events: none; }
 .image-overlay line.measure { stroke: #1f7ae0; }
 .line-dot.measure { background: #1f7ae0; }
 .line-dot.measure.pending { background: #ffffff; border-color: #1f7ae0; }
