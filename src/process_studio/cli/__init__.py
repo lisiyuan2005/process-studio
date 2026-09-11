@@ -405,6 +405,17 @@ def _write_png(payload: Mapping[str, Any], destination: Path) -> None:
     destination.write_bytes(base64.b64decode(payload["image"]))
 
 
+def _named_line(document: Mapping[str, Any], reference: str) -> dict[str, Any]:
+    lines = document["project"].get("sectionLines", [])
+    wanted = reference.strip().lower()
+    for line in lines:
+        if line["id"] == reference or line["name"].lower() == wanted:
+            return line
+    if reference.strip().isdigit() and 1 <= int(reference) <= len(lines):
+        return lines[int(reference) - 1]
+    raise InvalidRequest(f"no section line named {reference!r}; see `lines list`.")
+
+
 def cmd_view_section(session: Session, args: argparse.Namespace) -> int:
     document = session.document()
     branch = Session.branch(document)
@@ -413,7 +424,11 @@ def cmd_view_section(session: Session, args: argparse.Namespace) -> int:
         "branchId": branch["id"], "stepId": step_id, "interpolation": args.interpolation,
         "smooth": not args.exact,
     }
-    if args.line is not None:
+    if args.named is not None:
+        line = _named_line(document, args.named)
+        request["axis"] = "line"
+        request["line"] = {"start": line["start"], "end": line["end"]}
+    elif args.line is not None:
         x0, y0, x1, y1 = args.line
         request["axis"] = "line"
         request["line"] = {"start": [x0, y0], "end": [x1, y1]}
@@ -592,6 +607,58 @@ def cmd_sketch_import(session: Session, args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _line_rows(document: Mapping[str, Any]) -> list[list[Any]]:
+    return [
+        [index, line["name"], format_number(line["start"][0]), format_number(line["start"][1]),
+         format_number(line["end"][0]), format_number(line["end"][1])]
+        for index, line in enumerate(document["project"].get("sectionLines", []), start=1)
+    ]
+
+
+LINE_HEADER = ("#", "Name", "A x", "A y", "B x", "B y")
+
+
+def cmd_lines_list(session: Session, args: argparse.Namespace) -> int:
+    document = session.document()
+    session.emit(
+        document["project"].get("sectionLines", []),
+        lambda: table(LINE_HEADER, _line_rows(document)) if _line_rows(document) else ["(no section lines)"],
+    )
+    return EXIT_OK
+
+
+def cmd_lines_add(session: Session, args: argparse.Namespace) -> int:
+    document = session.document()
+    lines = list(document["project"].get("sectionLines", []))
+    existing = next((line for line in lines if line["name"].lower() == args.name.strip().lower()), None)
+    x0, y0, x1, y1 = args.coordinates
+    if (x0, y0) == (x1, y1):
+        raise InvalidRequest("A and B must be different points.")
+    line = {"id": existing["id"] if existing else new_id(), "name": args.name.strip(), "start": [x0, y0], "end": [x1, y1]}
+    if existing:
+        lines[lines.index(existing)] = line
+    else:
+        lines.append(line)
+    document["project"]["sectionLines"] = lines
+    saved = session.save(document)
+    session.note(("Updated" if existing else "Added") + f" section line {line['name']}")
+    session.emit(line, lambda: table(LINE_HEADER, _line_rows(saved)))
+    return EXIT_OK
+
+
+def cmd_lines_rm(session: Session, args: argparse.Namespace) -> int:
+    document = session.document()
+    lines = list(document["project"].get("sectionLines", []))
+    for reference in args.name:
+        line = _named_line(document, reference)
+        lines = [item for item in lines if item["id"] != line["id"]]
+        document["project"]["sectionLines"] = lines
+    saved = session.save(document)
+    session.note(f"Removed {', '.join(args.name)}")
+    session.emit(saved["project"].get("sectionLines", []), lambda: table(LINE_HEADER, _line_rows(saved)) or ["(no section lines)"])
+    return EXIT_OK
+
+
 def cmd_flow_dump(session: Session, args: argparse.Namespace) -> int:
     flow = flow_from_document(session.document())
     if args.file:
@@ -753,6 +820,7 @@ def build_parser() -> argparse.ArgumentParser:
     section.add_argument("--axis", choices=("x", "y"), default="y", help="cut along this axis (default y)")
     section.add_argument("--at", type=float, metavar="UM", help="where to cut, in µm; default: the middle")
     section.add_argument("--line", nargs=4, type=float, metavar=("X0", "Y0", "X1", "Y1"), help="cut along an arbitrary line")
+    section.add_argument("--named", metavar="LINE", help="cut along a saved section line, by name or number from `lines list`")
     section.add_argument("--interpolation", type=int, default=1, help="display upsampling factor")
     section.add_argument("--exact", action="store_true",
                          help="draw the stored slabs as they are, staircase included, instead of the surface they sample")
@@ -817,6 +885,18 @@ def build_parser() -> argparse.ArgumentParser:
     apply.add_argument("file")
     apply.add_argument("--kernel", help="when --root names a directory that is not a workspace yet, create it on this kernel")
     apply.set_defaults(handler=cmd_flow_apply, creates=True)
+
+    lines = commands.add_parser("lines", help="the saved AA–BB section lines")
+    line_commands = lines.add_subparsers(dest="lines_command", metavar="ACTION")
+    line_commands.required = True
+    line_commands.add_parser("list", help="every saved line").set_defaults(handler=cmd_lines_list)
+    line_add = line_commands.add_parser("add", help="save a line, or move one that has this name")
+    line_add.add_argument("name")
+    line_add.add_argument("coordinates", nargs=4, type=float, metavar=("X0", "Y0", "X1", "Y1"), help="A and B in µm")
+    line_add.set_defaults(handler=cmd_lines_add)
+    line_rm = line_commands.add_parser("rm", help="forget saved lines")
+    line_rm.add_argument("name", nargs="+")
+    line_rm.set_defaults(handler=cmd_lines_rm)
 
     log = commands.add_parser("log", help="what the worker recorded for this project")
     log.add_argument("-n", "--lines", type=int, default=30)

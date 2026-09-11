@@ -192,6 +192,9 @@ class ProjectDefinition:
     #: The XY arc sagitta of the slab kernel when it differs from the z step.
     #: None means the same as ``resolution_um``.
     resolution_xy_um: float | None = None
+    #: Named AA–BB section lines, each {"id", "name", "start": [x, y], "end": [x, y]}
+    #: in micrometres. They are the user's bookmarks into the geometry.
+    section_lines: list[dict[str, Any]] = field(default_factory=list)
 
 
 def dataclass_dict(value: Any) -> dict[str, Any]:

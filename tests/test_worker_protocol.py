@@ -845,3 +845,22 @@ def test_the_views_can_be_written_to_files(tmp_path, workspace):
     assert picture.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n" and saved["bytes"] == picture.stat().st_size
     with pytest.raises(InvalidRequest):
         call("save_image", destination=str(tmp_path / "x.png"), image="bm90IGEgcG5n")
+
+
+def test_named_section_lines_live_in_the_project(workspace):
+    """The AA–BB lines a user saves come back with the document, are checked,
+    and stay out of the way of everything else."""
+    document = call("open_workspace", root=str(workspace))
+    assert document["project"]["sectionLines"] == []
+    document["project"]["sectionLines"] = [
+        {"id": "diag", "name": "Diagonal", "start": [-0.5, -0.5], "end": [0.5, 0.5]},
+        {"name": "Across", "start": [-0.8, 0.1], "end": [0.8, 0.1]},
+    ]
+    saved = call("save_document", root=str(workspace), document=document)
+    lines = saved["project"]["sectionLines"]
+    assert [line["name"] for line in lines] == ["Diagonal", "Across"]
+    assert lines[0]["id"] == "diag" and lines[1]["id"]
+    assert call("open_workspace", root=str(workspace))["project"]["sectionLines"] == lines
+    document["project"]["sectionLines"] = [{"name": "Nowhere", "start": [0, 0], "end": [0, 0]}]
+    with pytest.raises(InvalidRequest):
+        call("save_document", root=str(workspace), document=document)

@@ -579,3 +579,14 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .footer-toggle { height: 26px; padding: 0 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-raised); color: var(--muted); font-size: 9px; cursor: pointer; }
 .footer-toggle.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .context-menu-group { display: contents; }
+
+/* Saved AA–BB lines on the top view: the followed one strong, the rest faint. */
+.image-overlay line.faint { stroke: rgba(224, 78, 90, 0.45); stroke-width: 1.5px; }
+.line-name { position: absolute; transform: translate(6px, -16px) scale(var(--inv-scale, 1)); transform-origin: 0 100%; padding: 0 4px; border-radius: 3px; background: rgba(224, 78, 90, 0.55); color: #ffffff; font-size: 8.5px; line-height: 13px; white-space: nowrap; pointer-events: none; }
+.line-picker { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 9px; }
+.line-picker select { height: 26px; padding: 0 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-raised); color: var(--text); font-size: 9px; }
+.draw-tools .line-picker { margin-left: 4px; }
+.line-modal { width: 420px; }
+.pair-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; margin-bottom: 8px; }
+.field-row.compact { margin: 0; }
+.modal-actions .footer-spacer { flex: 1; }

@@ -38,6 +38,8 @@ import {
   removeMaterial,
   removeRecipe,
   moveStep,
+  nextSectionLineName,
+  removeSectionLine,
   removeStep,
   renameStep,
   reorderSteps,
@@ -50,6 +52,7 @@ import {
   updateStep,
   updateStepParameters,
   upsertMaterial,
+  upsertSectionLine,
   upsertRecipe,
 } from "./domain/project";
 import type {
@@ -117,8 +120,8 @@ export default function App() {
   const [mode, setMode] = useState<ViewMode>("surfaces");
   const [interpolation, setInterpolation] = useState(1);
   const [sectionAxis, setSectionAxis] = useState<SectionAxis>("y");
-  // The AA–BB line drawn on the top view, in micrometres; null until drawn.
-  const [sectionLine, setSectionLine] = useState<SectionLine | null>(null);
+  // Which of the project's saved AA–BB lines the section follows.
+  const [activeLineId, setActiveLineId] = useState<string | null>(null);
   const [sectionIndex, setSectionIndex] = useState<number | null>(null);
   // Sampled films drawn as the surface they sample, or as the stored slabs.
   const [smoothSection, setSmoothSection] = useState(true);
@@ -162,6 +165,8 @@ export default function App() {
   const root = document?.root;
   const branchId = branch?.id;
   const steps = document ? getSteps(document) : [];
+  const sectionLines = document?.project.sectionLines ?? [];
+  const sectionLine = sectionLines.find((line) => line.id === activeLineId) ?? null;
   const selectedStep = steps.find((step) => step.id === selectedStepId);
   const statuses = useMemo(
     () => (document && branch ? document.stepStatuses[branch.id] ?? {} : {}),
@@ -910,15 +915,35 @@ export default function App() {
             setSectionIndex(null);
             sectionPosition.current = null;
           }}
+          sectionLines={sectionLines}
           sectionLine={sectionLine}
-          onSectionLineChange={(line) => {
-            setSectionLine(line);
-            if (line) {
-              // A freshly drawn line is what the user wants to look at.
-              setSectionAxis("line");
-              setMode("section");
-            } else if (sectionAxis === "line") {
-              setSectionAxis("y");
+          windowBounds={{
+            xMin: document.project.grid.xMin,
+            xMax: document.project.grid.xMax,
+            yMin: document.project.grid.yMin,
+            yMax: document.project.grid.yMax,
+          }}
+          onSelectLine={(lineId) => {
+            setActiveLineId(lineId);
+            if (lineId) setSectionAxis("line");
+            else if (sectionAxis === "line") setSectionAxis("y");
+          }}
+          onSaveLine={(line) => {
+            const isNew = !line.id;
+            const saved: SectionLine = isNew
+              ? { ...line, id: newId("line"), name: line.name || nextSectionLineName(document) }
+              : line;
+            setDocument(upsertSectionLine(document, saved));
+            setActiveLineId(saved.id);
+            setSectionAxis("line");
+            // A freshly drawn line is what the user wants to look at.
+            if (isNew) setMode("section");
+          }}
+          onRemoveLine={(lineId) => {
+            setDocument(removeSectionLine(document, lineId));
+            if (activeLineId === lineId) {
+              setActiveLineId(null);
+              if (sectionAxis === "line") setSectionAxis("y");
             }
           }}
           smoothSection={smoothSection}

@@ -9,6 +9,8 @@ import {
   FileBox,
   Image as ImageIcon,
   LoaderCircle,
+  PenLine,
+  Plus,
   Ruler,
   Scissors,
   TriangleAlert,
@@ -16,6 +18,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ContextMenu, type MenuAnchor } from "./ContextMenu";
+import { SectionLineEditor } from "./SectionLineEditor";
 import * as THREE from "three";
 import type {
   ImageExtent,
@@ -46,8 +49,14 @@ interface ViewportProps {
   onSectionAxisChange: (axis: SectionAxis) => void;
   sectionIndex: number;
   onSectionIndexChange: (index: number) => void;
+  /** The project's saved AA–BB lines, and the one the section follows. */
+  sectionLines: SectionLine[];
   sectionLine: SectionLine | null;
-  onSectionLineChange: (line: SectionLine | null) => void;
+  windowBounds: { xMin: number; xMax: number; yMin: number; yMax: number };
+  onSelectLine: (lineId: string | null) => void;
+  /** An empty id means a new line; the app names and numbers it. */
+  onSaveLine: (line: SectionLine) => void;
+  onRemoveLine: (lineId: string) => void;
   smoothSection: boolean;
   onSmoothSectionChange: (smooth: boolean) => void;
   materials: MaterialDefinition[];
@@ -513,11 +522,13 @@ function PictureView({
 /** The AA–BB line drawn over the top view, as fractions of the frame. */
 function SectionLineOverlay({
   extent,
-  line,
+  lines,
+  activeId,
   pendingStart,
 }: {
   extent: ImageExtent;
-  line: SectionLine | null;
+  lines: SectionLine[];
+  activeId: string | null;
   pendingStart: [number, number] | null;
 }) {
   const width = extent.horizontalMax - extent.horizontalMin;
@@ -526,15 +537,28 @@ function SectionLineOverlay({
     (x - extent.horizontalMin) / width,
     (extent.verticalMax - y) / height,
   ];
-  const ends = line ? [toFraction(line.start), toFraction(line.end)] : null;
+  // Every saved line is drawn faintly with its name; the one the section
+  // follows is drawn strong, with its A and B.
+  const active = lines.find((line) => line.id === activeId) ?? null;
+  const others = lines.filter((line) => line.id !== activeId);
+  const ends = active ? [toFraction(active.start), toFraction(active.end)] : null;
   const pending = pendingStart ? toFraction(pendingStart) : null;
   return (
     <>
-      {ends && (
+      {(ends || others.length > 0) && (
         <svg className="image-overlay" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true">
-          <line x1={ends[0][0]} y1={ends[0][1]} x2={ends[1][0]} y2={ends[1][1]} />
+          {others.map((line) => {
+            const [a, b] = [toFraction(line.start), toFraction(line.end)];
+            return <line key={line.id} className="faint" x1={a[0]} y1={a[1]} x2={b[0]} y2={b[1]} />;
+          })}
+          {ends && <line x1={ends[0][0]} y1={ends[0][1]} x2={ends[1][0]} y2={ends[1][1]} />}
         </svg>
       )}
+      {others.map((line) => (
+        <span key={line.id} className="line-name" style={percent(toFraction(line.start))}>
+          {line.name}
+        </span>
+      ))}
       {ends && (
         <>
           <i className="line-dot" style={percent(ends[0])} />
@@ -567,8 +591,12 @@ export function Viewport({
   onSectionAxisChange,
   sectionIndex,
   onSectionIndexChange,
+  sectionLines,
   sectionLine,
-  onSectionLineChange,
+  windowBounds,
+  onSelectLine,
+  onSaveLine,
+  onRemoveLine,
   smoothSection,
   onSmoothSectionChange,
   materials,
@@ -589,7 +617,7 @@ export function Viewport({
       return;
     }
     if (pendingStart[0] === point[0] && pendingStart[1] === point[1]) return;
-    onSectionLineChange({ start: pendingStart, end: point });
+    onSaveLine({ id: "", name: "", start: pendingStart, end: point });
     setPendingStart(null);
     setDrawing(false);
   };
@@ -597,6 +625,42 @@ export function Viewport({
     setDrawing(false);
     setPendingStart(null);
   };
+  // The dialog for exact coordinates: an existing line, or a fresh one
+  // laid across the middle of the window to start from.
+  const [lineEditor, setLineEditor] = useState<{ line: SectionLine; isNew: boolean } | null>(null);
+  const openLineEditor = (line?: SectionLine) => {
+    if (line) {
+      setLineEditor({ line, isNew: false });
+      return;
+    }
+    const width = windowBounds.xMax - windowBounds.xMin;
+    const y = (windowBounds.yMin + windowBounds.yMax) / 2;
+    setLineEditor({
+      line: {
+        id: "",
+        name: "",
+        start: [Number((windowBounds.xMin + width * 0.1).toFixed(4)), Number(y.toFixed(4))],
+        end: [Number((windowBounds.xMax - width * 0.1).toFixed(4)), Number(y.toFixed(4))],
+      },
+      isNew: true,
+    });
+  };
+  const linePicker = (
+    <label className="line-picker">
+      Line
+      <select
+        value={sectionLine?.id ?? ""}
+        onChange={(event) => onSelectLine(event.target.value || null)}
+      >
+        <option value="">{sectionLines.length ? "none" : "none saved"}</option>
+        {sectionLines.map((line) => (
+          <option key={line.id} value={line.id}>
+            {line.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
 
   // The export menu on the view, and the 3D canvas's own frame grabber.
   const [menu, setMenu] = useState<MenuAnchor | null>(null);
@@ -723,10 +787,21 @@ export function Viewport({
                 {drawing ? (pendingStart ? "Click B" : "Click A") : "Draw AA–BB"}
               </button>
             )}
+            {mode === "top" && !drawing && (
+              <button
+                type="button"
+                title="A new AA–BB line from exact coordinates"
+                onClick={() => openLineEditor()}
+              >
+                <Plus size={13} />
+                Line by coordinates
+              </button>
+            )}
+            {mode === "top" && !drawing && sectionLines.length > 0 && linePicker}
             {mode === "top" && sectionLine && !drawing && (
-              <button type="button" title="Remove the AA–BB line" onClick={() => onSectionLineChange(null)}>
-                <X size={13} />
-                Clear line
+              <button type="button" title="Edit or delete this line" onClick={() => openLineEditor(sectionLine)}>
+                <PenLine size={13} />
+                Edit line
               </button>
             )}
             <button
@@ -778,6 +853,22 @@ export function Viewport({
         }}
       >
         {menu && <ContextMenu anchor={menu} items={menuItems()} onClose={closeMenu} />}
+        {lineEditor && (
+          <SectionLineEditor
+            line={lineEditor.line}
+            window={windowBounds}
+            isNew={lineEditor.isNew}
+            onSave={(line) => {
+              setLineEditor(null);
+              onSaveLine(line);
+            }}
+            onDelete={() => {
+              setLineEditor(null);
+              onRemoveLine(lineEditor.line.id);
+            }}
+            onClose={() => setLineEditor(null)}
+          />
+        )}
         {error ? (
           <div className="view-placeholder">
             <CircleAlert size={20} />
@@ -858,7 +949,12 @@ export function Viewport({
                 : undefined
             }
           >
-            <SectionLineOverlay extent={topView.extent} line={sectionLine} pendingStart={pendingStart} />
+            <SectionLineOverlay
+              extent={topView.extent}
+              lines={sectionLines}
+              activeId={sectionLine?.id ?? null}
+              pendingStart={pendingStart}
+            />
           </PictureView>
         ) : (
           <div className="view-placeholder">
@@ -891,18 +987,31 @@ export function Viewport({
               >
                 <option value="y">Along y</option>
                 <option value="x">Along x</option>
-                <option value="line" disabled={!sectionLine}>
-                  AA–BB line{sectionLine ? "" : " (draw it on the top view)"}
+                <option value="line" disabled={sectionLines.length === 0}>
+                  AA–BB line{sectionLines.length ? "" : " (draw one on the top view)"}
                 </option>
               </select>
             </label>
             {sectionAxis === "line" ? (
-              sectionLine && (
-                <code className="line-ends">
-                  A ({sectionLine.start[0].toFixed(3)}, {sectionLine.start[1].toFixed(3)}) → B (
-                  {sectionLine.end[0].toFixed(3)}, {sectionLine.end[1].toFixed(3)}) µm
-                </code>
-              )
+              <>
+                {linePicker}
+                {sectionLine && (
+                  <code className="line-ends">
+                    A ({sectionLine.start[0].toFixed(3)}, {sectionLine.start[1].toFixed(3)}) → B (
+                    {sectionLine.end[0].toFixed(3)}, {sectionLine.end[1].toFixed(3)}) µm
+                  </code>
+                )}
+                {sectionLine && (
+                  <button
+                    type="button"
+                    className="footer-toggle"
+                    title="Edit this line's coordinates"
+                    onClick={() => openLineEditor(sectionLine)}
+                  >
+                    Edit
+                  </button>
+                )}
+              </>
             ) : (
               section && (
                 <label>

@@ -8,6 +8,9 @@ import {
   hasDirtySteps,
   loadRecipeIntoStep,
   moveStep,
+  nextSectionLineName,
+  removeSectionLine,
+  upsertSectionLine,
   recipeFromStep,
   removeRecipe,
   removeStep,
@@ -200,5 +203,23 @@ describe("flow editing", () => {
     expect(stepAccentColor(document, getSteps(document).find((s) => s.id === "step-ald")!)).toBe("#ef9b35");
     expect(stepAccentColor(document, getSteps(document).find((s) => s.id === "step-etch")!)).toBe("#7b68b8");
     expect(stepAccentColor(document, getSteps(document).find((s) => s.id === "step-litho")!)).toBe("#98a5b1");
+  });
+});
+
+describe("section lines", () => {
+  it("saves, replaces and forgets named lines on the project", () => {
+    const document = demoDocument();
+    expect(nextSectionLineName(document)).toBe("Line 1");
+    const one = upsertSectionLine(document, { id: "a", name: "Line 1", start: [-0.5, 0], end: [0.5, 0] });
+    expect(one.project.sectionLines).toHaveLength(1);
+    expect(nextSectionLineName(one)).toBe("Line 2");
+    const moved = upsertSectionLine(one, { id: "a", name: "Across", start: [-0.6, 0.1], end: [0.6, 0.1] });
+    expect(moved.project.sectionLines).toEqual([
+      { id: "a", name: "Across", start: [-0.6, 0.1], end: [0.6, 0.1] },
+    ]);
+    expect(removeSectionLine(moved, "a").project.sectionLines).toEqual([]);
+    // Editing lines never touches the flow or its results.
+    expect(moved.branches).toBe(document.branches);
+    expect(moved.stepStatuses).toBe(document.stepStatuses);
   });
 });

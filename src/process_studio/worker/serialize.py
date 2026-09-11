@@ -279,7 +279,43 @@ def project_to_json(project: ProjectDefinition) -> dict[str, Any]:
         "kernel": project.kernel,
         "resolutionUm": project.resolution_um,
         "resolutionXyUm": project.resolution_xy_um,
+        "sectionLines": [dict(line) for line in project.section_lines],
     }
+
+
+def section_lines_from_json(payload: Any) -> list[dict[str, Any]]:
+    """Named AA–BB lines, checked: an id, a name, two distinct points in µm."""
+    if payload is None:
+        return []
+    if not isinstance(payload, list):
+        raise InvalidRequest("sectionLines must be a list")
+    lines: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(payload, start=1):
+        if not isinstance(item, Mapping):
+            raise InvalidRequest(f"section line {index} must be an object")
+        line_id = str(item.get("id") or new_id())
+        if line_id in seen:
+            raise InvalidRequest(f"section line id {line_id!r} appears twice")
+        seen.add(line_id)
+        points = []
+        for key in ("start", "end"):
+            point = item.get(key)
+            if not isinstance(point, (list, tuple)) or len(point) != 2:
+                raise InvalidRequest(f"section line {index}: {key} must be [x, y] in micrometres")
+            try:
+                points.append([float(point[0]), float(point[1])])
+            except (TypeError, ValueError) as error:
+                raise InvalidRequest(f"section line {index}: {key} must be two numbers") from error
+        if points[0] == points[1]:
+            raise InvalidRequest(f"section line {index}: A and B must be different points")
+        lines.append({
+            "id": line_id,
+            "name": str(item.get("name") or f"Line {index}").strip() or f"Line {index}",
+            "start": points[0],
+            "end": points[1],
+        })
+    return lines
 
 
 def project_from_json(payload: Mapping[str, Any]) -> ProjectDefinition:
@@ -303,4 +339,5 @@ def project_from_json(payload: Mapping[str, Any]) -> ProjectDefinition:
         kernel=str(payload.get("kernel") or default_kernel()),
         resolution_um=None if resolution in (None, "") else float(resolution),
         resolution_xy_um=None if resolution_xy in (None, "") else float(resolution_xy),
+        section_lines=section_lines_from_json(payload.get("sectionLines")),
     )

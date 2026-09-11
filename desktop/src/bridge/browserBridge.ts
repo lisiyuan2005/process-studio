@@ -218,6 +218,7 @@ export function demoDocument(): WorkspaceDocument {
       kernel: "levelset",
       resolutionUm: null,
       resolutionXyUm: null,
+      sectionLines: [],
     },
     branches: [
       {

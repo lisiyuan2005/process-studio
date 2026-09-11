@@ -48,6 +48,7 @@ cd ~/devices/dram
 | `materials list\|add NAME [--category --color --opacity]\|rm NAME` | 材料库 |
 | `recipes list\|export FILE.xlsx\|import FILE.xlsx` | Recipe 库 |
 | `sketch list\|show ID\|export ID FILE\|import ID FILE` | Quick Sketch |
+| `lines list\|add NAME X0 Y0 X1 Y1\|rm NAME` | 保存的 AA–BB 截面线；`view section --named NAME` 沿其中一条切 |
 | `flow dump [FILE]` / `flow apply FILE` | 整条流程写成一个文件 / 按文件设置工作目录 |
 | `log [-n N]` | worker 记录的运行日志 |
 | `rpc METHOD [JSON\|@file]` | 直接调 RPC 方法，给脚本用 |

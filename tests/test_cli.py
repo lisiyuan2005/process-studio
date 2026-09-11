@@ -215,3 +215,17 @@ def test_rpc_and_log_are_there_for_scripts(workspace: Path):
     assert code == EXIT_OK and "Lithography completed" in out
     code, _, _ = run("kernels")
     assert code == EXIT_OK
+
+
+def test_section_lines_can_be_saved_and_cut_along(workspace: Path, tmp_path: Path):
+    line = as_json("lines", "add", "Diagonal", "-0.6", "-0.6", "0.6", "0.6", root=workspace)
+    assert line["name"] == "Diagonal" and line["end"] == [0.6, 0.6]
+    rows = as_json("lines", "list", root=workspace)
+    assert [row["name"] for row in rows] == ["Diagonal"]
+    as_json("run", "--through", "2", root=workspace)
+    picture = tmp_path / "diag.png"
+    assert run("view", "section", "--step", "2", "--named", "Diagonal", "-o", str(picture), root=workspace)[0] == EXIT_OK
+    assert picture.stat().st_size > 0
+    code, _, err = run("view", "section", "--named", "Missing", "-o", str(tmp_path / "x.png"), root=workspace)
+    assert code == EXIT_USAGE and "no section line" in err
+    assert as_json("lines", "rm", "Diagonal", root=workspace) == []

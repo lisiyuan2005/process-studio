@@ -94,6 +94,11 @@ def flow_from_document(document: Mapping[str, Any]) -> dict[str, Any]:
         }
         for material in document["materials"]
     ]
+    lines = document["project"].get("sectionLines", [])
+    if lines:
+        flow["section_lines"] = [
+            {"name": line["name"], "start": list(line["start"]), "end": list(line["end"])} for line in lines
+        ]
     flow["sketches"] = {
         sketch["id"]: {"name": sketch["name"], "shapes": sketch["shapes"]}
         for sketch in document.get("sketches", [])
@@ -245,6 +250,11 @@ def apply_flow(session: Session, flow: Mapping[str, Any]) -> dict[str, Any]:
 
     if "name" in flow:
         document["project"]["name"] = str(flow["name"])
+    if isinstance(flow.get("section_lines"), list):
+        document["project"]["sectionLines"] = [
+            {"id": new_id(), "name": str(item.get("name") or f"Line {index}"), "start": list(item["start"]), "end": list(item["end"])}
+            for index, item in enumerate(flow["section_lines"], start=1)
+        ]
 
     materials = flow.get("materials")
     if isinstance(materials, list):

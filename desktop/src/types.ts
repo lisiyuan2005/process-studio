@@ -133,6 +133,7 @@ export interface ProjectSummary {
   resolutionUm: number | null;
   /** The slab kernel's XY arc sagitta when it differs from the z step; null follows it. */
   resolutionXyUm: number | null;
+  sectionLines: SectionLine[];
 }
 
 export interface SketchShape {
@@ -219,7 +220,10 @@ export interface ImageExtent {
 }
 
 /** The AA–BB line of a free section: two points in micrometres. */
+/** A named AA–BB cut, saved with the project; points are in micrometres. */
 export interface SectionLine {
+  id: string;
+  name: string;
   start: [number, number];
   end: [number, number];
 }

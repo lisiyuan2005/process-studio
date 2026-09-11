@@ -1,4 +1,5 @@
 import type {
+  SectionLine,
   FlowBranch,
   MaterialDefinition,
   ParameterValue,
@@ -353,5 +354,32 @@ export function validateDocument(value: unknown): value is WorkspaceDocument {
     document.branches.length > 0 &&
     Array.isArray(document.recipes) &&
     Array.isArray(document.materials)
+  );
+}
+
+/** A name no saved line has yet: "Line 1", "Line 2", ... */
+export function nextSectionLineName(document: WorkspaceDocument): string {
+  const taken = new Set(document.project.sectionLines.map((line) => line.name));
+  let number = document.project.sectionLines.length + 1;
+  while (taken.has(`Line ${number}`)) number += 1;
+  return `Line ${number}`;
+}
+
+function withSectionLines(document: WorkspaceDocument, sectionLines: SectionLine[]): WorkspaceDocument {
+  return { ...document, project: { ...document.project, sectionLines } };
+}
+
+/** Save a line: a new id appends it, a known id replaces it in place. */
+export function upsertSectionLine(document: WorkspaceDocument, line: SectionLine): WorkspaceDocument {
+  const lines = document.project.sectionLines;
+  const index = lines.findIndex((item) => item.id === line.id);
+  if (index < 0) return withSectionLines(document, [...lines, line]);
+  return withSectionLines(document, lines.map((item, at) => (at === index ? line : item)));
+}
+
+export function removeSectionLine(document: WorkspaceDocument, lineId: string): WorkspaceDocument {
+  return withSectionLines(
+    document,
+    document.project.sectionLines.filter((line) => line.id !== lineId),
   );
 }
