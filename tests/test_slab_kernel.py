@@ -246,8 +246,19 @@ def test_the_views_are_pictures_of_this_state(kernel, project, sketches):
     state = kernel.initial_state(project, materials=materials)
     surfaces = kernel.surfaces(state, project=project)
     assert [surface["material"] for surface in surfaces["surfaces"]] == ["Si"]
-    assert surfaces["surfaces"][0]["triangleCount"] > 0
+    silicon = surfaces["surfaces"][0]
+    assert silicon["triangleCount"] > 0
     assert surfaces["exact"] is True
+    # Flat faces are shaded flat: every corner of a triangle carries that
+    # triangle's own normal, and the wafer top points straight up.
+    import numpy as np
+
+    normals = np.frombuffer(base64.b64decode(silicon["normals"]), dtype=np.float32).reshape(-1, 3, 3)
+    positions = np.frombuffer(base64.b64decode(silicon["positions"]), dtype=np.float32).reshape(-1, 3, 3)
+    assert np.allclose(normals[:, 0], normals[:, 1]) and np.allclose(normals[:, 0], normals[:, 2])
+    top = np.isclose(positions[:, :, 2], 0.0).all(axis=1)
+    assert top.any()
+    assert np.allclose(normals[top][:, 0], [0.0, 0.0, 1.0])
 
     section = kernel.section(state, colors, project=project, axis="y")
     assert section["axis"] == "y"

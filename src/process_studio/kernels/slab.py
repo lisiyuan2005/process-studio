@@ -571,16 +571,22 @@ class SlabKernel:
         payload = []
         for name in selected:
             mesh = meshes[name]
-            positions = np.asarray(mesh.vertices, dtype=np.float64).copy()
-            positions[:, 2] += state.z_offset
-            faces = np.asarray(mesh.faces, dtype=np.uint32)
+            # Slab faces are flat and meet at sharp edges, and a flat face is
+            # two triangles however large it is. Shading them with averaged
+            # vertex normals would blend the top face into the walls along
+            # those two diagonals, which shows up as a dark cross on a square.
+            # So each triangle gets its own three vertices and its face normal.
+            faces = np.asarray(mesh.faces, dtype=np.int64)
+            corners = np.asarray(mesh.vertices, dtype=np.float64)[faces].reshape(-1, 3)
+            corners[:, 2] += state.z_offset
+            normals = np.repeat(np.asarray(mesh.face_normals, dtype=np.float32), 3, axis=0)
             payload.append(
                 {
                     "material": name,
-                    "positions": _encode(positions.astype(np.float32)),
-                    "normals": _encode(np.asarray(mesh.vertex_normals, dtype=np.float32)),
-                    "indices": _encode(faces),
-                    "vertexCount": int(len(positions)),
+                    "positions": _encode(corners.astype(np.float32)),
+                    "normals": _encode(normals),
+                    "indices": _encode(np.arange(len(corners), dtype=np.uint32)),
+                    "vertexCount": int(len(corners)),
                     "triangleCount": int(len(faces)),
                 }
             )
