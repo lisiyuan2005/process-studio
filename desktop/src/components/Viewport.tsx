@@ -233,7 +233,6 @@ function PictureView({
   measurement,
   pendingStart,
   onPoint,
-  onHover,
   onClickCapture,
   children,
 }: {
@@ -248,7 +247,6 @@ function PictureView({
   measurement: Measurement | null;
   pendingStart: [number, number] | null;
   onPoint: (point: [number, number]) => void;
-  onHover: (point: [number, number] | null) => void;
   /** Takes the click instead of the measurement when it returns true. */
   onClickCapture?: (point: [number, number]) => boolean;
   children?: React.ReactNode;
@@ -261,10 +259,6 @@ function PictureView({
   const frame = useRef<HTMLDivElement>(null);
   const size = useFittedSize(container, width, height);
   const [hover, setHover] = useState<[number, number] | null>(null);
-  const moved = (point: [number, number] | null) => {
-    setHover(point);
-    onHover(point);
-  };
   const spanH = extent.horizontalMax - extent.horizontalMin;
   const spanV = extent.verticalMax - extent.verticalMin;
   const toFraction = ([h, v]: [number, number]): [number, number] => [
@@ -297,8 +291,8 @@ function PictureView({
         className={`image-frame ${measuring || onClickCapture ? "drawing" : ""}`}
         style={size ?? undefined}
         onClick={click}
-        onMouseMove={(event) => moved(fromEvent(event))}
-        onMouseLeave={() => moved(null)}
+        onMouseMove={(event) => setHover(fromEvent(event))}
+        onMouseLeave={() => setHover(null)}
       >
         <img src={`data:image/png;base64,${image}`} alt={alt} />
         {children}
@@ -418,17 +412,15 @@ export function Viewport({
     setPendingStart(null);
   };
 
-  // The ruler: two clicks measure a distance on the picture, and the cursor
-  // position is read out in the footer. Both reset when the view changes.
+  // The ruler: two clicks measure a distance on the picture. It resets when
+  // the view changes; the cursor readout lives in the picture view itself.
   const [measuring, setMeasuring] = useState(false);
   const [measurement, setMeasurement] = useState<Measurement | null>(null);
   const [measureStart, setMeasureStart] = useState<[number, number] | null>(null);
-  const [cursor, setCursor] = useState<[number, number] | null>(null);
   useEffect(() => {
     setMeasuring(false);
     setMeasurement(null);
     setMeasureStart(null);
-    setCursor(null);
   }, [mode]);
   const measurePoint = (point: [number, number]) => {
     if (!measureStart) {
@@ -606,7 +598,6 @@ export function Viewport({
               measurement={measurement}
               pendingStart={measureStart}
               onPoint={measurePoint}
-              onHover={setCursor}
             />
           ) : (
             <div className="view-placeholder">
@@ -625,7 +616,6 @@ export function Viewport({
             measurement={measurement}
             pendingStart={measureStart}
             onPoint={measurePoint}
-            onHover={setCursor}
             onClickCapture={
               drawing
                 ? (point) => {
