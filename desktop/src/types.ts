@@ -186,6 +186,8 @@ export interface SurfacePayload {
   shading?: "flat" | "smooth";
   /** Base64 little-endian Uint32Array, three indices per triangle. */
   indices: string;
+  /** Base64 Uint8Array, one flag per triangle: 1 where the face lies against another material. */
+  interfaceFaces?: string;
   vertexCount: number;
   triangleCount: number;
 }

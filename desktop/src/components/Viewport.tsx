@@ -67,19 +67,51 @@ function decodeIndices(value: string): Uint32Array {
   return new Uint32Array(bytes.buffer);
 }
 
+function decodeBytes(value: string): Uint8Array {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
 function SurfaceMesh({
   surface,
   opacity,
   offset,
+  order,
+  showInterfaces,
 }: {
   surface: SurfacePayload;
   opacity: number;
   offset: THREE.Vector3;
+  /** The material's place in the draw order, for a deterministic depth bias. */
+  order: number;
+  /** Draw the faces that lie against another material, because one is hidden. */
+  showInterfaces: boolean;
 }) {
   const geometry = useMemo(() => {
     const buffer = new THREE.BufferGeometry();
     buffer.setAttribute("position", new THREE.BufferAttribute(decodeFloats(surface.positions), 3));
-    buffer.setIndex(new THREE.BufferAttribute(decodeIndices(surface.indices), 1));
+    let indices = decodeIndices(surface.indices);
+    if (!showInterfaces && surface.interfaceFaces) {
+      // A face between two materials is in both meshes at exactly the same
+      // place. Drawn twice, the two copies fight for the pixels and shimmer
+      // as the camera moves. While every material is shown such a face is
+      // interior anyway, so it is drawn by neither; once a material is
+      // hidden the faces come back to show the cavity it leaves.
+      const flags = decodeBytes(surface.interfaceFaces);
+      const kept = new Uint32Array(indices.length);
+      let count = 0;
+      for (let face = 0; face < flags.length; face += 1) {
+        if (flags[face]) continue;
+        kept[count] = indices[face * 3];
+        kept[count + 1] = indices[face * 3 + 1];
+        kept[count + 2] = indices[face * 3 + 2];
+        count += 3;
+      }
+      indices = kept.subarray(0, count);
+    }
+    buffer.setIndex(new THREE.BufferAttribute(indices, 1));
     if (surface.normals) {
       buffer.setAttribute("normal", new THREE.BufferAttribute(decodeFloats(surface.normals), 3));
       return buffer;
@@ -91,7 +123,7 @@ function SurfaceMesh({
     flat.computeVertexNormals();
     buffer.dispose();
     return flat;
-  }, [surface.positions, surface.normals, surface.indices]);
+  }, [surface.positions, surface.normals, surface.indices, surface.interfaceFaces, showInterfaces]);
 
   // Marching-cubes buffers are large; release them when the step changes.
   useEffect(() => () => geometry.dispose(), [geometry]);
@@ -105,6 +137,13 @@ function SurfaceMesh({
         roughness={0.62}
         metalness={0.08}
         side={THREE.DoubleSide}
+        // Faces of different materials that still coincide (a level-set
+        // interface, or an interface shown because a neighbour is hidden)
+        // are settled by a small per-material depth bias instead of by
+        // whichever triangle happens to rasterise closer this frame.
+        polygonOffset
+        polygonOffsetFactor={order}
+        polygonOffsetUnits={order}
       />
     </mesh>
   );
@@ -120,40 +159,56 @@ function SurfaceScene({
   hiddenMaterials: string[];
 }) {
   const { bounds } = surfaces;
-  const center = new THREE.Vector3(
-    (bounds.xMin + bounds.xMax) / 2,
-    (bounds.yMin + bounds.yMax) / 2,
-    (bounds.zMin + bounds.zMax) / 2,
-  );
   const span = Math.max(
     bounds.xMax - bounds.xMin,
     bounds.yMax - bounds.yMin,
     bounds.zMax - bounds.zMin,
   );
   const distance = span * 2.1;
+  // Stable objects: a new camera description on every render would reset
+  // the view the user has turned to. The clip planes hug the model so the
+  // depth buffer spends its precision where the geometry is.
+  const center = useMemo(
+    () =>
+      new THREE.Vector3(
+        (bounds.xMin + bounds.xMax) / 2,
+        (bounds.yMin + bounds.yMax) / 2,
+        (bounds.zMin + bounds.zMax) / 2,
+      ),
+    [bounds.xMin, bounds.xMax, bounds.yMin, bounds.yMax, bounds.zMin, bounds.zMax],
+  );
+  const camera = useMemo(
+    () => ({
+      position: [distance, -distance, distance * 0.85] as [number, number, number],
+      fov: 38,
+      up: [0, 0, 1] as [number, number, number],
+      near: span * 0.02,
+      far: span * 40,
+    }),
+    [distance, span],
+  );
+  const shown = surfaces.surfaces.filter((surface) => !hiddenMaterials.includes(surface.material));
 
   return (
-    <Canvas
-      camera={{ position: [distance, -distance, distance * 0.85], fov: 38, up: [0, 0, 1] }}
-      dpr={[1, 2]}
-    >
+    // Frames are drawn only when something changed: a still scene stays
+    // still, and a driver that re-presents each frame differently has
+    // nothing to flicker with.
+    <Canvas camera={camera} dpr={[1, 2]} frameloop="demand">
       <color attach="background" args={["#f4f7f9"]} />
       <ambientLight intensity={0.72} />
       <directionalLight position={[span, -span, span * 1.6]} intensity={1.25} />
       <directionalLight position={[-span, span * 0.6, span]} intensity={0.45} />
       <group>
-        {surfaces.surfaces
-          .filter((surface) => !hiddenMaterials.includes(surface.material))
-          .map((surface) => (
-            <SurfaceMesh
-              key={surface.material}
-              surface={surface}
-              opacity={
-                materials.find((material) => material.name === surface.material)?.opacity ?? 1
-              }
-              offset={center}
-            />
-          ))}
+        {shown.map((surface, index) => (
+          <SurfaceMesh
+            key={surface.material}
+            surface={surface}
+            opacity={materials.find((material) => material.name === surface.material)?.opacity ?? 1}
+            offset={center}
+            order={index}
+            showInterfaces={hiddenMaterials.length > 0}
+          />
+        ))}
         <gridHelper
           args={[span * 1.4, 14, "#c7d2db", "#dde5eb"]}
           rotation={[Math.PI / 2, 0, 0]}

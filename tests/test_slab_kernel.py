@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 
+import numpy as np
+
 import pytest
 
 from process_studio.defaults import default_grid, default_materials
@@ -426,6 +428,15 @@ def test_repeated_conformal_films_of_one_material_mesh_as_one_solid(kernel, proj
     report = state.device.validate_mesh()
     assert report.valid, report.materials["W"].errors
     assert report.materials["W"].components == 1
+    # Where the metal lies against the wafer, both meshes carry that face and
+    # both mark it as an interface, which is what lets the viewer draw it once.
+    payload = {s["material"]: s for s in kernel.surfaces(state, project=project)["surfaces"]}
+    flags = {
+        name: np.frombuffer(base64.b64decode(s["interfaceFaces"]), dtype=np.uint8)
+        for name, s in payload.items()
+    }
+    assert flags["W"].any() and flags["Si"].any()
+    assert 0 < flags["W"].sum() < len(flags["W"])
     section = state.device.cross_section((-0.8, 0.0), (0.8, 0.0))
     # Four films of 60 nm, read at distances along the section line: 240 nm
     # over the wafer at x = -0.7, and 240 nm over the trench floor at x = 0,
@@ -470,6 +481,9 @@ def test_the_3d_view_is_built_once_and_kept_beside_the_snapshot(tmp_path, kernel
     indices = np.frombuffer(base64.b64decode(surface["indices"]), dtype=np.uint32)
     assert surface["vertexCount"] == len(positions) < surface["triangleCount"] * 3
     assert indices.max() < len(positions)
+    interface = np.frombuffer(base64.b64decode(surface["interfaceFaces"]), dtype=np.uint8)
+    # The wafer alone touches nothing, so no face of it is an interface.
+    assert len(interface) == surface["triangleCount"] and not interface.any()
     # Heights are the project's: the wafer top sits at z = 0.
     assert positions[:, 2].max() == pytest.approx(0.0)
 

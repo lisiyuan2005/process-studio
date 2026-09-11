@@ -138,8 +138,9 @@ class SlabState:
         self.z_offset = float(z_offset)
         #: Where this state was stored, so its display mesh can live beside it.
         self.path: Path | None = None
-        #: The display mesh, once built: material -> (vertices, triangles).
-        self.display_meshes: dict[str, tuple[np.ndarray, np.ndarray]] | None = None
+        #: The display mesh, once built: material -> (vertices, triangles,
+        #: one flag per triangle saying it lies against another material).
+        self.display_meshes: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] | None = None
         #: Held while the mesh is being built, so a view asked for during
         #: the background build waits for it instead of building a second one.
         self.mesh_lock = threading.Lock()
@@ -201,7 +202,10 @@ class SlabState:
 MESH_SIDECAR = ".mesh.npz"
 
 
-def display_meshes(state: SlabState) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+DisplayMeshes = dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]
+
+
+def display_meshes(state: SlabState) -> DisplayMeshes:
     """The 3D view's triangles for each material, built once per stored state.
 
     Building the mesh is the slow part of the slab kernel: seconds for a few
@@ -221,19 +225,23 @@ def display_meshes(state: SlabState) -> dict[str, tuple[np.ndarray, np.ndarray]]
         return state.display_meshes
 
 
-def _load_or_build_meshes(state: SlabState) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+def _load_or_build_meshes(state: SlabState) -> DisplayMeshes:
     sidecar = None if state.path is None else state.path.with_name(state.path.name + MESH_SIDECAR)
-    meshes: dict[str, tuple[np.ndarray, np.ndarray]] | None = None
+    meshes: DisplayMeshes | None = None
     if sidecar is not None and sidecar.is_file():
         try:
             with np.load(sidecar) as stored:
                 names = [str(name) for name in stored["materials"]]
                 meshes = {
-                    name: (stored[f"{index}.vertices"], stored[f"{index}.faces"])
+                    name: (
+                        stored[f"{index}.vertices"],
+                        stored[f"{index}.faces"],
+                        stored[f"{index}.interface"],
+                    )
                     for index, name in enumerate(names)
                 }
         except (OSError, KeyError, ValueError):
-            meshes = None  # an unreadable sidecar is simply rebuilt
+            meshes = None  # an unreadable or older sidecar is simply rebuilt
     if meshes is None:
         from deviceflow._internal.mesh.builder import build_material_meshes
 
@@ -243,14 +251,20 @@ def _load_or_build_meshes(state: SlabState) -> dict[str, tuple[np.ndarray, np.nd
             material.name: (
                 np.ascontiguousarray(mesh.vertices, dtype=np.float32),
                 np.ascontiguousarray(mesh.faces, dtype=np.uint32),
+                # A face against another material is the same face in that
+                # material's mesh. The viewer leaves such faces out while
+                # every material is shown, so two copies never fight for the
+                # same pixels, and draws them once a neighbour is hidden.
+                np.ascontiguousarray(mesh.metadata["interface_faces"], dtype=np.uint8),
             )
             for material, mesh in built.items()
         }
         if sidecar is not None:
             arrays: dict[str, np.ndarray] = {"materials": np.array(list(meshes), dtype=str)}
-            for index, (vertices, faces) in enumerate(meshes.values()):
+            for index, (vertices, faces, interface) in enumerate(meshes.values()):
                 arrays[f"{index}.vertices"] = vertices
                 arrays[f"{index}.faces"] = faces
+                arrays[f"{index}.interface"] = interface
             try:
                 np.savez(sidecar, **arrays)
             except OSError:
@@ -716,7 +730,7 @@ class SlabKernel:
         if state.display_meshes is not None:
             coordinates += sum(
                 (vertices.nbytes + faces.nbytes) // 8
-                for vertices, faces in state.display_meshes.values()
+                for vertices, faces, _interface in state.display_meshes.values()
             )
         return 64 * 1024 + coordinates * 4 * 16
 
@@ -739,7 +753,7 @@ class SlabKernel:
         ]
         payload = []
         for name in selected:
-            vertices, faces = meshes[name]
+            vertices, faces, interface = meshes[name]
             # Slab faces are flat and meet at sharp edges, and a flat face is
             # two triangles however large it is. Shading them with averaged
             # vertex normals would blend the top face into the walls along
@@ -756,6 +770,7 @@ class SlabKernel:
                     "normals": "",
                     "shading": "flat",
                     "indices": _encode(faces),
+                    "interfaceFaces": _encode(interface),
                     "vertexCount": int(len(positions)),
                     "triangleCount": int(len(faces)),
                 }
