@@ -20,7 +20,14 @@ if not kernels:
 
 datas = []
 binaries = []
-hiddenimports = ["process_studio.worker", "process_studio.worker.protocol"]
+hiddenimports = ["process_studio.worker", "process_studio.worker.protocol", "process_studio.cli", "process_studio.cli.flowfile", "process_studio.cli.session"]
+# The CLI reads YAML flow files when pyyaml is installed; ship it if it is.
+try:
+    import yaml  # noqa: F401
+except ImportError:
+    pass
+else:
+    hiddenimports.append("yaml")
 excludes = ["pytest", "tkinter", "matplotlib"]
 packages = ["scipy", "skfmm", "gdstk", "openpyxl", "PIL"]
 # The registry imports kernel modules by name at start-up, which static

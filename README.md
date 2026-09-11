@@ -6,6 +6,7 @@
 
 > 当前版本是几何与流程可视化工具，不是经过晶圆厂数据标定的 TCAD/设备仿真器。
 
+命令行 `process-studio` 能在终端里建工程、改步骤、运行和导出视图，见 [docs/CLI.md](docs/CLI.md)。
 ## 一分钟启动
 
 桌面应用是 Tauri + React 外壳，工艺内核跑在一个 Python worker 进程里。开发运行：

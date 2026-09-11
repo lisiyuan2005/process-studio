@@ -22,10 +22,13 @@ dependencies = [
 
 [project.scripts]
 process-studio-worker = "process_studio.worker.run_worker:main"
+process-studio = "process_studio.cli:main"
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
 render = ["scikit-image>=0.25"]
+# Flow files in YAML; JSON and TOML need nothing extra.
+yaml = ["pyyaml>=6"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
