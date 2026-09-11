@@ -268,3 +268,37 @@ def test_the_views_are_pictures_of_this_state(kernel, project, sketches):
 
     top = kernel.top_view(state, colors, project=project)
     assert base64.b64decode(top["image"])[:4] == b"\x89PNG"
+
+
+def test_a_film_taller_than_the_window_is_a_unit_slip_and_says_so(kernel, project, sketches):
+    """Typing 50 for 50 nm asks for a 50 µm film; the message names the unit."""
+    materials = default_materials()
+    state = kernel.initial_state(project, materials=materials)
+    with pytest.raises(SlabError, match="micrometres: 50 nm is 0.05"):
+        kernel.run_step(
+            state,
+            step(
+                ProcessType.DEPOSIT,
+                parameters={"target": 50, "mode": "conformal"},
+                output_material="TiN",
+            ),
+            project=project,
+            recipes={},
+            sketches=sketches,
+            logger=lambda _message: None,
+            materials=materials,
+        )
+    with pytest.raises(SlabError, match="etch depth of 30 µm"):
+        kernel.run_step(
+            state,
+            step(
+                ProcessType.ETCH,
+                parameters={"target": 30, "directional_fraction": 1.0},
+                material_responses={"Si": MaterialResponse("Si", 0.1)},
+            ),
+            project=project,
+            recipes={},
+            sketches=sketches,
+            logger=lambda _message: None,
+            materials=materials,
+        )

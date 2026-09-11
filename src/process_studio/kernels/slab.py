@@ -29,6 +29,7 @@ from PIL import Image, ImageDraw
 from shapely.geometry import LineString, Point, Polygon, box
 
 from deviceflow import Device
+from deviceflow.exceptions import DeviceFlowError
 from deviceflow.mask import Mask
 from deviceflow.state_io import decode_state, encode_state
 
@@ -64,6 +65,41 @@ _ROLES = {
 
 class SlabError(ValueError):
     """A step the slab kernel cannot execute, explained in its message."""
+
+
+def _window_height(project: ProjectDefinition) -> float:
+    return float(project.grid["z_max"]) - float(project.grid["z_min"])
+
+
+def _check_length(value: float, what: str, project: ProjectDefinition) -> None:
+    """Refuse a length no window could hold; it is almost always a unit slip.
+
+    Lengths are micrometres. A 50 µm film on a 1.2 µm window is what typing
+    "50" for 50 nm produces, and running it would either take the kernel past
+    its own ceilings or fill the window edge to edge, neither of which is
+    what was meant.
+    """
+    height = _window_height(project)
+    if value > height:
+        raise SlabError(
+            f"{what} of {value:g} µm is taller than the whole project window "
+            f"({height:g} µm from z = {float(project.grid['z_min']):g} to "
+            f"{float(project.grid['z_max']):g}). Lengths are in micrometres: 50 nm is 0.05."
+        )
+
+
+def _translate(error: DeviceFlowError, project: ProjectDefinition) -> SlabError:
+    """DeviceFlow's own message, with the words that apply in this workspace."""
+    message = str(error)
+    if "z samples" in message:
+        resolution_nm = resolution_um(project) * 1000.0
+        message += (
+            f" In this workspace that means: the conformal walk at the current "
+            f"{resolution_nm:g} nm resolution needs more steps than the kernel allows "
+            "for this film; use a coarser resolution (the nm button in the top bar) "
+            "or a thinner film."
+        )
+    return SlabError(message)
 
 
 def _role(category: str) -> str:
@@ -291,13 +327,16 @@ def _etch_rates(recipe: Recipe, parameters: Mapping[str, Any]) -> dict[str, floa
     return rates
 
 
-def _deposit(device: Device, step: ProcessStep, recipe: Recipe, parameters, logger) -> None:
+def _deposit(
+    device: Device, step: ProcessStep, recipe: Recipe, parameters, logger, project: ProjectDefinition
+) -> None:
     material = str(parameters.get("material") or recipe.output_material or "")
     if not material:
         raise SlabError("a deposition step needs an output material")
     thickness = float(parameters.get("target", parameters.get("thickness", 0.0)))
     if thickness <= 0.0:
         raise SlabError("deposition thickness must be greater than zero")
+    _check_length(thickness, "A film", project)
     mode = str(parameters.get("mode", "conformal")).strip().lower()
     if mode in {"directional", "evaporation", "fill", "directional prism"}:
         raise SlabError(
@@ -323,6 +362,7 @@ def _etch(
     parameters,
     mask: Mask | None,
     logger,
+    project: ProjectDefinition,
 ) -> None:
     rates = _etch_rates(recipe, parameters)
     active = {name: rate for name, rate in rates.items() if rate > 0.0}
@@ -346,6 +386,7 @@ def _etch(
         depth = float(parameters["target"])
         if depth <= 0.0:
             raise SlabError("etch depth must be greater than zero")
+        _check_length(depth, "An etch depth", project)
         reference = max(active, key=lambda name: active[name])
         selectivity = {name: rates[name] / rates[reference] for name in rates}
         logger(f"SLAB etch {profile} {depth:g} um of {reference} ({len(rates)} material(s))")
@@ -524,15 +565,18 @@ class SlabKernel:
         recipe = step.effective_recipe(recipes)
         parameters = dict(recipe.parameters)
         logger(f"RUN {step.name} [{recipe.process_type.value}]")
-        if recipe.process_type is ProcessType.DEPOSIT:
-            _deposit(device, step, recipe, parameters, logger)
-        elif recipe.process_type is ProcessType.ETCH:
-            mask = step_mask(
-                device, step, project=project, parameters=parameters, sketches=sketches
-            )
-            _etch(device, step, recipe, parameters, mask, logger)
-        elif recipe.process_type is ProcessType.CMP:
-            _cmp(device, recipe, parameters, state.z_offset, logger)
+        try:
+            if recipe.process_type is ProcessType.DEPOSIT:
+                _deposit(device, step, recipe, parameters, logger, project)
+            elif recipe.process_type is ProcessType.ETCH:
+                mask = step_mask(
+                    device, step, project=project, parameters=parameters, sketches=sketches
+                )
+                _etch(device, step, recipe, parameters, mask, logger, project)
+            elif recipe.process_type is ProcessType.CMP:
+                _cmp(device, recipe, parameters, state.z_offset, logger)
+        except DeviceFlowError as error:
+            raise _translate(error, project) from error
         return SlabState(device, state.z_offset)
 
     def load_state(self, path: Path) -> SlabState:

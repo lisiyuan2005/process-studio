@@ -120,11 +120,25 @@ class ProcessEngine:
         started = time.perf_counter()
         self.logger(f"RUN {step.name} [{recipe.process_type.value}]")
 
+        window_height = float(state.grid.z_max - state.grid.z_min)
+
+        def check_length(value: float, what: str) -> None:
+            # A length no window could hold is almost always a unit slip:
+            # typing 50 for 50 nm asks for 50 µm. Say so instead of filling
+            # the window edge to edge or stepping through it for minutes.
+            if value > window_height:
+                raise ValueError(
+                    f"{what} of {value:g} µm is taller than the whole project window "
+                    f"({window_height:g} µm from z = {state.grid.z_min:g} to "
+                    f"{state.grid.z_max:g}). Lengths are in micrometres: 50 nm is 0.05."
+                )
+
         if recipe.process_type is ProcessType.DEPOSIT:
             material = str(parameters.get("material") or recipe.output_material or "")
             if not material:
                 raise ValueError("deposit recipe requires an output material")
             thickness = float(parameters.get("target", parameters.get("thickness", 0.0)))
+            check_length(thickness, "A film")
             rate = float(parameters.get("rate", 1.0))
             if parameters.get("mode") in {"directional", "evaporation", "fill"}:
                 result = patterned_deposit(
@@ -171,6 +185,7 @@ class ProcessEngine:
                 depth = float(parameters["time_min"]) * max(rates.values())
             else:
                 raise ValueError("etch recipe requires target depth or time")
+            check_length(depth, "An etch depth")
             if parameters.get("surface_z") is not None:
                 surface_z = float(parameters["surface_z"])
             else:

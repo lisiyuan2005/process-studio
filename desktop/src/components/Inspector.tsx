@@ -57,7 +57,13 @@ interface ParameterSpec {
 
 const PARAMETER_SPECS: Record<ProcessType, ParameterSpec[]> = {
   deposit: [
-    { key: "target", label: "Target thickness", unit: "µm", initial: 0.05 },
+    {
+      key: "target",
+      label: "Target thickness",
+      unit: "µm",
+      initial: 0.05,
+      hint: "Micrometres: 50 nm is 0.05.",
+    },
     { key: "rate", label: "Deposition rate", unit: "µm/min", initial: 0.01 },
     { key: "time_min", label: "Time", unit: "min", initial: 1 },
     { key: "temperature_c", label: "Temperature", unit: "°C", initial: 25 },
@@ -72,7 +78,7 @@ const PARAMETER_SPECS: Record<ProcessType, ParameterSpec[]> = {
     },
   ],
   etch: [
-    { key: "target", label: "Target depth", unit: "µm", initial: 0.1 },
+    { key: "target", label: "Target depth", unit: "µm", initial: 0.1, hint: "Micrometres: 100 nm is 0.1." },
     { key: "time_min", label: "Time", unit: "min", initial: 1 },
     { key: "temperature_c", label: "Temperature", unit: "°C", initial: 25 },
     {

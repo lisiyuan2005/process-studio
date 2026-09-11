@@ -647,6 +647,15 @@ def test_a_sketch_can_be_previewed_before_it_is_saved(workspace):
         )
 
 
+def test_a_film_taller_than_the_window_is_refused_with_the_unit(workspace):
+    document = call("open_workspace", root=str(workspace))
+    branch = document["branches"][0]
+    branch["steps"][3]["parameters"]["target"] = 50
+    call("save_document", root=str(workspace), document=document)
+    with pytest.raises(ValueError, match="micrometres: 50 nm is 0.05"):
+        call("run_flow", root=str(workspace))
+
+
 def test_project_id_cannot_be_swapped(workspace):
     document = call("open_workspace", root=str(workspace))
     document["project"]["id"] = "someone-elses-project"
