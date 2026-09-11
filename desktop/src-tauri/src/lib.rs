@@ -123,12 +123,26 @@ fn packaged_worker_command(app: &AppHandle) -> Result<Command, String> {
     ))
 }
 
+/// Windows shows a console window for every console process a GUI app starts.
+/// The worker is a console program because it speaks JSON over stdio, and the
+/// shell starts one per request, so without this the window flashes up on each
+/// call and stays for the length of a run.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 fn worker_command(app: &AppHandle) -> Result<Command, String> {
-    if cfg!(debug_assertions) {
-        Ok(development_worker_command())
+    #[allow(unused_mut)] // only the Windows branch below needs it
+    let mut command = if cfg!(debug_assertions) {
+        development_worker_command()
     } else {
-        packaged_worker_command(app)
+        packaged_worker_command(app)?
+    };
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(CREATE_NO_WINDOW);
     }
+    Ok(command)
 }
 
 fn call_worker(app: AppHandle, method: String, params: Value) -> Result<Value, String> {

@@ -19,8 +19,15 @@ python3 -m PyInstaller \
 WORKER="desktop/src-tauri/resources/worker/process-studio-worker"
 test -x "$WORKER" || { echo "The packaged worker is missing at $WORKER"; exit 1; }
 
-# Smoke-test the worker on its own before it is wrapped in an installer.
-echo '{"kind":"request","id":1,"method":"describe"}' | "$WORKER" | grep -q '"protocolVersion"'
+# Smoke-test the worker on its own before it is wrapped in an installer. The
+# kernels are checked by name: a worker that lost one of them still answers
+# describe, and the shell would simply stop offering that kernel.
+DESCRIBED="$(echo '{"kind":"request","id":1,"method":"describe"}' | "$WORKER")"
+echo "$DESCRIBED" | grep -q '"protocolVersion"'
+for kernel in '"id":"levelset"' '"id":"slab"'; do
+  echo "$DESCRIBED" | tr -d ' ' | grep -q "$kernel" || {
+    echo "The packaged worker does not offer the $kernel kernel"; exit 1; }
+done
 
 cd desktop
 npm ci

@@ -18,10 +18,17 @@ if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed to build the process worker
 $Worker = "desktop/src-tauri/resources/worker/process-studio-worker.exe"
 if (-not (Test-Path $Worker)) { throw "The packaged worker is missing at $Worker." }
 
-# Smoke-test the worker on its own before it is wrapped in an installer.
+# Smoke-test the worker on its own before it is wrapped in an installer. The
+# kernels are checked by name: a worker that lost one of them still answers
+# describe, and the shell would simply stop offering that kernel.
 $Response = '{"kind":"request","id":1,"method":"describe"}' | & $Worker
 if ($LASTEXITCODE -ne 0 -or -not ($Response -match '"protocolVersion"')) {
   throw "The packaged worker failed its describe smoke test."
+}
+foreach ($Kernel in @('"id":"levelset"', '"id":"slab"')) {
+  if (-not ($Response -replace '\s', '' -match [regex]::Escape($Kernel))) {
+    throw "The packaged worker does not offer the $Kernel kernel."
+  }
 }
 
 Set-Location (Join-Path $ProjectRoot "desktop")
