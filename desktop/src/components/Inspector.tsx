@@ -335,9 +335,11 @@ export function Inspector({
   );
 
   const setResponse = (material: string, patch: Partial<MaterialResponse>) => {
+    // A material added as a response is meant to etch, so it starts at a
+    // rate of 1 µm/min rather than a zero that looks like a stop layer.
     const current = step.materialResponses[material] ?? {
       material,
-      rateUmPerMin: 0,
+      rateUmPerMin: patch.stopLayer ? 0 : 1,
       stopLayer: false,
     };
     onDefinitionChange({

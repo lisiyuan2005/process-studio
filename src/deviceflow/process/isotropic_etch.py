@@ -63,14 +63,19 @@ def etch_isotropic(
     depths: dict[Material, float],
     resolution: float,
     opening: MultiPolygon | None = None,
+    xy_resolution: float | None = None,
 ) -> dict[Material, float]:
     """Etch each target by its depth from every exposed surface; returns the
-    removed volume per target."""
+    removed volume per target. ``xy_resolution`` is the XY arc sagitta,
+    defaulting to ``resolution`` (see :func:`deposit_conformal`)."""
     depths = {m: float(d) for m, d in depths.items() if float(d) > 0}
     if not depths:
         raise ProcessError("wet etch needs at least one material with a positive depth")
     if not resolution > 0:
         raise ProcessError("conformal_resolution must be positive")
+    xy = resolution if xy_resolution is None else float(xy_resolution)
+    if not xy > 0:
+        raise ProcessError("xy_resolution must be positive")
     before = {m: state.volume(m) for m in depths}
     if state.floor is None or all(state.volume(m) == 0.0 for m in depths):
         return {m: 0.0 for m in depths}
@@ -88,7 +93,7 @@ def etch_isotropic(
         n_steps = max(MIN_STEPS, math.ceil(d_max / step - 1e-9))
     covered = _covered(state, opening)
     for _ in range(n_steps):
-        _step(state, {m: d / n_steps for m, d in depths.items()}, resolution, covered)
+        _step(state, {m: d / n_steps for m, d in depths.items()}, resolution, covered, xy)
     state.validate()
     return {m: before[m] - state.volume(m) for m in depths}
 
@@ -110,7 +115,9 @@ def _covered(state: ProcessState, opening) -> list[tuple[float, float, MultiPoly
     return out
 
 
-def _step(state: ProcessState, depths: dict[Material, float], resolution: float, covered) -> None:
+def _step(
+    state: ProcessState, depths: dict[Material, float], resolution: float, covered, xy: float
+) -> None:
     """Advance the front by the (small) per-material depths from the current
     live void (everything empty that the mask does not cover)."""
     if state.floor is None or all(state.volume(m) == 0.0 for m in depths):
@@ -137,8 +144,8 @@ def _step(state: ProcessState, depths: dict[Material, float], resolution: float,
     d_max = max(depths.values())
     planes = sorted({floor, top} | {s.z0 for s in state.slabs} | {s.z1 for s in state.slabs})
     samples = _sample_intervals(planes, floor, top, d_max, min(resolution, d_max / 4))
-    segs = {m: _quad_segs(d, resolution) for m, d in depths.items()}
-    merge_tol = resolution / 4
+    segs = {m: _quad_segs(d, xy) for m, d in depths.items()}
+    merge_tol = xy / 4
 
     removed: dict[Material, list[tuple[float, float, MultiPolygon]]] = {m: [] for m in depths}
     previous: dict[Material, MultiPolygon | None] = {m: None for m in depths}

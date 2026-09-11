@@ -191,7 +191,17 @@ def test_a_slab_project_sets_a_resolution_rather_than_a_grid(tmp_path):
     call("run_flow", root=str(root))
     plan = call("plan_grid", root=str(root), targetSpacingNm=2.0)
     assert plan["spacingRole"] == "conformal_resolution"
-    assert plan["estimate"] == {"spacingNm": 2.0}
+    assert plan["estimate"] == {"spacingNm": 2.0, "spacingXyNm": 2.0}
+    # The XY arc sagitta can be set apart from the z step, and unset again.
+    plan = call("plan_grid", root=str(root), targetSpacingNm=2.0, targetSpacingXyNm=10.0)
+    assert plan["estimate"] == {"spacingNm": 2.0, "spacingXyNm": 10.0}
+    split = call("set_grid", root=str(root), targetSpacingNm=2.0, targetSpacingXyNm=10.0)
+    assert split["project"]["resolutionUm"] == pytest.approx(0.002)
+    assert split["project"]["resolutionXyUm"] == pytest.approx(0.01)
+    assert call("plan_grid", root=str(root), targetSpacingNm=2.0, targetSpacingXyNm=10.0)["unchanged"] is True
+    assert call("plan_grid", root=str(root), targetSpacingNm=2.0)["unchanged"] is False
+    joined = call("set_grid", root=str(root), targetSpacingNm=2.0)
+    assert joined["project"]["resolutionXyUm"] is None
     # 2 nm over this window is far past the level-set node ceiling; without a
     # field there is nothing for that ceiling to apply to.
     assert plan["withinLimit"] is True

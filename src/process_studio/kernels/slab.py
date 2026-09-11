@@ -125,6 +125,12 @@ def _window(project: ProjectDefinition) -> tuple[float, float, float, float]:
     )
 
 
+def resolution_xy_um(project: ProjectDefinition) -> float:
+    """The XY arc sagitta: its own value, or the z step when none is set."""
+    value = getattr(project, "resolution_xy_um", None)
+    return resolution_um(project) if value is None else float(value)
+
+
 def resolution_um(project: ProjectDefinition) -> float:
     value = getattr(project, "resolution_um", None)
     return DEFAULT_RESOLUTION_UM if not value else float(value)
@@ -164,7 +170,11 @@ class SlabState:
             encode_state(
                 self.device._state,
                 self.device._materials,
-                metadata={"zOffsetUm": self.z_offset, "deviceName": self.device.name},
+                metadata={
+                    "zOffsetUm": self.z_offset,
+                    "deviceName": self.device.name,
+                    "xyResolutionUm": self.device.xy_resolution,
+                },
                 conformal_resolution=self.device.conformal_resolution,
             )
         )
@@ -184,6 +194,8 @@ class SlabState:
         device.units = "um"
         device.grid = float(restored.state.grid)
         device.conformal_resolution = float(resolution)
+        xy = restored.metadata.get("xyResolutionUm")
+        device.xy_resolution = None if xy is None else float(xy)
         device._materials = restored.materials
         device.masks = _factory(device.grid)
         device._state = restored.state
@@ -745,6 +757,7 @@ class SlabKernel:
             bounds=(x_min, y_min, x_max, y_max),
             grid=GEOMETRY_GRID_UM,
             conformal_resolution=resolution_um(project),
+            xy_resolution=resolution_xy_um(project),
             materials=material_table(materials),
             verbose=False,
         )

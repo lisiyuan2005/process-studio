@@ -278,6 +278,7 @@ def project_to_json(project: ProjectDefinition) -> dict[str, Any]:
         "activeBranchId": project.active_branch_id,
         "kernel": project.kernel,
         "resolutionUm": project.resolution_um,
+        "resolutionXyUm": project.resolution_xy_um,
     }
 
 
@@ -292,6 +293,7 @@ def project_from_json(payload: Mapping[str, Any]) -> ProjectDefinition:
     if not project_id:
         raise InvalidRequest("project id cannot be empty")
     resolution = payload.get("resolutionUm")
+    resolution_xy = payload.get("resolutionXyUm")
     return ProjectDefinition(
         name,
         grid_dict(grid_from_json(grid)),
@@ -300,4 +302,5 @@ def project_from_json(payload: Mapping[str, Any]) -> ProjectDefinition:
         id=project_id,
         kernel=str(payload.get("kernel") or default_kernel()),
         resolution_um=None if resolution in (None, "") else float(resolution),
+        resolution_xy_um=None if resolution_xy in (None, "") else float(resolution_xy),
     )

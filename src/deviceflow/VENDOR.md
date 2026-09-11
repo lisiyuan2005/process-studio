@@ -25,3 +25,8 @@ under the MIT license in `LICENSE`.
   3D view shades each face on its own and never shares vertices, so the split
   bought it nothing at a third of the build time. Validation and export still
   build the manifold mesh.
+- `process/conformal.py`, `process/isotropic_etch.py`, `device.py`: an
+  optional `xy_resolution` beside `conformal_resolution`. The z step and the
+  XY arc sagitta were one number; a project that wants a fine z step to
+  shrink the staircase on a shoulder need not pay for finer rings as well.
+  Unset, the XY value is the z value, exactly as before.

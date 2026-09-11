@@ -621,19 +621,19 @@ export default function App() {
   };
 
   const planGrid = useCallback(
-    (targetSpacingNm: number, bounds: WindowBounds) => {
+    (targetSpacingNm: number, bounds: WindowBounds, xyNm: number | null) => {
       if (!document) return Promise.reject(new Error("No workspace is open."));
-      return bridge.planGrid(document.root, targetSpacingNm, bounds);
+      return bridge.planGrid(document.root, targetSpacingNm, bounds, xyNm);
     },
     [document?.root],
   );
 
-  const handleApplyGrid = async (targetSpacingNm: number, bounds: WindowBounds) => {
+  const handleApplyGrid = async (targetSpacingNm: number, bounds: WindowBounds, xyNm: number | null) => {
     if (!document || busy) return;
     setBusy(true);
     try {
       const saved = await bridge.saveDocument(document);
-      const updated = await bridge.setGrid(saved.root, targetSpacingNm, bounds);
+      const updated = await bridge.setGrid(saved.root, targetSpacingNm, bounds, xyNm);
       viewCache.current.clear();
       skipNextAutosave.current = true;
       setDocumentState(updated);
@@ -1056,6 +1056,7 @@ export default function App() {
           grid={document.project.grid}
           kernel={projectKernel}
           resolutionUm={document.project.resolutionUm}
+          resolutionXyUm={document.project.resolutionXyUm}
           presetsNm={
             projectKernel?.spacingPresetsNm ??
             capabilities?.numerics.spacingPresetsNm ?? [25, 12.5, 6.25]

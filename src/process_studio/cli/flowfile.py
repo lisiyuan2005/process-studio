@@ -81,6 +81,8 @@ def flow_from_document(document: Mapping[str, Any]) -> dict[str, Any]:
     }
     if project.get("resolutionUm") is not None:
         flow["resolution_nm"] = project["resolutionUm"] * 1000.0
+        if project.get("resolutionXyUm") is not None:
+            flow["resolution_xy_nm"] = project["resolutionXyUm"] * 1000.0
     else:
         flow["spacing_nm"] = grid["spacingUm"] * 1000.0
     flow["materials"] = [
@@ -211,8 +213,13 @@ def apply_flow(session: Session, flow: Mapping[str, Any]) -> dict[str, Any]:
             if axis in window:
                 low, high = window[axis]
                 bounds[f"{axis}Min"], bounds[f"{axis}Max"] = float(low), float(high)
+    spacing_xy_nm: float | None = None
     if project.get("resolutionUm") is not None:
         spacing_nm = float(flow.get("resolution_nm", project["resolutionUm"] * 1000.0))
+        if "resolution_xy_nm" in flow:
+            spacing_xy_nm = None if flow["resolution_xy_nm"] in (None, 0, "") else float(flow["resolution_xy_nm"])
+        elif project.get("resolutionXyUm") is not None:
+            spacing_xy_nm = project["resolutionXyUm"] * 1000.0
     else:
         spacing_nm = float(flow.get("spacing_nm", grid["spacingUm"] * 1000.0))
     window_changed = any(
@@ -224,9 +231,15 @@ def apply_flow(session: Session, flow: Mapping[str, Any]) -> dict[str, Any]:
         if project.get("resolutionUm") is not None
         else grid["spacingUm"] * 1000.0
     )
-    if window_changed or abs(spacing_nm - current_nm) > 1e-9:
+    current_xy = project.get("resolutionXyUm")
+    current_xy_nm = None if current_xy is None else current_xy * 1000.0
+    xy_changed = (spacing_xy_nm is None) != (current_xy_nm is None) or (
+        spacing_xy_nm is not None and current_xy_nm is not None and abs(spacing_xy_nm - current_xy_nm) > 1e-9
+    )
+    if window_changed or abs(spacing_nm - current_nm) > 1e-9 or xy_changed:
         document = session.call(
-            "set_grid", root=str(session.root), targetSpacingNm=spacing_nm, bounds=bounds
+            "set_grid", root=str(session.root), targetSpacingNm=spacing_nm,
+            targetSpacingXyNm=spacing_xy_nm, bounds=bounds,
         )
         session.note("Window or resolution changed: stored results were discarded.")
 

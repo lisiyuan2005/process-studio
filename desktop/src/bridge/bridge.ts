@@ -39,8 +39,9 @@ export interface DesktopBridge {
   openWorkspaceAt(root: string): Promise<WorkspaceDocument>;
   saveDocument(document: WorkspaceDocument): Promise<WorkspaceDocument>;
   /** `bounds` is the project window in µm; omitted means keep the current one. */
-  planGrid(root: string, targetSpacingNm: number, bounds?: WindowBounds): Promise<GridPlan>;
-  setGrid(root: string, targetSpacingNm: number, bounds?: WindowBounds): Promise<WorkspaceDocument>;
+  /** `xyNm` is the slab kernel's XY arc sagitta; null lets it follow the z step. */
+  planGrid(root: string, targetSpacingNm: number, bounds?: WindowBounds, xyNm?: number | null): Promise<GridPlan>;
+  setGrid(root: string, targetSpacingNm: number, bounds?: WindowBounds, xyNm?: number | null): Promise<WorkspaceDocument>;
   saveSketch(root: string, sketch: QuickSketch): Promise<WorkspaceDocument>;
   /** The kernel's own reading of an unsaved sketch, for the editor's fill. */
   previewMask(root: string, sketch: QuickSketch, keep: MaskKeep): Promise<MaskPreview>;

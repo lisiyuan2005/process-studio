@@ -6,11 +6,13 @@ interface GridEditorProps {
   grid: GridDefinition;
   kernel?: KernelDescription;
   resolutionUm: number | null;
+  /** The slab kernel's XY arc sagitta when set apart from the z step. */
+  resolutionXyUm: number | null;
   presetsNm: number[];
   maximumNodes: number | null;
   busy: boolean;
-  onPlan: (targetSpacingNm: number, bounds: WindowBounds) => Promise<GridPlan>;
-  onApply: (targetSpacingNm: number, bounds: WindowBounds) => void;
+  onPlan: (targetSpacingNm: number, bounds: WindowBounds, xyNm: number | null) => Promise<GridPlan>;
+  onApply: (targetSpacingNm: number, bounds: WindowBounds, xyNm: number | null) => void;
   onClose: () => void;
 }
 
@@ -50,6 +52,7 @@ export function GridEditor({
   grid,
   kernel,
   resolutionUm,
+  resolutionXyUm,
   presetsNm,
   maximumNodes,
   busy,
@@ -62,6 +65,15 @@ export function GridEditor({
   const onGrid = (kernel?.spacingRole ?? "grid") === "grid";
   const currentNm = (onGrid ? grid.spacingUm : resolutionUm ?? grid.spacingUm) * 1000;
   const [spacing, setSpacing] = useState(String(Number(currentNm.toFixed(4))));
+  // The XY arc sagitta of the slab kernel: empty follows the z step.
+  const [spacingXy, setSpacingXy] = useState(
+    resolutionXyUm === null ? "" : String(Number((resolutionXyUm * 1000).toFixed(4))),
+  );
+  const xyNm = useMemo((): number | null | undefined => {
+    if (onGrid || spacingXy.trim() === "") return null;
+    const value = Number(spacingXy);
+    return Number.isFinite(value) && value > 0 ? value : undefined;
+  }, [onGrid, spacingXy]);
   // The window as text, so a half-typed "-0." does not snap to a number.
   const [window_, setWindow] = useState<Record<keyof WindowBounds, string>>(() => {
     const current = boundsOf(grid);
@@ -94,11 +106,16 @@ export function GridEditor({
       setError("Every window bound needs a number, in micrometres.");
       return;
     }
+    if (xyNm === undefined) {
+      setPlan(undefined);
+      setError("The XY arc value needs a positive number in nanometres, or nothing to follow the z step.");
+      return;
+    }
     let cancelled = false;
     const handle = globalThis.setTimeout(async () => {
       setPlanning(true);
       try {
-        const result = await onPlan(value, bounds);
+        const result = await onPlan(value, bounds, xyNm);
         if (cancelled) return;
         setPlan(result);
         setError(undefined);
@@ -114,7 +131,7 @@ export function GridEditor({
       cancelled = true;
       globalThis.clearTimeout(handle);
     };
-  }, [spacing, bounds, onPlan]);
+  }, [spacing, bounds, xyNm, onPlan]);
 
   const estimate = fieldEstimate(plan);
   const spacingNm = plan?.estimate.spacingNm;
@@ -165,9 +182,31 @@ export function GridEditor({
             <small>
               {onGrid
                 ? "Project bounds are preserved, so the closest spacing that divides every extent is used. This is the solver grid, not image resolution."
-                : `${kernel?.name ?? "This kernel"} keeps exact geometry and has no grid. This is the step it walks a surface in when it deposits conformally; it does not change planar deposition, etching or CMP, which are exact.`}
+                : `${kernel?.name ?? "This kernel"} keeps exact geometry and has no grid. This is the z step it samples a conformal film or an isotropic etch in: the height of the staircase on a rounded shoulder. Planar deposition, vertical etching and CMP are exact whatever it is.`}
             </small>
           </label>
+
+          {!onGrid && (
+            <label className="field-row">
+              <span>XY arcs</span>
+              <span className="number-input-wrap">
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="same as z"
+                  value={spacingXy}
+                  onChange={(event) => setSpacingXy(event.target.value)}
+                />
+                <span>nm</span>
+              </span>
+              <small>
+                How far a rounded corner in plan may deviate from a true arc: the chord sagitta,
+                which sets the vertex count of every ring. Leave it empty to follow the z step.
+                A fine z step with a coarser XY value shrinks the staircase without making every
+                ring more expensive.
+              </small>
+            </label>
+          )}
 
           <span className="section-label">PROJECT WINDOW (µm)</span>
           <div className="window-grid">
@@ -200,8 +239,9 @@ export function GridEditor({
           <dl className="grid-summary">
             <dt>Current</dt>
             <dd>
-              {currentNm.toFixed(3)} nm
-              {onGrid ? ` · ${grid.nx}×${grid.ny}×${grid.nz}` : ""}
+              {onGrid
+                ? `${currentNm.toFixed(3)} nm · ${grid.nx}×${grid.ny}×${grid.nz}`
+                : `z ${currentNm.toFixed(3)} nm · XY ${((resolutionXyUm ?? currentNm / 1000) * 1000).toFixed(3)} nm`}
             </dd>
             <dt>Proposed</dt>
             <dd>
@@ -212,7 +252,9 @@ export function GridEditor({
               ) : estimate ? (
                 `${estimate.spacingNm.toFixed(3)} nm · ${estimate.shape.join("×")}`
               ) : (
-                `${spacingNm.toFixed(3)} nm`
+                `z ${spacingNm.toFixed(3)} nm · XY ${(
+                  (plan?.estimate as { spacingXyNm?: number } | undefined)?.spacingXyNm ?? spacingNm
+                ).toFixed(3)} nm`
               )}
             </dd>
             {onGrid && (
@@ -276,7 +318,7 @@ export function GridEditor({
             type="button"
             className="primary-button modal-save"
             disabled={!applicable}
-            onClick={() => bounds && onApply(Number(spacing), bounds)}
+            onClick={() => bounds && xyNm !== undefined && onApply(Number(spacing), bounds, xyNm)}
           >
             {onGrid ? "Apply grid" : "Apply resolution"}
           </button>

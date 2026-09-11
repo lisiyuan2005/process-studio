@@ -41,7 +41,7 @@ cd ~/devices/dram
 | `steps rm STEP...` / `dup STEP` / `mv STEP POS` | 删除 / 原位复制 / 移到第 POS 位 |
 | `steps skip STEP...` / `include STEP...` | 跳过 / 放回运行 |
 | `run [--through STEP] [--force]` | 运行；结果还有效的步骤直接复用 |
-| `window [--x A B] [--y A B] [--z A B] [--spacing NM]` | 看或改工程窗口和精度（改动会丢弃全部结果） |
+| `window [--x A B] [--y A B] [--z A B] [--spacing NM] [--spacing-xy NM]` | 看或改工程窗口和精度（改动会丢弃全部结果）；slab 工程 `--spacing` 是 z 步长，`--spacing-xy` 是 XY 弧线弦高，0 表示跟随 z |
 | `view section --step STEP [--axis x\|y --at UM \| --line X0 Y0 X1 Y1] [--exact] -o cut.png` | 截面 PNG；`--exact` 画原始板层而不是平滑后的表面 |
 | `view top --step STEP -o top.png` | 俯视图 PNG |
 | `view mesh --step STEP -o step.glb` | 3D 表面，.glb / .gltf / .obj / .stl / .ply |
@@ -88,7 +88,8 @@ done
 name: 1T1C
 kernel: slab
 window: {x: [-0.8, 0.8], y: [-0.8, 0.8], z: [-0.8, 0.4]}
-resolution_nm: 10          # level set 内核写 spacing_nm
+resolution_nm: 10          # slab 的 z 步长；level set 内核写 spacing_nm
+resolution_xy_nm: 10       # slab 的 XY 弧线弦高，省略则跟随 z
 materials:
   - {name: W, category: Metal, color: "#7f8790"}
 sketches:

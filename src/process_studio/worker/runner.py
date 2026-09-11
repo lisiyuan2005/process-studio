@@ -334,9 +334,14 @@ def apply_resolution(
     repository: ProjectRepository,
     project: ProjectDefinition,
     resolution_um: float,
+    resolution_xy_um: float | None = None,
 ) -> ProjectDefinition:
-    """Change a gridless kernel's resolution and drop the old results."""
+    """Change a gridless kernel's resolution and drop the old results.
+
+    ``resolution_xy_um`` None means the XY arcs follow the z step.
+    """
     project.resolution_um = float(resolution_um)
+    project.resolution_xy_um = None if resolution_xy_um is None else float(resolution_xy_um)
     repository.save_project(project)
     discard_results(repository, project)
     return project

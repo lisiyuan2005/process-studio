@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from pathlib import Path
 
 import numpy as np
 
@@ -556,3 +557,63 @@ def test_a_section_draws_the_surface_the_sampled_bands_stand_for(kernel, project
     assert drawn["smoothed"] is True and raw["smoothed"] is False
     assert drawn["image"] != raw["image"]
     assert (drawn["width"], drawn["height"]) == (raw["width"], raw["height"])
+
+
+def test_the_xy_resolution_shapes_the_arcs_and_the_z_resolution_the_bands(kernel, sketches):
+    """A finer z step adds bands; a finer XY sagitta adds ring vertices. They
+    are separate numbers, so a project can shrink the staircase on a
+    shoulder without paying for rounder corners in plan, or the reverse."""
+    from process_studio.kernels.slab import resolution_xy_um
+
+    materials = default_materials()
+
+    def film(z_nm: float, xy_nm: float | None):
+        project = ProjectDefinition(
+            "Split", grid_dict(default_grid()), kernel="slab",
+            resolution_um=z_nm / 1000.0,
+            resolution_xy_um=None if xy_nm is None else xy_nm / 1000.0,
+        )
+        assert resolution_xy_um(project) == pytest.approx((z_nm if xy_nm is None else xy_nm) / 1000.0)
+        state = kernel.initial_state(project, materials=materials)
+        state = kernel.run_step(
+            state,
+            step(
+                ProcessType.ETCH, mask_source="quick_sketch",
+                parameters={"target": 0.3, "directional_fraction": 1.0, "sketch_id": "default"},
+                material_responses={"Si": MaterialResponse("Si", 0.1)},
+            ),
+            project=project, recipes={}, sketches=sketches, logger=lambda _m: None, materials=materials,
+        )
+        state = kernel.run_step(
+            state,
+            step(ProcessType.DEPOSIT, parameters={"target": 0.06, "mode": "conformal"}, output_material="Al2O3"),
+            project=project, recipes={}, sketches=sketches, logger=lambda _m: None, materials=materials,
+        )
+        slabs = state.device._state.slabs
+        vertices = sum(
+            int(shapely.get_num_coordinates(region))
+            for slab in slabs for region in slab.regions.values()
+        )
+        return len(slabs), vertices, state
+
+    import shapely
+
+    coarse_slabs, coarse_vertices, _ = film(10.0, None)
+    fine_z_slabs, fine_z_vertices, saved = film(2.0, 10.0)
+    fine_xy_slabs, fine_xy_vertices, _ = film(10.0, 2.0)
+    assert fine_z_slabs > coarse_slabs
+    # A finer XY value keeps the z sampling; it may split one or two bands
+    # that the coarser value had welded, never multiply them.
+    assert coarse_slabs <= fine_xy_slabs <= coarse_slabs + 2
+    assert fine_xy_vertices > coarse_vertices
+    # Bands multiply the rings, so a finer z alone still costs more vertices
+    # in total, but far fewer than a finer z and XY together would.
+    assert fine_z_vertices / fine_z_slabs == pytest.approx(coarse_vertices / coarse_slabs, rel=0.25)
+    # The split survives a save and a load.
+    import tempfile
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "split.dfz"
+        saved.save(path)
+        loaded = kernel.load_state(path)
+        assert loaded.device.conformal_resolution == pytest.approx(0.002)
+        assert loaded.device.xy_resolution == pytest.approx(0.01)

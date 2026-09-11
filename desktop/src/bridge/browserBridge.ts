@@ -217,6 +217,7 @@ export function demoDocument(): WorkspaceDocument {
       activeBranchId: branchId,
       kernel: "levelset",
       resolutionUm: null,
+      resolutionXyUm: null,
     },
     branches: [
       {

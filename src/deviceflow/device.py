@@ -39,6 +39,7 @@ class Device:
         units: str = "um",
         grid=DEFAULT_GRID,
         conformal_resolution=DEFAULT_CONFORMAL_RESOLUTION,
+        xy_resolution=None,
         materials=None,
         record_steps=False,
         step_options: dict | None = None,
@@ -69,6 +70,10 @@ class Device:
         self.conformal_resolution = parse_length(conformal_resolution)
         if self.conformal_resolution <= 0:
             raise ProcessError(f"conformal_resolution must be positive, got {conformal_resolution!r}")
+        # The XY arc sagitta, when it is not simply the z step.
+        self.xy_resolution = None if xy_resolution is None else parse_length(xy_resolution)
+        if self.xy_resolution is not None and self.xy_resolution <= 0:
+            raise ProcessError(f"xy_resolution must be positive, got {xy_resolution!r}")
 
         self._materials = MaterialRegistry(materials)
         self.masks = MaskFactory(grid=self.grid)
@@ -113,7 +118,9 @@ class Device:
             z0, z1 = deposit_planar(state, mat, t)
             volume = state.bounds_area * t
         else:
-            z0, z1, volume = deposit_conformal(state, mat, t, self.conformal_resolution)
+            z0, z1, volume = deposit_conformal(
+                state, mat, t, self.conformal_resolution, self.xy_resolution
+            )
         self._state = state
         self._meshes = None
         self._history.append(
@@ -201,7 +208,10 @@ class Device:
         depths = {m: r * budget for m, r in rate_map.items() if r > 0}
         t_start = self._begin(f"wet_etch {self._etch_text(rate_map, budget, ref, target, depth, rates, selectivity)}, {self._mask_text(None if blanket else mask, opening)}")
         state = self._state.copy()  # transactional: commit only after success
-        removed = etch_isotropic(state, depths, self.conformal_resolution, None if blanket else opening._geom)
+        removed = etch_isotropic(
+            state, depths, self.conformal_resolution, None if blanket else opening._geom,
+            self.xy_resolution,
+        )
         removed = {m: removed.get(m, 0.0) for m in rate_map}
         self._state = state
         self._meshes = None
@@ -357,6 +367,7 @@ class Device:
         other.units = self.units
         other.grid = self.grid
         other.conformal_resolution = self.conformal_resolution
+        other.xy_resolution = getattr(self, "xy_resolution", None)
         other._materials = self._materials
         other.masks = self.masks
         other._state = state.copy()

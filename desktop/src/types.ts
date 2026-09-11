@@ -49,7 +49,7 @@ export interface GridPlan {
   spacingRole: SpacingRole;
   grid: GridDefinition;
   /** A kernel without a field reports only the spacing it would work at. */
-  estimate: GridEstimate | { spacingNm: number };
+  estimate: GridEstimate | { spacingNm: number; spacingXyNm: number };
   maximumNodes: number | null;
   withinLimit: boolean;
   unchanged: boolean;
@@ -131,6 +131,8 @@ export interface ProjectSummary {
   kernel: string;
   /** Length a gridless kernel resolves geometry at, in micrometres. */
   resolutionUm: number | null;
+  /** The slab kernel's XY arc sagitta when it differs from the z step; null follows it. */
+  resolutionXyUm: number | null;
 }
 
 export interface SketchShape {

@@ -45,14 +45,27 @@ MAX_SAMPLES = 20000
 
 
 def deposit_conformal(
-    state: ProcessState, material: Material, thickness: float, resolution: float
+    state: ProcessState,
+    material: Material,
+    thickness: float,
+    resolution: float,
+    xy_resolution: float | None = None,
 ) -> tuple[float, float, float]:
-    """Deposit ``thickness`` conformally; returns (z_low, z_high, volume added)."""
+    """Deposit ``thickness`` conformally; returns (z_low, z_high, volume added).
+
+    ``resolution`` is the z step the film is sampled at; ``xy_resolution``
+    is the largest sagitta an XY arc may have and the tolerance two
+    consecutive samples are welded at. It defaults to ``resolution``, which
+    ties the two; setting it separately keeps rings cheap while z is fine.
+    """
     t = float(thickness)
     if not t > 0:
         raise ProcessError(f"deposition thickness must be positive, got {thickness}")
     if not resolution > 0:
         raise ProcessError("conformal_resolution must be positive")
+    xy = resolution if xy_resolution is None else float(xy_resolution)
+    if not xy > 0:
+        raise ProcessError("xy_resolution must be positive")
 
     # snapshot of the solid before deposition
     if state.floor is None:
@@ -71,7 +84,7 @@ def deposit_conformal(
     planes = sorted({floor, top} | {s.z0 for s in state.slabs} | {s.z1 for s in state.slabs})
 
     samples = _sample_intervals(planes, floor, znorm(top + t), t, min(resolution, t / 4))
-    quad_segs = _quad_segs(t, resolution)
+    quad_segs = _quad_segs(t, xy)
 
     def solid_at(z: float) -> MultiPolygon:
         index = bisect.bisect_right(starts, z) - 1
@@ -95,7 +108,7 @@ def deposit_conformal(
     # narrower than the resolution but wider than the grid, which survives
     # every cleaning step and makes the mesh non-manifold where it ends.
     # Cutting the ring from the snapped dilation keeps the interface exact.
-    merge_tol = resolution / 4
+    merge_tol = xy / 4
     # Sources are sorted by z0 and tile the stack, so the ones a sample can
     # reach form a contiguous run and are found by bisection instead of by
     # scanning every slab for every sample.

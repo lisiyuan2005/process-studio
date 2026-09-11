@@ -73,12 +73,16 @@ export class TauriBridge implements DesktopBridge {
     return call<WorkspaceDocument>("save_document", { root: document.root, document });
   }
 
-  planGrid(root: string, targetSpacingNm: number, bounds?: WindowBounds): Promise<GridPlan> {
-    return call<GridPlan>("plan_grid", { root, targetSpacingNm, bounds: bounds ?? null });
+  planGrid(root: string, targetSpacingNm: number, bounds?: WindowBounds, xyNm?: number | null): Promise<GridPlan> {
+    return call<GridPlan>("plan_grid", {
+      root, targetSpacingNm, targetSpacingXyNm: xyNm ?? null, bounds: bounds ?? null,
+    });
   }
 
-  setGrid(root: string, targetSpacingNm: number, bounds?: WindowBounds): Promise<WorkspaceDocument> {
-    return call<WorkspaceDocument>("set_grid", { root, targetSpacingNm, bounds: bounds ?? null });
+  setGrid(root: string, targetSpacingNm: number, bounds?: WindowBounds, xyNm?: number | null): Promise<WorkspaceDocument> {
+    return call<WorkspaceDocument>("set_grid", {
+      root, targetSpacingNm, targetSpacingXyNm: xyNm ?? null, bounds: bounds ?? null,
+    });
   }
 
   saveSketch(root: string, sketch: QuickSketch): Promise<WorkspaceDocument> {

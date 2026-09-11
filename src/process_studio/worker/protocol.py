@@ -121,7 +121,10 @@ def _persist_document(parameters: Mapping[str, Any]) -> dict[str, Any]:
         raise InvalidRequest(
             "Use set_grid to change the grid; it discards results computed on the old one."
         )
-    if stored.resolution_um != project.resolution_um:
+    if (
+        stored.resolution_um != project.resolution_um
+        or stored.resolution_xy_um != project.resolution_xy_um
+    ):
         raise InvalidRequest(
             "Use set_grid to change the resolution; it discards results computed at the old one."
         )
@@ -179,15 +182,22 @@ def _persist_document(parameters: Mapping[str, Any]) -> dict[str, Any]:
     return build_document(root, repository, load_project(repository, project.id))
 
 
-def _target_spacing(parameters: Mapping[str, Any]) -> float:
-    value = parameters.get("targetSpacingNm")
+def _target_spacing(parameters: Mapping[str, Any], key: str = "targetSpacingNm") -> float:
+    value = parameters.get(key)
     try:
         spacing = float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError) as error:
-        raise InvalidRequest("targetSpacingNm must be a number") from error
+        raise InvalidRequest(f"{key} must be a number") from error
     if not 0.1 <= spacing <= 1000.0:
-        raise InvalidRequest("targetSpacingNm must be between 0.1 and 1000")
+        raise InvalidRequest(f"{key} must be between 0.1 and 1000")
     return spacing
+
+
+def _target_spacing_xy(parameters: Mapping[str, Any]) -> float | None:
+    """The XY arc sagitta a slab request asks for; None follows the z step."""
+    if parameters.get("targetSpacingXyNm") in (None, ""):
+        return None
+    return _target_spacing(parameters, "targetSpacingXyNm")
 
 
 #: The widest window the desktop will take, per axis, in micrometres. A
@@ -302,18 +312,30 @@ def _plan_grid(parameters: Mapping[str, Any]) -> dict[str, Any]:
     same_window = _same_bounds(window, current)
     if kernel.info.spacing_role != "grid":
         spacing = _target_spacing(parameters)
+        spacing_xy = _target_spacing_xy(parameters)
         # The slab kernel has no lattice, but the stored grid must still be a
         # valid one; any modest spacing over the new window serves.
         proposed = current if same_window else _fit_grid(window, 25.0)
+        current_xy = project.resolution_xy_um
         return {
             "kernel": kernel.info.id,
             "spacingRole": kernel.info.spacing_role,
             "grid": grid_to_json(proposed),
-            "estimate": {"spacingNm": spacing},
+            "estimate": {
+                "spacingNm": spacing,
+                "spacingXyNm": spacing if spacing_xy is None else spacing_xy,
+            },
             "maximumNodes": None,
             "withinLimit": True,
             "unchanged": same_window
-            and abs(spacing / 1000.0 - (project.resolution_um or 0.0)) < 1e-12,
+            and abs(spacing / 1000.0 - (project.resolution_um or 0.0)) < 1e-12
+            and (
+                (spacing_xy is None and current_xy is None)
+                or (
+                    spacing_xy is not None and current_xy is not None
+                    and abs(spacing_xy / 1000.0 - current_xy) < 1e-12
+                )
+            ),
         }
     proposed = _fit_grid(window, _target_spacing(parameters))
     estimate = estimate_grid(proposed, len(repository.load_materials()))
@@ -352,7 +374,11 @@ def _set_grid(parameters: Mapping[str, Any]) -> dict[str, Any]:
             # A new window is a new wafer: the substrate is as thick as the
             # window is deep, so the stored results are gone either way.
             project.grid = grid_dict(_fit_grid(window, 25.0))
-        apply_resolution(repository, project, _target_spacing(parameters) / 1000.0)
+        spacing_xy = _target_spacing_xy(parameters)
+        apply_resolution(
+            repository, project, _target_spacing(parameters) / 1000.0,
+            None if spacing_xy is None else spacing_xy / 1000.0,
+        )
         return build_document(root, repository, project)
     if parameters.get("targetSpacingNm") is not None:
         grid = _fit_grid(window, _target_spacing(parameters))

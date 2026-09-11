@@ -137,7 +137,13 @@ def summarize_project(document: Mapping[str, Any]) -> list[str]:
         f"z {format_number(grid['zMin'])}..{format_number(grid['zMax'])} µm",
     ]
     if project.get("resolutionUm") is not None:
-        lines.append(f"Resolution {format_number(project['resolutionUm'] * 1000.0)} nm (conformal deposition)")
+        z_nm = project["resolutionUm"] * 1000.0
+        xy = project.get("resolutionXyUm")
+        lines.append(
+            f"Resolution z step {format_number(z_nm)} nm, XY arcs "
+            + (f"{format_number(xy * 1000.0)} nm" if xy is not None else "same as z")
+            + " (conformal deposition)"
+        )
     else:
         lines.append(
             f"Grid       {format_number(grid['spacingUm'] * 1000.0)} nm · "
@@ -357,8 +363,11 @@ def cmd_window(session: Session, args: argparse.Namespace) -> int:
     project = document["project"]
     grid = project["grid"]
     changes = {axis: getattr(args, axis) for axis in ("x", "y", "z") if getattr(args, axis) is not None}
-    if not changes and args.spacing is None:
-        session.emit({"grid": grid, "resolutionUm": project.get("resolutionUm")}, lambda: summarize_project(document)[3:5])
+    if not changes and args.spacing is None and args.spacing_xy is None:
+        session.emit(
+            {"grid": grid, "resolutionUm": project.get("resolutionUm"), "resolutionXyUm": project.get("resolutionXyUm")},
+            lambda: summarize_project(document)[3:5],
+        )
         return EXIT_OK
     bounds = {key: grid[key] for key in ("xMin", "xMax", "yMin", "yMax", "zMin", "zMax")}
     for axis, (low, high) in changes.items():
@@ -369,11 +378,23 @@ def cmd_window(session: Session, args: argparse.Namespace) -> int:
         spacing = project["resolutionUm"] * 1000.0
     else:
         spacing = grid["spacingUm"] * 1000.0
+    if args.spacing_xy is not None:
+        spacing_xy: float | None = None if args.spacing_xy <= 0 else args.spacing_xy
+    elif project.get("resolutionXyUm") is not None:
+        spacing_xy = project["resolutionXyUm"] * 1000.0
+    else:
+        spacing_xy = None
     if not args.yes:
         session.note("Changing the window or the spacing discards every stored result (pass --yes to skip this note).")
-    saved = session.call("set_grid", root=str(session.root), targetSpacingNm=spacing, bounds=bounds)
+    saved = session.call(
+        "set_grid", root=str(session.root), targetSpacingNm=spacing, targetSpacingXyNm=spacing_xy, bounds=bounds
+    )
     session.emit(
-        {"grid": saved["project"]["grid"], "resolutionUm": saved["project"].get("resolutionUm")},
+        {
+            "grid": saved["project"]["grid"],
+            "resolutionUm": saved["project"].get("resolutionUm"),
+            "resolutionXyUm": saved["project"].get("resolutionXyUm"),
+        },
         lambda: summarize_project(saved)[3:5] + ["Stored results were discarded; run the flow again."],
     )
     return EXIT_OK
@@ -718,7 +739,9 @@ def build_parser() -> argparse.ArgumentParser:
     window = commands.add_parser("window", help="show or change the project window and spacing")
     for axis in ("x", "y", "z"):
         window.add_argument(f"--{axis}", nargs=2, type=float, metavar=("MIN", "MAX"), help=f"the {axis} range in µm")
-    window.add_argument("--spacing", type=float, metavar="NM", help="grid spacing (level set) or resolution (slab) in nm")
+    window.add_argument("--spacing", type=float, metavar="NM", help="grid spacing (level set) or the z step of the slab kernel, in nm")
+    window.add_argument("--spacing-xy", type=float, metavar="NM",
+                        help="slab kernel only: the XY arc sagitta in nm; 0 makes it follow the z step again")
     window.add_argument("--yes", action="store_true", help="do not remark that results are discarded")
     window.set_defaults(handler=cmd_window)
 

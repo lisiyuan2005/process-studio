@@ -49,7 +49,8 @@ class ProjectRepository:
                     gds_path TEXT,
                     active_branch_id TEXT,
                     kernel TEXT NOT NULL DEFAULT 'levelset',
-                    resolution_um REAL
+                    resolution_um REAL,
+                    resolution_xy_um REAL
                 );
                 CREATE TABLE IF NOT EXISTS materials (
                     id TEXT PRIMARY KEY,
@@ -116,20 +117,24 @@ class ProjectRepository:
                 )
             if "resolution_um" not in columns:
                 connection.execute("ALTER TABLE projects ADD COLUMN resolution_um REAL")
+            if "resolution_xy_um" not in columns:
+                connection.execute("ALTER TABLE projects ADD COLUMN resolution_xy_um REAL")
 
     def save_project(self, project: ProjectDefinition) -> None:
         with self.connect() as connection:
             connection.execute(
                 """INSERT INTO projects(
-                    id, name, grid_json, gds_path, active_branch_id, kernel, resolution_um
+                    id, name, grid_json, gds_path, active_branch_id, kernel, resolution_um,
+                    resolution_xy_um
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 -- kernel is deliberately absent from the update list: a
                 -- project keeps the kernel it was created with.
                 ON CONFLICT(id) DO UPDATE SET name=excluded.name,
                 grid_json=excluded.grid_json, gds_path=excluded.gds_path,
                 active_branch_id=excluded.active_branch_id,
-                resolution_um=excluded.resolution_um""",
+                resolution_um=excluded.resolution_um,
+                resolution_xy_um=excluded.resolution_xy_um""",
                 (
                     project.id,
                     project.name,
@@ -138,6 +143,7 @@ class ProjectRepository:
                     project.active_branch_id,
                     project.kernel,
                     project.resolution_um,
+                    project.resolution_xy_um,
                 ),
             )
 
@@ -156,6 +162,7 @@ class ProjectRepository:
             active_branch_id=row["active_branch_id"],
             kernel=row["kernel"] or "levelset",
             resolution_um=row["resolution_um"],
+            resolution_xy_um=row["resolution_xy_um"],
         )
 
     def list_projects(self) -> list[ProjectDefinition]:

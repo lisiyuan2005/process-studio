@@ -189,6 +189,9 @@ class ProjectDefinition:
     #: Length the kernel resolves geometry at when it is not the grid: the
     #: slab kernel's conformal-deposition resolution. None means its default.
     resolution_um: float | None = None
+    #: The XY arc sagitta of the slab kernel when it differs from the z step.
+    #: None means the same as ``resolution_um``.
+    resolution_xy_um: float | None = None
 
 
 def dataclass_dict(value: Any) -> dict[str, Any]:

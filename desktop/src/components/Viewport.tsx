@@ -343,6 +343,74 @@ function PictureView({
   const [hover, setHover] = useState<[number, number] | null>(null);
   const spanH = extent.horizontalMax - extent.horizontalMin;
   const spanV = extent.verticalMax - extent.verticalMin;
+
+  // Zoom and pan are a transform on the fitted frame: the wheel scales it
+  // about the pointer, a drag moves it, and it never leaves a gap inside
+  // the area the unzoomed picture filled. Nothing is re-fetched; the
+  // picture's own pixels are magnified, so raise Sampling for finer ones.
+  const [zoom, setZoom] = useState({ scale: 1, x: 0, y: 0 });
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+  const clampZoom = (next: { scale: number; x: number; y: number }) => {
+    const scale = Math.min(16, Math.max(1, next.scale));
+    if (scale === 1 || !size) return { scale: 1, x: 0, y: 0 };
+    return {
+      scale,
+      x: Math.min(0, Math.max(size.width - size.width * scale, next.x)),
+      y: Math.min(0, Math.max(size.height - size.height * scale, next.y)),
+    };
+  };
+  useEffect(() => {
+    const element = container.current;
+    if (!element) return;
+    const wheel = (event: WheelEvent) => {
+      const box = frame.current?.getBoundingClientRect();
+      if (!box || box.width === 0) return;
+      event.preventDefault();
+      const current = zoomRef.current;
+      const factor = Math.exp(-event.deltaY * (event.deltaMode === 1 ? 0.05 : 0.0015));
+      const scale = Math.min(16, Math.max(1, current.scale * factor));
+      // Keep the point under the pointer where it is.
+      const u = (event.clientX - box.left) / box.width;
+      const v = (event.clientY - box.top) / box.height;
+      const ratio = scale / current.scale;
+      const left = box.left - current.x; // where the unzoomed frame's origin sits
+      const top = box.top - current.y;
+      const nx = event.clientX - left - u * box.width * ratio;
+      const ny = event.clientY - top - v * box.height * ratio;
+      setZoom(clampZoom({ scale, x: nx, y: ny }));
+    };
+    element.addEventListener("wheel", wheel, { passive: false });
+    return () => element.removeEventListener("wheel", wheel);
+    // The clamp reads the fitted size; a new size means new limits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [size]);
+  const drag = useRef<{ x: number; y: number; zx: number; zy: number; moved: boolean } | null>(null);
+  const pointerDown = (event: React.PointerEvent<HTMLElement>) => {
+    const pan = event.button === 1 || (event.button === 0 && !measuring && !onClickCapture);
+    if (!pan || zoom.scale === 1) return;
+    drag.current = { x: event.clientX, y: event.clientY, zx: zoom.x, zy: zoom.y, moved: false };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  };
+  const pointerMove = (event: React.PointerEvent<HTMLElement>) => {
+    setHover(fromEvent(event));
+    const start = drag.current;
+    if (!start) return;
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    if (Math.hypot(dx, dy) > 3) start.moved = true;
+    setZoom(clampZoom({ scale: zoomRef.current.scale, x: start.zx + dx, y: start.zy + dy }));
+  };
+  const pointerUp = (event: React.PointerEvent<HTMLElement>) => {
+    if (!drag.current) return;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    // A drag is not a click; the click handler checks this flag right after.
+    const moved = drag.current.moved;
+    drag.current = null;
+    if (moved) suppressClick.current = true;
+  };
+  const suppressClick = useRef(false);
   const toFraction = ([h, v]: [number, number]): [number, number] => [
     (h - extent.horizontalMin) / spanH,
     (extent.verticalMax - v) / spanV,
@@ -355,12 +423,18 @@ function PictureView({
     return [extent.horizontalMin + u * spanH, extent.verticalMax - w * spanV];
   };
   const click = (event: React.MouseEvent<HTMLElement>) => {
+    if (suppressClick.current) {
+      suppressClick.current = false;
+      return;
+    }
     const point = fromEvent(event);
     if (!point) return;
     if (onClickCapture?.(point)) return;
     if (measuring) onPoint(point);
   };
-  const bar = scaleBarLength(spanH);
+  // The bar shows a round length at the current magnification.
+  const bar = scaleBarLength(spanH / zoom.scale);
+  const barPixels = size ? (bar / spanH) * size.width * zoom.scale : 0;
   const ends = measurement ? [toFraction(measurement.start), toFraction(measurement.end)] : null;
   const pending = pendingStart ? toFraction(pendingStart) : null;
   const delta = measurement
@@ -370,19 +444,28 @@ function PictureView({
     <div className="image-view" ref={container}>
       <div
         ref={frame}
-        className={`image-frame ${measuring || onClickCapture ? "drawing" : ""}`}
-        style={size ?? undefined}
+        className={`image-frame ${measuring || onClickCapture ? "drawing" : ""} ${
+          zoom.scale > 1 && !measuring && !onClickCapture ? "pannable" : ""
+        }`}
+        style={
+          size
+            ? ({
+                ...size,
+                transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`,
+                transformOrigin: "0 0",
+                "--inv-scale": String(1 / zoom.scale),
+              } as React.CSSProperties)
+            : undefined
+        }
         onClick={click}
-        onMouseMove={(event) => setHover(fromEvent(event))}
+        onPointerDown={pointerDown}
+        onPointerMove={pointerMove}
+        onPointerUp={pointerUp}
+        onPointerCancel={pointerUp}
         onMouseLeave={() => setHover(null)}
       >
-        <img src={`data:image/png;base64,${image}`} alt={alt} />
+        <img src={`data:image/png;base64,${image}`} alt={alt} draggable={false} />
         {children}
-        {hover && (
-          <code className="cursor-readout">
-            {axes[0]} {hover[0].toFixed(3)} · {axes[1]} {hover[1].toFixed(3)} µm
-          </code>
-        )}
         {ends && delta && (
           <>
             <svg className="image-overlay" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true">
@@ -402,10 +485,27 @@ function PictureView({
           </>
         )}
         {pending && <i className="line-dot measure pending" style={percent(pending)} />}
-        <span className="scale-bar" style={{ width: `${(bar / spanH) * 100}%` }}>
+      </div>
+      {hover && (
+        <code className="cursor-readout">
+          {axes[0]} {hover[0].toFixed(3)} · {axes[1]} {hover[1].toFixed(3)} µm
+        </code>
+      )}
+      {size && (
+        <span className="scale-bar" style={{ width: `${barPixels}px` }}>
           {formatLength(bar)}
         </span>
-      </div>
+      )}
+      {zoom.scale > 1 && (
+        <button
+          type="button"
+          className="zoom-reset"
+          title="Back to the whole picture (wheel to zoom, drag to pan)"
+          onClick={() => setZoom({ scale: 1, x: 0, y: 0 })}
+        >
+          {zoom.scale.toFixed(1)}× · fit
+        </button>
+      )}
     </div>
   );
 }
