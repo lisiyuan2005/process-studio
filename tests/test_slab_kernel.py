@@ -503,3 +503,56 @@ def test_the_3d_view_is_built_once_and_kept_beside_the_snapshot(tmp_path, kernel
     assert again["surfaces"][0]["indices"] == surface["indices"]
     # And the same state object answers from memory the second time.
     assert kernel.surfaces(reloaded, project=project)["surfaces"][0]["indices"] == surface["indices"]
+
+
+def test_a_section_draws_the_surface_the_sampled_bands_stand_for(kernel, project, sketches):
+    """A conformal film is stored as bands one resolution step tall, so its
+    rounded shoulder is a staircase. The picture joins the bands into the
+    smooth surface they sample, unless asked for the exact slabs; the wafer
+    and the trench wall, which are not sampled, keep their vertical edges
+    either way."""
+    materials = default_materials()
+    colors = {material.name: material.color for material in materials}
+    state = kernel.initial_state(project, materials=materials)
+    state = kernel.run_step(
+        state,
+        step(
+            ProcessType.ETCH,
+            mask_source="quick_sketch",
+            parameters={"target": 0.3, "directional_fraction": 1.0, "sketch_id": "default"},
+            material_responses={"Si": MaterialResponse("Si", 0.1)},
+        ),
+        project=project, recipes={}, sketches=sketches, logger=lambda _m: None, materials=materials,
+    )
+    state = kernel.run_step(
+        state,
+        step(ProcessType.DEPOSIT, parameters={"target": 0.06, "mode": "conformal"}, output_material="Al2O3"),
+        project=project, recipes={}, sketches=sketches, logger=lambda _m: None, materials=materials,
+    )
+    from process_studio.kernels.slab import _section_shapes, _smooth_section_shapes, resolution_um
+
+    section = state.device.cross_section((-0.8, 0.0), (0.8, 0.0))
+
+    def slanted_edges(shapes, name):
+        count = 0
+        for rings, material in shapes:
+            if material != name:
+                continue
+            for ring in rings:
+                for (x0, z0), (x1, z1) in zip(ring, ring[1:] + ring[:1]):
+                    if abs(x1 - x0) > 1e-9 and abs(z1 - z0) > 1e-9:
+                        count += 1
+        return count
+
+    exact = _section_shapes(section, state.z_offset)
+    smooth = _smooth_section_shapes(section, state, resolution_um(project))
+    assert slanted_edges(exact, "Al2O3") == 0
+    assert slanted_edges(smooth, "Al2O3") > 0
+    # The wafer is one thick slab under the film: no sampling, no slant.
+    assert slanted_edges(smooth, "Si") == 0
+    # Both pictures come back, and they differ only where the film curves.
+    drawn = kernel.section(state, colors, project=project, axis="y")
+    raw = kernel.section(state, colors, project=project, axis="y", smooth=False)
+    assert drawn["smoothed"] is True and raw["smoothed"] is False
+    assert drawn["image"] != raw["image"]
+    assert (drawn["width"], drawn["height"]) == (raw["width"], raw["height"])

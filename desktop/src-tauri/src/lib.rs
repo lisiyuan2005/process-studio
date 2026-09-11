@@ -24,6 +24,8 @@ const WORKER_METHODS: &[&str] = &[
     "get_surfaces",
     "get_section",
     "get_top_view",
+    "export_mesh",
+    "save_image",
     "import_gds",
     "export_recipes_xlsx",
     "import_recipes_xlsx",

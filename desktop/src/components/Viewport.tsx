@@ -1,10 +1,12 @@
 import { OrbitControls } from "@react-three/drei";
-import { Canvas } from "@react-three/fiber";
+import { Canvas, useThree } from "@react-three/fiber";
 import {
   Box,
+  Camera,
   CircleAlert,
   Eye,
   EyeOff,
+  FileBox,
   Image as ImageIcon,
   LoaderCircle,
   Ruler,
@@ -12,7 +14,8 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ContextMenu, type MenuAnchor } from "./ContextMenu";
 import * as THREE from "three";
 import type {
   ImageExtent,
@@ -45,9 +48,15 @@ interface ViewportProps {
   onSectionIndexChange: (index: number) => void;
   sectionLine: SectionLine | null;
   onSectionLineChange: (line: SectionLine | null) => void;
+  smoothSection: boolean;
+  onSmoothSectionChange: (smooth: boolean) => void;
   materials: MaterialDefinition[];
   hiddenMaterials: string[];
   onToggleMaterial: (material: string) => void;
+  /** Write the 3D surfaces of the shown step to a file the user picks. */
+  onExportMesh: () => void;
+  /** Write a PNG the user picks a place for; `image` is base64 without prefix. */
+  onSaveImage: (kind: "3d" | "section" | "top", image: string) => void;
   surfaces?: SurfaceDocument;
   section?: SectionDocument;
   topView?: TopViewDocument;
@@ -149,14 +158,31 @@ function SurfaceMesh({
   );
 }
 
+/** Hands the parent a function that renders one frame and returns it as PNG. */
+function Snapshot({ register }: { register: (capture: (() => string) | null) => void }) {
+  const { gl, scene, camera } = useThree();
+  useEffect(() => {
+    register(() => {
+      // The buffer is not preserved between frames, so draw one now and
+      // read it back before anything else touches it.
+      gl.render(scene, camera);
+      return gl.domElement.toDataURL("image/png").split(",", 2)[1];
+    });
+    return () => register(null);
+  }, [gl, scene, camera, register]);
+  return null;
+}
+
 function SurfaceScene({
   surfaces,
   materials,
   hiddenMaterials,
+  registerSnapshot,
 }: {
   surfaces: SurfaceDocument;
   materials: MaterialDefinition[];
   hiddenMaterials: string[];
+  registerSnapshot: (capture: (() => string) | null) => void;
 }) {
   const { bounds } = surfaces;
   const span = Math.max(
@@ -216,6 +242,7 @@ function SurfaceScene({
         />
       </group>
       <OrbitControls enablePan enableZoom makeDefault />
+      <Snapshot register={registerSnapshot} />
     </Canvas>
   );
 }
@@ -442,9 +469,13 @@ export function Viewport({
   onSectionIndexChange,
   sectionLine,
   onSectionLineChange,
+  smoothSection,
+  onSmoothSectionChange,
   materials,
   hiddenMaterials,
   onToggleMaterial,
+  onExportMesh,
+  onSaveImage,
   surfaces,
   section,
   topView,
@@ -465,6 +496,45 @@ export function Viewport({
   const stopDrawing = () => {
     setDrawing(false);
     setPendingStart(null);
+  };
+
+  // The export menu on the view, and the 3D canvas's own frame grabber.
+  const [menu, setMenu] = useState<MenuAnchor | null>(null);
+  const snapshot = useRef<(() => string) | null>(null);
+  const registerSnapshot = useCallback((capture: (() => string) | null) => {
+    snapshot.current = capture;
+  }, []);
+  const closeMenu = useCallback(() => setMenu(null), []);
+  const menuItems = () => {
+    if (mode === "surfaces") {
+      const ready = !!surfaces && surfaces.surfaces.length > 0;
+      return [
+        {
+          label: "Export mesh (GLB, OBJ, STL, PLY)…",
+          icon: <FileBox size={13} />,
+          action: onExportMesh,
+          disabled: !ready,
+        },
+        {
+          label: "Save this view as PNG…",
+          icon: <Camera size={13} />,
+          action: () => {
+            const capture = snapshot.current;
+            if (capture) onSaveImage("3d", capture());
+          },
+          disabled: !ready || !snapshot.current,
+        },
+      ];
+    }
+    const picture = mode === "section" ? section : topView;
+    return [
+      {
+        label: "Save this picture as PNG…",
+        icon: <Camera size={13} />,
+        action: () => picture && onSaveImage(mode === "section" ? "section" : "top", picture.image),
+        disabled: !picture,
+      },
+    ];
   };
 
   // The ruler: two clicks measure a distance on the picture. It resets when
@@ -600,7 +670,14 @@ export function Viewport({
         </div>
       </div>
 
-      <div className="canvas-wrap">
+      <div
+        className="canvas-wrap"
+        onContextMenu={(event) => {
+          event.preventDefault();
+          setMenu({ x: event.clientX, y: event.clientY });
+        }}
+      >
+        {menu && <ContextMenu anchor={menu} items={menuItems()} onClose={closeMenu} />}
         {error ? (
           <div className="view-placeholder">
             <CircleAlert size={20} />
@@ -626,6 +703,7 @@ export function Viewport({
               surfaces={surfaces}
               materials={materials}
               hiddenMaterials={hiddenMaterials}
+              registerSnapshot={registerSnapshot}
             />
           ) : (
             <div className="view-placeholder">
@@ -741,6 +819,20 @@ export function Viewport({
               )
             )}
           </>
+        )}
+        {mode === "section" && section?.exact && (
+          <button
+            type="button"
+            className={smoothSection ? "footer-toggle active" : "footer-toggle"}
+            title={
+              smoothSection
+                ? "Sampled films are drawn as the surface they sample. Click to see the stored slabs, staircase included."
+                : "The stored slabs are drawn as they are. Click to join the sampled bands into the surface they sample."
+            }
+            onClick={() => onSmoothSectionChange(!smoothSection)}
+          >
+            {smoothSection ? "Smooth steps" : "Exact slabs"}
+          </button>
         )}
         {mode !== "top" && (
           <label>

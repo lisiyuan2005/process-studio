@@ -621,6 +621,84 @@ def _section_shapes(section, z_offset: float):
     ]
 
 
+def _matched(below: Sequence[tuple[float, float]], above: Sequence[tuple[float, float]], slack: float) -> bool:
+    """Two rows of intervals that are the same features one sample apart."""
+    if len(below) != len(above):
+        return False
+    return all(
+        min(a1, b1) - max(a0, b0) > -slack for (a0, a1), (b0, b1) in zip(below, above)
+    )
+
+
+def _smooth_section_shapes(section, state: SlabState, resolution: float):
+    """The sampled bands of a film drawn as the surface they sample.
+
+    Conformal deposition walks the surface in z steps of the resolution:
+    each step is a slab whose outline is exact at that height, and between
+    heights the outline jumps. The stored geometry is those jumps, a
+    staircase whose step is the resolution. The film it stands for is
+    smooth, so for the picture the outline at each thin slab's mid height
+    is joined to the next one by straight edges. This touches nothing that
+    is stored; the exact staircase is one switch away.
+
+    Only bands no thicker than twice the resolution are the sampled kind.
+    Thick slabs (the wafer, planar films, anything etched straight down)
+    keep their vertical walls, and two bands are joined only when they hold
+    the same number of intervals and each pair overlaps; where that fails,
+    at a pinch-off or a split, the band is drawn as stored.
+    """
+    from shapely.geometry import Polygon, box
+
+    slabs = state.device._state.slabs
+    thin = [slab.thickness <= 2.0 * resolution + 1e-9 for slab in slabs]
+    rows: list[dict[str, list[tuple[float, float]]]] = []
+    for slab in slabs:
+        row: dict[str, list[tuple[float, float]]] = {}
+        for material, region in slab.regions.items():
+            segments = section._segments(region)
+            if segments:
+                row[material.name] = segments
+        rows.append(row)
+    mids = [0.5 * (slab.z0 + slab.z1) for slab in slabs]
+    pieces: dict[str, list] = {}
+    order: list[str] = []
+    for k, slab in enumerate(slabs):
+        for name, segments in rows[k].items():
+            if name not in pieces:
+                pieces[name] = []
+                order.append(name)
+            below = rows[k - 1].get(name) if k > 0 else None
+            above = rows[k + 1].get(name) if k + 1 < len(slabs) else None
+            joined_below = (
+                thin[k] and k > 0 and thin[k - 1] and below is not None
+                and _matched(below, segments, resolution)
+            )
+            joined_above = (
+                thin[k] and k + 1 < len(slabs) and thin[k + 1] and above is not None
+                and _matched(segments, above, resolution)
+            )
+            for index, (s0, s1) in enumerate(segments):
+                if not joined_below:
+                    pieces[name].append(box(s0, slab.z0, s1, mids[k]))
+                if joined_above:
+                    t0, t1 = above[index]  # type: ignore[index]
+                    pieces[name].append(
+                        Polygon([(s0, mids[k]), (s1, mids[k]), (t1, mids[k + 1]), (t0, mids[k + 1])])
+                    )
+                else:
+                    pieces[name].append(box(s0, mids[k], s1, slab.z1))
+    shapes = []
+    for name in order:
+        merged = shapely.unary_union(pieces[name]).buffer(0)
+        for polygon in shapely.get_parts(merged):
+            if polygon.geom_type != "Polygon" or polygon.area <= 0:
+                continue
+            rings = [list(polygon.exterior.coords[:-1])]
+            rings += [list(ring.coords[:-1]) for ring in polygon.interiors]
+            shapes.append(([[(s, z + state.z_offset) for s, z in ring] for ring in rings], name))
+    return shapes
+
+
 def _top_view_shapes(top_view):
     return [(rings, name) for rings, _color, name in top_view._shapes()]
 
@@ -801,11 +879,14 @@ class SlabKernel:
         position: float | None = None,
         interpolation: int = 1,
         line: tuple[tuple[float, float], tuple[float, float]] | None = None,
+        smooth: bool = True,
     ) -> dict[str, Any]:
         device = state.device
         x_min, y_min, x_max, y_max = device.bounds
         if line is not None:
-            return self._line_section(state, colors, project=project, line=line, interpolation=interpolation)
+            return self._line_section(
+                state, colors, project=project, line=line, interpolation=interpolation, smooth=smooth
+            )
         if axis == "y":
             coordinates = np.linspace(y_min, y_max, SECTION_POSITIONS)
         elif axis == "x":
@@ -831,9 +912,14 @@ class SlabKernel:
             state.z_offset,
             max(float(project.grid["z_max"]), top + state.z_offset),
         )
+        drawn = (
+            _smooth_section_shapes(section, state, resolution_um(project))
+            if smooth
+            else _section_shapes(section, state.z_offset)
+        )
         shapes = [
             ([[(s + horizontal[0], z) for s, z in ring] for ring in rings], name)
-            for rings, name in _section_shapes(section, state.z_offset)
+            for rings, name in drawn
         ]
         pixels_per_um = _pixels_per_um(extent, interpolation)
         rgb = _raster(shapes, colors, extent, pixels_per_um)
@@ -845,6 +931,7 @@ class SlabKernel:
             "interpolation": interpolation,
             "sampledSpacingUm": 1.0 / pixels_per_um,
             "exact": True,
+            "smoothed": bool(smooth),
             "width": int(rgb.shape[1]),
             "height": int(rgb.shape[0]),
             "horizontalAxis": horizontal_label,
@@ -865,6 +952,7 @@ class SlabKernel:
         project: ProjectDefinition,
         line: tuple[tuple[float, float], tuple[float, float]],
         interpolation: int,
+        smooth: bool = True,
     ) -> dict[str, Any]:
         """The exact cut along any line: DeviceFlow sections are not axis-bound."""
         device = state.device
@@ -881,7 +969,12 @@ class SlabKernel:
             max(float(project.grid["z_max"]), top + state.z_offset),
         )
         pixels_per_um = _pixels_per_um(extent, interpolation)
-        rgb = _raster(_section_shapes(section, state.z_offset), colors, extent, pixels_per_um)
+        drawn = (
+            _smooth_section_shapes(section, state, resolution_um(project))
+            if smooth
+            else _section_shapes(section, state.z_offset)
+        )
+        rgb = _raster(drawn, colors, extent, pixels_per_um)
         return {
             "image": _png(rgb),
             "axis": "line",
@@ -890,6 +983,7 @@ class SlabKernel:
             "interpolation": interpolation,
             "sampledSpacingUm": 1.0 / pixels_per_um,
             "exact": True,
+            "smoothed": bool(smooth),
             "width": int(rgb.shape[1]),
             "height": int(rgb.shape[0]),
             "horizontalAxis": "s",

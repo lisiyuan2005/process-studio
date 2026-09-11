@@ -24,6 +24,7 @@ from ..libraries import RecipeLibrary
 from ..models import ProcessType
 from ..simulation_settings import MAXIMUM_NODES, estimate_grid, grid_for_target_spacing
 from .errors import InvalidRequest, WorkerError, WorkspaceError
+from .export import write_image, write_mesh
 from .render import MAXIMUM_INTERPOLATION, MESHES_AVAILABLE, sketch_preview_image
 from .runner import (
     apply_grid,
@@ -575,10 +576,30 @@ def dispatch(
             ),
             interpolation=parameters.get("interpolation", 1),
             line=_section_line(parameters.get("line")),
+            smooth=bool(parameters.get("smooth", True)),
         )
     if method == "get_top_view":
         state, repository, project, kernel = _view_state(parameters)
         return kernel.top_view(state, _material_colors(repository), project=project)
+    if method == "export_mesh":
+        state, repository, project, kernel = _view_state(parameters)
+        destination = parameters.get("destination")
+        if not isinstance(destination, str) or not destination:
+            raise InvalidRequest("export_mesh requires a destination path.")
+        materials = parameters.get("materials")
+        return write_mesh(
+            kernel, state, project, _material_colors(repository), Path(destination),
+            materials=None if materials is None else [str(name) for name in materials],
+            interpolation=parameters.get("interpolation", 1),
+        )
+    if method == "save_image":
+        destination = parameters.get("destination")
+        image = parameters.get("image")
+        if not isinstance(destination, str) or not destination:
+            raise InvalidRequest("save_image requires a destination path.")
+        if not isinstance(image, str) or not image:
+            raise InvalidRequest("save_image requires the image as base64 PNG.")
+        return write_image(Path(destination), image)
     if method == "import_gds":
         return _import_gds(parameters)
     if method == "export_recipes_xlsx":

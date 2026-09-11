@@ -388,7 +388,10 @@ def cmd_view_section(session: Session, args: argparse.Namespace) -> int:
     document = session.document()
     branch = Session.branch(document)
     step_id = step_reference(session, document, args.step)
-    request: dict[str, Any] = {"branchId": branch["id"], "stepId": step_id, "interpolation": args.interpolation}
+    request: dict[str, Any] = {
+        "branchId": branch["id"], "stepId": step_id, "interpolation": args.interpolation,
+        "smooth": not args.exact,
+    }
     if args.line is not None:
         x0, y0, x1, y1 = args.line
         request["axis"] = "line"
@@ -428,42 +431,17 @@ def cmd_view_top(session: Session, args: argparse.Namespace) -> int:
 
 
 def cmd_view_mesh(session: Session, args: argparse.Namespace) -> int:
-    try:
-        import numpy as np
-        import trimesh
-    except ImportError as error:  # pragma: no cover - the level-set-only build
-        raise WorkerError("Exporting a mesh needs the trimesh package, which this build does not include.") from error
     document = session.document()
     branch = Session.branch(document)
     step_id = step_reference(session, document, args.step)
-    payload = session.call(
-        "get_surfaces", root=str(session.root), branchId=branch["id"], stepId=step_id,
-        interpolation=args.interpolation, materials=args.material or None,
+    result = session.call(
+        "export_mesh", root=str(session.root), branchId=branch["id"], stepId=step_id,
+        destination=str(Path(args.output).resolve()), interpolation=args.interpolation,
+        materials=args.material or None,
     )
-    scene = trimesh.Scene()
-    counts = {}
-    for surface in payload["surfaces"]:
-        positions = np.frombuffer(base64.b64decode(surface["positions"]), dtype=np.float32).reshape(-1, 3)
-        indices = np.frombuffer(base64.b64decode(surface["indices"]), dtype=np.uint32).reshape(-1, 3)
-        mesh = trimesh.Trimesh(vertices=positions.astype(np.float64), faces=indices.astype(np.int64), process=False)
-        color = surface.get("color", "#7c83a0").lstrip("#")
-        rgb = [int(color[index : index + 2], 16) for index in (0, 2, 4)] if len(color) == 6 else [124, 131, 160]
-        mesh.visual.face_colors = [*rgb, 255]
-        scene.add_geometry(mesh, node_name=surface["material"], geom_name=surface["material"])
-        counts[surface["material"]] = int(len(indices))
-    destination = Path(args.output)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    suffix = destination.suffix.lower().lstrip(".")
-    if suffix not in ("glb", "gltf", "obj", "stl", "ply"):
-        raise InvalidRequest("the mesh file must end with .glb, .gltf, .obj, .stl or .ply")
-    if suffix in ("stl", "ply"):
-        # One solid per file for the formats without named parts.
-        scene.dump(concatenate=True).export(str(destination))
-    else:
-        scene.export(str(destination))
     session.emit(
-        {"path": str(destination), "triangles": counts, "bounds": payload["bounds"]},
-        [f"Wrote {destination}"] + [f"  {name}: {count} triangles" for name, count in counts.items()],
+        result,
+        [f"Wrote {result['path']}"] + [f"  {name}: {count} triangles" for name, count in result["triangles"].items()],
     )
     return EXIT_OK
 
@@ -753,6 +731,8 @@ def build_parser() -> argparse.ArgumentParser:
     section.add_argument("--at", type=float, metavar="UM", help="where to cut, in µm; default: the middle")
     section.add_argument("--line", nargs=4, type=float, metavar=("X0", "Y0", "X1", "Y1"), help="cut along an arbitrary line")
     section.add_argument("--interpolation", type=int, default=1, help="display upsampling factor")
+    section.add_argument("--exact", action="store_true",
+                         help="draw the stored slabs as they are, staircase included, instead of the surface they sample")
     section.set_defaults(handler=cmd_view_section)
     top = view_commands.add_parser("top", help="the top view as PNG")
     _view_step(top)

@@ -84,7 +84,8 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .global-progress { position: fixed; top: 51px; left: 0; right: 0; height: 2px; z-index: 30; background: rgba(78, 143, 232, 0.1); }
 .global-progress div { height: 100%; background: #5da1f2; transition: width 180ms ease; }
 
-.workspace-grid { display: grid; grid-template-columns: 286px minmax(360px, 1fr) 306px; min-height: 0; height: 100%; }
+.app-shell { --steps-width: 286px; --inspector-width: 306px; }
+.workspace-grid { position: relative; display: grid; grid-template-columns: var(--steps-width) minmax(360px, 1fr) var(--inspector-width); min-height: 0; height: 100%; }
 .steps-panel, .inspector-panel { min-height: 0; display: flex; flex-direction: column; background: var(--panel); }
 .steps-panel { border-right: 1px solid var(--line); }
 .inspector-panel { border-left: 1px solid var(--line); }
@@ -222,7 +223,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .preview-disclaimer, .viewport-notice { position: absolute; left: 13px; bottom: 12px; padding: 6px 9px; border: 1px solid rgba(83, 98, 112, 0.33); border-radius: 5px; background: rgba(14, 19, 24, 0.82); backdrop-filter: blur(8px); color: #71808d; font-size: 8.5px; }
 .viewport-notice { top: 12px; bottom: auto; display: flex; align-items: center; gap: 6px; color: #d5a65b; border-color: rgba(213, 166, 91, 0.32); }
 
-.log-drawer { position: fixed; z-index: 50; left: 286px; right: 306px; bottom: 0; height: 180px; border-top: 1px solid #34414c; background: rgba(13, 18, 23, 0.97); box-shadow: 0 -8px 30px rgba(0,0,0,0.22); }
+.log-drawer { position: fixed; z-index: 50; left: var(--steps-width, 286px); right: var(--inspector-width, 306px); bottom: 0; height: 180px; border-top: 1px solid #34414c; background: rgba(13, 18, 23, 0.97); box-shadow: 0 -8px 30px rgba(0,0,0,0.22); }
 .log-heading { height: 34px; display: flex; align-items: center; justify-content: space-between; padding: 0 11px; border-bottom: 1px solid #232d36; color: #8997a4; font-size: 9.5px; }
 .log-heading button { border: 0; background: transparent; color: #61707e; cursor: pointer; font-size: 9px; }
 .log-heading-actions { display: flex; align-items: center; gap: 4px; }
@@ -336,9 +337,9 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .open-button { color: #566b7d; }
 
 @media (max-width: 1120px) {
-  .workspace-grid { grid-template-columns: 248px minmax(340px, 1fr) 278px; }
+  .app-shell { --steps-width: 248px; --inspector-width: 278px; }
+  .workspace-grid { grid-template-columns: var(--steps-width) minmax(340px, 1fr) var(--inspector-width); }
   .project-path { display: none; }
-  .log-drawer { left: 248px; right: 278px; }
 }
 
 /* Project variants, layout masks, and editors. */
@@ -560,3 +561,13 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .recent-forget { width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--faint); cursor: pointer; }
 .recent-forget:hover { border-color: var(--line); color: var(--red); }
 .restore-splash { height: 100vh; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--muted); font-size: 12px; background: var(--bg); }
+
+/* Side panel edges the user can drag; the viewport takes up the difference. */
+.panel-resizer { position: absolute; top: 0; bottom: 0; width: 9px; z-index: 6; cursor: col-resize; touch-action: none; }
+.panel-resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: 4px; width: 1px; background: transparent; transition: background 120ms; }
+.panel-resizer:hover::after, .panel-resizer:active::after { background: var(--accent); }
+.panel-resizer-left { left: calc(var(--steps-width) - 4px); }
+.panel-resizer-right { right: calc(var(--inspector-width) - 5px); }
+.footer-toggle { height: 26px; padding: 0 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-raised); color: var(--muted); font-size: 9px; cursor: pointer; }
+.footer-toggle.active { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+.context-menu-group { display: contents; }

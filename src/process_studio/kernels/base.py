@@ -133,7 +133,14 @@ class Kernel(Protocol):
         position: float | None = None,
         interpolation: int = 1,
         line: tuple[tuple[float, float], tuple[float, float]] | None = None,
+        smooth: bool = True,
     ) -> dict[str, Any]:
+        """A cut through the state as a picture.
+
+        ``smooth`` asks a kernel whose stored geometry is sampled in steps to
+        draw the surface those steps sample; a kernel that has nothing of
+        the kind ignores it.
+        """
         """A vertical cut, as a PNG plus the frame it was drawn in.
 
         ``line`` is a pair of (x, y) points in micrometres; when given, the

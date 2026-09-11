@@ -117,6 +117,7 @@ class LevelSetKernel:
         position: float | None = None,
         interpolation: int = 1,
         line: tuple[tuple[float, float], tuple[float, float]] | None = None,
+        smooth: bool = True,
     ) -> dict[str, Any]:
         if line is not None:
             return line_section_image(

@@ -111,13 +111,40 @@ export class TauriBridge implements DesktopBridge {
 
   getSection(
     root: string,
-    request: ViewRequest & { axis: SectionAxis; position?: number; line?: SectionLine },
+    request: ViewRequest & { axis: SectionAxis; position?: number; line?: SectionLine; smooth?: boolean },
   ): Promise<SectionDocument> {
     return call<SectionDocument>("get_section", { root, ...request });
   }
 
   getTopView(root: string, request: ViewRequest): Promise<TopViewDocument> {
     return call<TopViewDocument>("get_top_view", { root, ...request });
+  }
+
+  async exportMesh(root: string, request: ViewRequest, defaultName: string): Promise<string | null> {
+    const destination = await save({
+      title: "Export the 3D surfaces",
+      defaultPath: `${safeFileName(defaultName)}.glb`,
+      filters: [
+        { name: "glTF binary", extensions: ["glb"] },
+        { name: "Wavefront OBJ", extensions: ["obj"] },
+        { name: "STL", extensions: ["stl"] },
+        { name: "PLY", extensions: ["ply"] },
+      ],
+    });
+    if (!destination) return null;
+    const result = await call<{ path: string }>("export_mesh", { root, ...request, destination });
+    return result.path;
+  }
+
+  async saveImage(defaultName: string, imageBase64: string): Promise<string | null> {
+    const destination = await save({
+      title: "Save the picture",
+      defaultPath: `${safeFileName(defaultName)}.png`,
+      filters: [{ name: "PNG image", extensions: ["png"] }],
+    });
+    if (!destination) return null;
+    const result = await call<{ path: string }>("save_image", { destination, image: imageBase64 });
+    return result.path;
   }
 
   async importGds(root: string): Promise<GdsImportResult | null> {

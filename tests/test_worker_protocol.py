@@ -10,6 +10,7 @@ import time
 
 import numpy as np
 import pytest
+from pathlib import Path
 from PIL import Image
 
 from process_studio.worker.errors import InvalidRequest, WorkspaceError
@@ -809,3 +810,28 @@ def test_describe_reports_the_node_ceiling_and_presets():
     numerics = call("describe")["numerics"]
     assert numerics["maximumNodes"] == 20_000_000
     assert numerics["spacingPresetsNm"] == [25.0, 12.5, 6.25]
+
+
+def test_the_views_can_be_written_to_files(tmp_path, workspace):
+    """A mesh of the 3D surfaces in a few formats, and a picture as PNG."""
+    document = call("open_workspace", root=str(workspace))
+    etch = document["branches"][0]["steps"][1]["id"]
+    call("run_flow", root=str(workspace), branchId="default-main", throughStepId=etch)
+    for suffix in ("glb", "obj", "stl"):
+        destination = tmp_path / f"etch.{suffix}"
+        result = call(
+            "export_mesh", root=str(workspace), branchId="default-main", stepId=etch,
+            destination=str(destination),
+        )
+        assert Path(result["path"]) == destination and destination.stat().st_size > 0
+        assert result["triangles"]["Si"] > 0
+    with pytest.raises(InvalidRequest):
+        call("export_mesh", root=str(workspace), branchId="default-main", stepId=etch,
+             destination=str(tmp_path / "etch.txt"))
+
+    section = call("get_section", root=str(workspace), branchId="default-main", stepId=etch, axis="y")
+    picture = tmp_path / "pictures" / "cut.png"
+    saved = call("save_image", destination=str(picture), image=section["image"])
+    assert picture.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n" and saved["bytes"] == picture.stat().st_size
+    with pytest.raises(InvalidRequest):
+        call("save_image", destination=str(tmp_path / "x.png"), image="bm90IGEgcG5n")

@@ -19,6 +19,7 @@ import { bridge } from "./bridge";
 import { GridEditor } from "./components/GridEditor";
 import { Inspector } from "./components/Inspector";
 import { MaterialEditor } from "./components/MaterialEditor";
+import { PanelResizer } from "./components/PanelResizer";
 import { ProjectHome } from "./components/ProjectHome";
 import { RecipeEditor } from "./components/RecipeEditor";
 import { SketchEditor } from "./components/SketchEditor";
@@ -74,7 +75,16 @@ import {
   type RecentWorkspace,
 } from "./domain/recent";
 
+import {
+  clampPanelWidths,
+  loadPanelWidths,
+  savePanelWidths,
+  type PanelWidths,
+} from "./domain/layout";
+
 type SaveState = "saved" | "saving" | "unsaved" | "error";
+
+const DEFAULT_PANELS: PanelWidths = { steps: 286, inspector: 306 };
 
 const AUTOSAVE_DELAY_MS = 600;
 
@@ -110,6 +120,20 @@ export default function App() {
   // The AA–BB line drawn on the top view, in micrometres; null until drawn.
   const [sectionLine, setSectionLine] = useState<SectionLine | null>(null);
   const [sectionIndex, setSectionIndex] = useState<number | null>(null);
+  // Sampled films drawn as the surface they sample, or as the stored slabs.
+  const [smoothSection, setSmoothSection] = useState(true);
+  // Side panel widths the user dragged; null means the stylesheet's defaults.
+  const [panelWidths, setPanelWidths] = useState<PanelWidths | null>(loadPanelWidths);
+  const resizePanel = (side: "steps" | "inspector", width: number) => {
+    const current = panelWidths ?? DEFAULT_PANELS;
+    const next = clampPanelWidths({ ...current, [side]: width }, window.innerWidth);
+    setPanelWidths(next);
+    savePanelWidths(next);
+  };
+  const resetPanels = () => {
+    setPanelWidths(null);
+    savePanelWidths(null);
+  };
   const [surfaces, setSurfaces] = useState<SurfaceDocument>();
   const [section, setSection] = useState<SectionDocument>();
   const [topView, setTopView] = useState<TopViewDocument>();
@@ -302,6 +326,32 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const stepFileName = () => {
+    const step = selectedStep ? `${steps.indexOf(selectedStep) + 1}-${selectedStep.name}` : "wafer";
+    return `${document?.project.name ?? "process-studio"}-${step}`;
+  };
+
+  const exportMesh = async () => {
+    if (!document || !branch) return;
+    try {
+      const path = await bridge.exportMesh(document.root, { branchId: branch.id, stepId: selectedStepId }, stepFileName());
+      if (path) setEvents((current) => [...current, { kind: "log", message: `Exported the 3D surfaces to ${path}` }]);
+    } catch (reason) {
+      setEvents((current) => [...current, { kind: "log", message: `Mesh export failed: ${errorMessage(reason)}` }]);
+      setShowLog(true);
+    }
+  };
+
+  const saveImage = async (kind: "3d" | "section" | "top", image: string) => {
+    try {
+      const path = await bridge.saveImage(`${stepFileName()}-${kind}`, image);
+      if (path) setEvents((current) => [...current, { kind: "log", message: `Saved the picture to ${path}` }]);
+    } catch (reason) {
+      setEvents((current) => [...current, { kind: "log", message: `Saving the picture failed: ${errorMessage(reason)}` }]);
+      setShowLog(true);
+    }
+  };
+
   const removeStepById = (stepId: string) => {
     if (!document) return;
     const target = steps.find((step) => step.id === stepId);
@@ -367,11 +417,14 @@ export default function App() {
         }
         const position = sectionAxis === "line" ? undefined : sectionPosition.current ?? undefined;
         const line = sectionAxis === "line" && sectionLine ? sectionLine : undefined;
-        const key = `section:${target}:${interpolation}:${sectionAxis}:${position ?? "mid"}:${line ? line.start.join(",") + ">" + line.end.join(",") : ""}`;
+        const key = `section:${target}:${interpolation}:${sectionAxis}:${position ?? "mid"}:${line ? line.start.join(",") + ">" + line.end.join(",") : ""}:${smoothSection ? "smooth" : "exact"}`;
         const hit = cached<SectionDocument>(key);
         const next = hit ?? (await (async () => {
           setViewLoading(true);
-          return remember(key, await bridge.getSection(root, { ...request, axis: sectionAxis, position, line }));
+          return remember(
+            key,
+            await bridge.getSection(root, { ...request, axis: sectionAxis, position, line, smooth: smoothSection }),
+          );
         })());
         if (token !== viewToken.current) return;
         setSection(next);
@@ -412,6 +465,7 @@ export default function App() {
     sectionAxis,
     sectionIndex,
     sectionLine,
+    smoothSection,
   ]);
 
   useEffect(() => {
@@ -656,7 +710,19 @@ export default function App() {
       : undefined;
 
   return (
-    <div className="app-shell">
+    <div
+      className="app-shell"
+      // The panel widths live on the shell so the log drawer, which sits
+      // outside the grid, lines up with the same edges.
+      style={
+        panelWidths
+          ? ({
+              "--steps-width": `${panelWidths.steps}px`,
+              "--inspector-width": `${panelWidths.inspector}px`,
+            } as React.CSSProperties)
+          : undefined
+      }
+    >
       <header className="topbar">
         <button
           type="button"
@@ -787,6 +853,18 @@ export default function App() {
       ) : null}
 
       <div className="workspace-grid">
+        <PanelResizer
+          side="left"
+          width={(panelWidths ?? DEFAULT_PANELS).steps}
+          onResize={(width) => resizePanel("steps", width)}
+          onReset={resetPanels}
+        />
+        <PanelResizer
+          side="right"
+          width={(panelWidths ?? DEFAULT_PANELS).inspector}
+          onResize={(width) => resizePanel("inspector", width)}
+          onReset={resetPanels}
+        />
         <StepList
           steps={steps}
           statuses={statuses}
@@ -843,6 +921,10 @@ export default function App() {
               setSectionAxis("y");
             }
           }}
+          smoothSection={smoothSection}
+          onSmoothSectionChange={setSmoothSection}
+          onExportMesh={() => void exportMesh()}
+          onSaveImage={(kind, image) => void saveImage(kind, image)}
           sectionIndex={sectionIndex ?? 0}
           onSectionIndexChange={(index) => {
             sectionPosition.current = section?.positions?.[index] ?? null;

@@ -227,6 +227,8 @@ export type SectionAxis = "x" | "y" | "line";
 export interface SectionDocument {
   /** Base64 PNG of the cut, already flipped so row zero is the top. */
   image: string;
+  /** True when sampled bands were drawn as the surface they sample (slab kernel). */
+  smoothed?: boolean;
   axis: SectionAxis;
   position: number;
   index: number;

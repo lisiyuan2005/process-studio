@@ -144,6 +144,14 @@ export class BrowserBridge implements DesktopBridge {
     throw new Error(NO_KERNEL);
   }
 
+  async exportMesh(): Promise<string | null> {
+    throw new Error(NO_KERNEL);
+  }
+
+  async saveImage(): Promise<string | null> {
+    throw new Error(NO_KERNEL);
+  }
+
   async importGds(): Promise<GdsImportResult | null> {
     throw new Error(NO_KERNEL);
   }
