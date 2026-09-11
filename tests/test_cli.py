@@ -229,3 +229,17 @@ def test_section_lines_can_be_saved_and_cut_along(workspace: Path, tmp_path: Pat
     code, _, err = run("view", "section", "--named", "Missing", "-o", str(tmp_path / "x.png"), root=workspace)
     assert code == EXIT_USAGE and "no section line" in err
     assert as_json("lines", "rm", "Diagonal", root=workspace) == []
+
+
+def test_tools_are_a_grouped_library(workspace: Path):
+    tools = as_json("tools", "list", root=workspace)
+    assert {tool["name"] for tool in tools} >= {"ICP-RIE", "ALD", "Stepper"}
+    tool = as_json("tools", "add", "Sputter-2", "--group", "Deposition/PVD", root=workspace)
+    assert tool["group"] == "Deposition/PVD"
+    moved = as_json("tools", "add", "Sputter-2", "--group", "Deposition", root=workspace)
+    assert moved["id"] == tool["id"] and moved["group"] == "Deposition"
+    assert "Sputter-2" not in [t["name"] for t in as_json("tools", "rm", "Sputter-2", root=workspace)]
+    code, _, err = run("tools", "rm", "Nope", root=workspace)
+    assert code == EXIT_USAGE and "no tool" in err
+    code, out, _ = run("recipes", "list", root=workspace)
+    assert code == EXIT_OK and "ALD" in out

@@ -88,11 +88,21 @@ export interface MaterialResponse {
   stopLayer: boolean;
 }
 
+/** A machine or bench a step runs on; `group` is a path such as "Etch/Dry". */
+export interface ToolDefinition {
+  id: string;
+  name: string;
+  group: string;
+  notes: string;
+}
+
 export interface Recipe {
   id: string;
   name: string;
   processType: ProcessType;
   tool: string;
+  /** Where the recipe sits below its process type, e.g. "ALD/Oxides"; empty for the type itself. */
+  group: string;
   outputMaterial: string | null;
   parameters: Record<string, ParameterValue>;
   materialResponses: Record<string, MaterialResponse>;
@@ -155,6 +165,7 @@ export interface WorkspaceDocument {
   branches: FlowBranch[];
   recipes: Recipe[];
   materials: MaterialDefinition[];
+  tools: ToolDefinition[];
   sketches: QuickSketch[];
   /** Step status per branch id, as computed from stored snapshot digests. */
   stepStatuses: Record<string, Record<string, StepStatus>>;

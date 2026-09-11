@@ -23,6 +23,7 @@ RECIPE_COLUMNS = [
     "Rate (um/min)",
     "Stop Layer",
     "Extra Parameters (JSON)",
+    "Group",
 ]
 
 
@@ -81,6 +82,7 @@ class RecipeLibrary:
                         response.rate_um_per_min,
                         response.stop_layer,
                         json.dumps(common, ensure_ascii=False),
+                        recipe.group,
                     ]
                 )
         sheet.freeze_panes = "A2"
@@ -117,6 +119,7 @@ class RecipeLibrary:
                     tool=str(row.get("Tool") or ""),
                     output_material=str(row.get("Material") or "") or None,
                     parameters=parameters,
+                    group=str(row.get("Group") or ""),
                 )
                 recipes_by_name[name] = recipe
             material = str(row.get("Material") or "")

@@ -19,6 +19,7 @@ from .models import (
     ProcessType,
     ProjectDefinition,
     Recipe,
+    ToolDefinition,
 )
 
 
@@ -61,6 +62,11 @@ class ProjectRepository:
                 CREATE TABLE IF NOT EXISTS recipes (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS tools (
+                    id TEXT PRIMARY KEY,
+                    name TEXT UNIQUE NOT NULL,
                     payload_json TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS branches (
@@ -198,6 +204,27 @@ class ProjectRepository:
                 payload_json=excluded.payload_json""",
                 (material.id, material.name, json.dumps(payload)),
             )
+
+    def save_tool(self, tool: ToolDefinition) -> None:
+        """Write a tool by id; the name is a label that must merely be unique."""
+        payload = asdict(tool)
+        with self.connect() as connection:
+            clash = connection.execute(
+                "SELECT id FROM tools WHERE name=? AND id<>?", (tool.name, tool.id)
+            ).fetchone()
+            if clash is not None:
+                raise ValueError(f"A tool named {tool.name!r} already exists.")
+            connection.execute(
+                """INSERT INTO tools(id, name, payload_json) VALUES (?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET name=excluded.name,
+                payload_json=excluded.payload_json""",
+                (tool.id, tool.name, json.dumps(payload)),
+            )
+
+    def load_tools(self) -> list[ToolDefinition]:
+        with self.connect() as connection:
+            rows = connection.execute("SELECT payload_json FROM tools ORDER BY name")
+            return [ToolDefinition(**json.loads(row[0])) for row in rows]
 
     def load_materials(self) -> list[MaterialDefinition]:
         with self.connect() as connection:

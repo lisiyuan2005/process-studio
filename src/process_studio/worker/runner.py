@@ -18,6 +18,7 @@ from .serialize import (
     branch_to_json,
     grid_dict,
     material_to_json,
+    tool_to_json,
     project_to_json,
     recipe_to_json,
 )
@@ -80,6 +81,7 @@ def build_document(
         "branches": [branch_to_json(branch, recipes_by_id) for branch in loaded],
         "recipes": [recipe_to_json(recipe) for recipe in recipes],
         "materials": [material_to_json(material) for material in repository.load_materials()],
+        "tools": [tool_to_json(tool) for tool in repository.load_tools()],
         "sketches": [
             sketch_to_json(sketch_id, sketch) for sketch_id, sketch in sorted(sketches.items())
         ],

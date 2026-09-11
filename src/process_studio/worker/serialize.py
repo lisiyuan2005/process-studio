@@ -18,6 +18,7 @@ from ..models import (
     ProcessType,
     ProjectDefinition,
     Recipe,
+    ToolDefinition,
     new_id,
 )
 from .errors import InvalidRequest
@@ -98,6 +99,24 @@ def material_from_json(payload: Mapping[str, Any]) -> MaterialDefinition:
         raise InvalidRequest(f"material is invalid: {error}") from error
 
 
+def tool_to_json(tool: ToolDefinition) -> dict[str, Any]:
+    return {"id": tool.id, "name": tool.name, "group": tool.group, "notes": tool.notes}
+
+
+def tool_from_json(payload: Mapping[str, Any]) -> ToolDefinition:
+    try:
+        return ToolDefinition(
+            str(payload["name"]).strip(),
+            str(payload.get("group") or ""),
+            str(payload.get("notes") or ""),
+            id=str(payload.get("id") or new_id()),
+        )
+    except KeyError as error:
+        raise InvalidRequest(f"tool is missing {error.args[0]}") from error
+    except (TypeError, ValueError) as error:
+        raise InvalidRequest(f"tool is invalid: {error}") from error
+
+
 def response_to_json(response: MaterialResponse) -> dict[str, Any]:
     return {
         "material": response.material,
@@ -125,6 +144,7 @@ def recipe_to_json(recipe: Recipe) -> dict[str, Any]:
         "name": recipe.name,
         "processType": recipe.process_type.value,
         "tool": recipe.tool,
+        "group": recipe.group,
         "outputMaterial": recipe.output_material,
         "parameters": dict(recipe.parameters),
         "materialResponses": {
@@ -161,6 +181,7 @@ def recipe_from_json(payload: Mapping[str, Any]) -> Recipe:
         material_responses={
             str(key): response_from_json(value) for key, value in responses.items()
         },
+        group=str(payload.get("group") or ""),
         id=str(payload.get("id") or new_id()),
     )
 

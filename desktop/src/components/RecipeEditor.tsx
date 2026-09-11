@@ -1,11 +1,13 @@
 import { CircleAlert, FileSpreadsheet, Plus, Trash2, Upload, X } from "lucide-react";
-import { useEffect, useState } from "react";
-import { newId } from "../domain/project";
-import type { MaterialDefinition, ParameterValue, ProcessType, Recipe } from "../types";
+import { useEffect, useMemo, useState } from "react";
+import { groupRecipes, newId, type RecipeGroup } from "../domain/project";
+import { ToolPicker } from "./ToolPicker";
+import type { MaterialDefinition, ParameterValue, ProcessType, Recipe, ToolDefinition } from "../types";
 
 interface RecipeEditorProps {
   recipes: Recipe[];
   materials: MaterialDefinition[];
+  tools: ToolDefinition[];
   busy: boolean;
   onSave: (recipe: Recipe) => void;
   onDelete: (recipeId: string) => void;
@@ -15,6 +17,52 @@ interface RecipeEditorProps {
 }
 
 const PROCESS_TYPES: ProcessType[] = ["deposit", "etch", "cmp", "no_geometry"];
+const TYPE_TITLES: Record<ProcessType, string> = {
+  deposit: "Deposition",
+  etch: "Etch",
+  cmp: "CMP",
+  no_geometry: "No geometry change",
+};
+
+/** One group of the library list, its recipes and then its subgroups, indented. */
+function GroupBranch({
+  group,
+  depth,
+  selectedId,
+  onSelect,
+}: {
+  group: RecipeGroup;
+  depth: number;
+  selectedId: string | undefined;
+  onSelect: (recipeId: string) => void;
+}) {
+  return (
+    <>
+      {group.path && (
+        <span className="list-group-title" style={{ paddingLeft: 8 + depth * 12 }}>
+          {group.label}
+        </span>
+      )}
+      {group.recipes.map((recipe) => (
+        <button
+          key={recipe.id}
+          type="button"
+          className={recipe.id === selectedId ? "active" : ""}
+          style={{ paddingLeft: 10 + (group.path ? depth + 1 : depth) * 12 }}
+          onClick={() => onSelect(recipe.id)}
+        >
+          <span>
+            {recipe.name}
+            <small>{recipe.tool || "no tool"}</small>
+          </span>
+        </button>
+      ))}
+      {group.children.map((child) => (
+        <GroupBranch key={child.path} group={child} depth={depth + 1} selectedId={selectedId} onSelect={onSelect} />
+      ))}
+    </>
+  );
+}
 
 function ParameterField({
   recipe,
@@ -66,6 +114,7 @@ function ParameterField({
 export function RecipeEditor({
   recipes,
   materials,
+  tools,
   busy,
   onSave,
   onDelete,
@@ -75,6 +124,16 @@ export function RecipeEditor({
 }: RecipeEditorProps) {
   const [selectedId, setSelectedId] = useState(recipes[0]?.id ?? "");
   const selected = recipes.find((recipe) => recipe.id === selectedId) ?? recipes[0];
+  // The library is arranged by process type first, then by the group path
+  // each recipe carries; a group exists as soon as one recipe names it.
+  const byType = useMemo(
+    () => PROCESS_TYPES.map((type) => [type, groupRecipes(recipes.filter((r) => r.processType === type))] as const),
+    [recipes],
+  );
+  const groupNames = useMemo(
+    () => [...new Set(recipes.map((recipe) => recipe.group).filter(Boolean))].sort(),
+    [recipes],
+  );
 
   const update = (patch: Partial<Recipe>) => {
     if (!selected) return;
@@ -85,8 +144,9 @@ export function RecipeEditor({
     const recipe: Recipe = {
       id: newId("recipe"),
       name: "New recipe",
-      processType: "deposit",
+      processType: selected?.processType ?? "deposit",
       tool: "",
+      group: selected?.group ?? "",
       outputMaterial: materials[0]?.name ?? null,
       parameters: { target: 0.05, rate: 0.01 },
       materialResponses: {},
@@ -132,22 +192,15 @@ export function RecipeEditor({
         </header>
 
         <div className="recipe-editor-body">
-          <div className="recipe-list">
-            {recipes.map((recipe) => (
-              <button
-                key={recipe.id}
-                type="button"
-                className={recipe.id === selected?.id ? "active" : ""}
-                onClick={() => setSelectedId(recipe.id)}
-              >
-                <span>
-                  {recipe.name}
-                  <small>
-                    {recipe.processType} · {recipe.tool || "no tool"}
-                  </small>
-                </span>
-              </button>
-            ))}
+          <div className="recipe-list grouped-list">
+            {byType.map(([type, tree]) =>
+              tree.recipes.length || tree.children.length ? (
+                <div key={type} className="list-group">
+                  <span className="list-type-title">{TYPE_TITLES[type]}</span>
+                  <GroupBranch group={tree} depth={0} selectedId={selected?.id} onSelect={setSelectedId} />
+                </div>
+              ) : null,
+            )}
             <button type="button" className="add-material" onClick={addRecipe}>
               <Plus size={13} />
               Add recipe
@@ -176,8 +229,27 @@ export function RecipeEditor({
               </label>
 
               <label className="field-row">
+                <span>Group</span>
+                <input
+                  list="recipe-groups"
+                  value={selected.group}
+                  placeholder="none: directly under the process type"
+                  onChange={(event) => update({ group: event.target.value })}
+                />
+                <datalist id="recipe-groups">
+                  {groupNames.map((group) => (
+                    <option key={group} value={group} />
+                  ))}
+                </datalist>
+                <small>
+                  Type a name to make a group; a slash makes a subgroup, as in ALD/Oxides. The
+                  process type is always the top level.
+                </small>
+              </label>
+
+              <label className="field-row">
                 <span>Tool</span>
-                <input value={selected.tool} onChange={(event) => update({ tool: event.target.value })} />
+                <ToolPicker value={selected.tool} tools={tools} onChange={(tool) => update({ tool })} />
               </label>
 
               {selected.processType === "deposit" && (

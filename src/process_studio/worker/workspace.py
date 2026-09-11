@@ -13,7 +13,13 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
-from ..defaults import default_branch, default_grid, default_materials, default_recipes
+from ..defaults import (
+    default_branch,
+    default_grid,
+    default_materials,
+    default_recipes,
+    default_tools,
+)
 from ..kernels import default_kernel, get_kernel
 from ..layout.quick_sketch import QuickSketch, SketchShape
 from ..models import FlowBranch, ProcessStep, ProjectDefinition, Recipe
@@ -206,6 +212,8 @@ def initialize_workspace(
         repository.save_material(material)
     for recipe in default_recipes(chosen.info.id):
         repository.save_recipe(recipe)
+    for tool in default_tools():
+        repository.save_tool(tool)
     repository.save_project(project)
     repository.save_branch(project.id, branch)
     starter = QuickSketch(

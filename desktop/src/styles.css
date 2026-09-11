@@ -590,3 +590,15 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .pair-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; margin-bottom: 8px; }
 .field-row.compact { margin: 0; }
 .modal-actions .footer-spacer { flex: 1; }
+
+/* Grouped library lists: a type heading, then group paths, then entries. */
+.grouped-list .list-group { display: flex; flex-direction: column; margin-bottom: 6px; }
+.grouped-list .list-type-title { padding: 6px 8px 3px; color: var(--text); font-size: 9.5px; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; }
+.grouped-list .list-group-title { padding: 5px 8px 2px; color: var(--faint); font-size: 9px; font-weight: 600; }
+.tool-picker { display: flex; gap: 6px; min-width: 0; }
+.tool-picker select { flex: 1; min-width: 0; }
+.tool-picker input { flex: 1; min-width: 0; }
+.tool-row { display: flex; gap: 6px; align-items: center; }
+.tool-row .tool-picker { flex: 1; }
+.tool-row .secondary-button { height: 30px; padding: 0 9px; white-space: nowrap; }
+.field-error { color: var(--red); }

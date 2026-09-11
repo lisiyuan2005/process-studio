@@ -1,5 +1,6 @@
 import type {
   SectionLine,
+  ToolDefinition,
   FlowBranch,
   MaterialDefinition,
   ParameterValue,
@@ -257,6 +258,7 @@ export function recipeFromStep(step: ProcessStep, name: string): Recipe {
     name: name.trim() || step.name,
     processType: step.processType,
     tool: step.tool,
+    group: "",
     outputMaterial: step.outputMaterial,
     parameters: processParameters(step.parameters),
     materialResponses: copyResponses(step.materialResponses),
@@ -382,4 +384,60 @@ export function removeSectionLine(document: WorkspaceDocument, lineId: string): 
     document,
     document.project.sectionLines.filter((line) => line.id !== lineId),
   );
+}
+
+export function upsertTool(document: WorkspaceDocument, tool: ToolDefinition): WorkspaceDocument {
+  const exists = document.tools.some((item) => item.id === tool.id);
+  return {
+    ...document,
+    tools: exists
+      ? document.tools.map((item) => (item.id === tool.id ? tool : item))
+      : [...document.tools, tool],
+  };
+}
+
+export function removeTool(document: WorkspaceDocument, toolId: string): WorkspaceDocument {
+  return { ...document, tools: document.tools.filter((item) => item.id !== toolId) };
+}
+
+/** How many steps and recipes name each tool, for the editor's list. */
+export function toolUsage(document: WorkspaceDocument): Map<string, number> {
+  const usage = new Map<string, number>();
+  const count = (name: string) => {
+    if (name) usage.set(name, (usage.get(name) ?? 0) + 1);
+  };
+  document.branches.forEach((branch) => branch.steps.forEach((step) => count(step.tool)));
+  document.recipes.forEach((recipe) => count(recipe.tool));
+  return usage;
+}
+
+/** Recipes of one type arranged by group path: the tree the library shows. */
+export interface RecipeGroup {
+  /** The full path, "" at the root. */
+  path: string;
+  label: string;
+  recipes: Recipe[];
+  children: RecipeGroup[];
+}
+
+export function groupRecipes(recipes: Recipe[]): RecipeGroup {
+  const root: RecipeGroup = { path: "", label: "", recipes: [], children: [] };
+  const sorted = [...recipes].sort(
+    (a, b) => a.group.localeCompare(b.group) || a.name.localeCompare(b.name),
+  );
+  for (const recipe of sorted) {
+    let node = root;
+    const parts = recipe.group ? recipe.group.split("/") : [];
+    for (const [index, part] of parts.entries()) {
+      const path = parts.slice(0, index + 1).join("/");
+      let child = node.children.find((item) => item.path === path);
+      if (!child) {
+        child = { path, label: part, recipes: [], children: [] };
+        node.children.push(child);
+      }
+      node = child;
+    }
+    node.recipes.push(recipe);
+  }
+  return root;
 }

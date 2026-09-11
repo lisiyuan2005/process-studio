@@ -12,6 +12,7 @@ import {
   Save,
   Square,
   TerminalSquare,
+  Wrench,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -19,6 +20,7 @@ import { bridge } from "./bridge";
 import { GridEditor } from "./components/GridEditor";
 import { Inspector } from "./components/Inspector";
 import { MaterialEditor } from "./components/MaterialEditor";
+import { ToolEditor } from "./components/ToolEditor";
 import { PanelResizer } from "./components/PanelResizer";
 import { ProjectHome } from "./components/ProjectHome";
 import { RecipeEditor } from "./components/RecipeEditor";
@@ -41,6 +43,7 @@ import {
   nextSectionLineName,
   removeSectionLine,
   removeStep,
+  removeTool,
   renameStep,
   reorderSteps,
   setActiveBranch,
@@ -53,6 +56,8 @@ import {
   updateStepParameters,
   upsertMaterial,
   upsertSectionLine,
+  upsertTool,
+  toolUsage,
   upsertRecipe,
 } from "./domain/project";
 import type {
@@ -113,6 +118,7 @@ export default function App() {
   const [showLog, setShowLog] = useState(false);
   const [showMaterials, setShowMaterials] = useState(false);
   const [showRecipes, setShowRecipes] = useState(false);
+  const [showTools, setShowTools] = useState(false);
   const [showGrid, setShowGrid] = useState(false);
   // The sketch being drawn: an existing one by id, or a fresh one for this step.
   const [sketchEditor, setSketchEditor] = useState<{ sketch: QuickSketch; isNew: boolean } | null>(null);
@@ -802,6 +808,10 @@ export default function App() {
           <FileSpreadsheet size={15} />
           Recipes
         </button>
+        <button type="button" className="log-button" onClick={() => setShowTools(true)}>
+          <Wrench size={14} />
+          Tools
+        </button>
         <div className={`save-indicator save-${saveState}`}>
           {saveState === "saving" ? (
             <LoaderCircle className="spin" size={13} />
@@ -971,6 +981,8 @@ export default function App() {
         <Inspector
           step={selectedStep}
           recipes={document.recipes}
+          tools={document.tools}
+          onManageTools={() => setShowTools(true)}
           materials={document.materials}
           status={selectedStep ? stepStatus(document, selectedStep.id) : "dirty"}
           sketches={document.sketches}
@@ -1009,6 +1021,16 @@ export default function App() {
         />
       </div>
 
+      {showTools && (
+        <ToolEditor
+          tools={document.tools}
+          usage={toolUsage(document)}
+          onSave={(tool) => setDocument(upsertTool(document, tool))}
+          onDelete={(toolId) => setDocument(removeTool(document, toolId))}
+          onClose={() => setShowTools(false)}
+        />
+      )}
+
       {showMaterials && (
         <MaterialEditor
           materials={document.materials}
@@ -1023,6 +1045,7 @@ export default function App() {
         <RecipeEditor
           recipes={document.recipes}
           materials={document.materials}
+          tools={document.tools}
           busy={busy}
           onSave={(recipe) => setDocument(upsertRecipe(document, recipe))}
           onDelete={(recipeId) => setDocument(removeRecipe(document, recipeId))}

@@ -120,6 +120,10 @@ slab 工程有两个分辨率：z 步长（保形沉积和各向同性刻蚀沿�
 
 ## Step 与 Recipe Library
 
+Recipe 有一个 `group` 字段：Recipe Library 先按工艺类型（Deposition、Etch、CMP、No geometry change）分顶层，再按 `group` 路径分组，斜杠表示子组（`ALD/Oxides`）。在 Recipe 的 Group 框里输入名字即新建组，不需要单独管理组；Inspector 的模板下拉按同样的组分段。Excel 导出多一列 Group，导入时没有这列也能读。
+
+工具是一个库（`tools` 表，document 里的 `tools`）：每个工具有名字、`group` 路径和备注，顶栏 **Tools** 打开编辑器增删改组。Step 和 Recipe 的 Tool 字段是分组下拉，最后一项「Other (type a name)…」可以手填；填的名字不在库里也照样保存为文本，删除库里的工具不改动已引用它的步骤。命令行 `tools list|add NAME --group G|rm NAME`。
+
 流程中的 Step 是独立工艺实例：名称可自由编辑，只要求选择 deposition、etch、CMP 或 no geometry change 类型。右侧可从 Recipe Library 加载模板，也可从空白 Step 逐项添加参数并另存为 Recipe。加载和保存都是复制，不保留引用关系，因此修改或删除库里的 Recipe 不会改变已有流程。
 
 ## 开发

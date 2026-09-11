@@ -1,4 +1,5 @@
-import { BookDown, CircleAlert, Layers, PenLine, Play, Plus, Save, Trash2, X } from "lucide-react";
+import { BookDown, CircleAlert, Layers, PenLine, Play, Plus, Save, Trash2, Wrench, X } from "lucide-react";
+import { ToolPicker } from "./ToolPicker";
 import { useEffect, useMemo, useState } from "react";
 import type {
   KernelDescription,
@@ -12,11 +13,14 @@ import type {
   QuickSketch,
   Recipe,
   StepStatus,
+  ToolDefinition,
 } from "../types";
 
 interface InspectorProps {
   step: ProcessStep | undefined;
   recipes: Recipe[];
+  tools: ToolDefinition[];
+  onManageTools: () => void;
   materials: MaterialDefinition[];
   status: StepStatus;
   sketches: QuickSketch[];
@@ -260,6 +264,8 @@ function UnknownParameterRow({
 export function Inspector({
   step,
   recipes,
+  tools,
+  onManageTools,
   materials,
   status,
   sketches,
@@ -293,6 +299,19 @@ export function Inspector({
     () => recipes.filter((recipe) => recipe.processType === step?.processType),
     [recipes, step?.processType],
   );
+  // The template picker shows the library's groups as option groups.
+  const groupedTemplates = useMemo(() => {
+    const byGroup = new Map<string, Recipe[]>();
+    const sorted = [...matchingRecipes].sort(
+      (a, b) => a.group.localeCompare(b.group) || a.name.localeCompare(b.name),
+    );
+    for (const recipe of sorted) {
+      const list = byGroup.get(recipe.group) ?? [];
+      list.push(recipe);
+      byGroup.set(recipe.group, list);
+    }
+    return [...byGroup.entries()];
+  }, [matchingRecipes]);
 
   if (!step) {
     return (
@@ -401,9 +420,19 @@ export function Inspector({
               onChange={(event) => setLibraryRecipeId(event.target.value)}
             >
               <option value="">Choose an existing {TYPE_LABELS[step.processType]} recipe…</option>
-              {matchingRecipes.map((recipe) => (
-                <option key={recipe.id} value={recipe.id}>{recipe.name}</option>
-              ))}
+              {groupedTemplates.map(([group, members]) =>
+                group ? (
+                  <optgroup key={group} label={group}>
+                    {members.map((recipe) => (
+                      <option key={recipe.id} value={recipe.id}>{recipe.name}</option>
+                    ))}
+                  </optgroup>
+                ) : (
+                  members.map((recipe) => (
+                    <option key={recipe.id} value={recipe.id}>{recipe.name}</option>
+                  ))
+                ),
+              )}
             </select>
             <button
               type="button"
@@ -434,11 +463,17 @@ export function Inspector({
           <span className="section-label">PROCESS DEFINITION</span>
           <label className="field-row">
             <span>Tool</span>
-            <input
-              value={step.tool}
-              placeholder="optional"
-              onChange={(event) => onDefinitionChange({ tool: event.target.value })}
-            />
+            <span className="tool-row">
+              <ToolPicker
+                value={step.tool}
+                tools={tools}
+                placeholder="optional"
+                onChange={(tool) => onDefinitionChange({ tool })}
+              />
+              <button type="button" className="secondary-button" title="Add, group or rename tools" onClick={onManageTools}>
+                <Wrench size={13} /> Manage
+              </button>
+            </span>
           </label>
           {step.processType === "deposit" && (
             <label className="field-row">

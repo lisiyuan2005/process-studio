@@ -14,6 +14,7 @@ from .models import (
     ProcessStep,
     ProcessType,
     Recipe,
+    ToolDefinition,
 )
 
 
@@ -33,6 +34,18 @@ def default_materials() -> list[MaterialDefinition]:
     ]
 
 
+def default_tools() -> list[ToolDefinition]:
+    """The benches and chambers the starter recipes name, grouped by what they do."""
+    return [
+        ToolDefinition("ICP-RIE", "Etch/Dry", id="tool-icp-rie"),
+        ToolDefinition("Wet Bench", "Etch/Wet", id="tool-wet-bench"),
+        ToolDefinition("ALD", "Deposition", id="tool-ald"),
+        ToolDefinition("CMP-01", "CMP", id="tool-cmp-01"),
+        ToolDefinition("Stepper", "Lithography", id="tool-stepper"),
+        ToolDefinition("Ash", "Lithography", id="tool-ash"),
+    ]
+
+
 def default_recipes(kernel: str = "levelset") -> list[Recipe]:
     """The starter library, written for the kernel the project runs on.
 
@@ -49,6 +62,7 @@ def default_recipes(kernel: str = "levelset") -> list[Recipe]:
             tool="ICP-RIE",
             parameters={"target": 0.32, "directional_fraction": 1.0 if slab else 0.9},
             material_responses={"Si": MaterialResponse("Si", 0.12)},
+            group="Dry",
             id="recipe-si-trench",
         ),
         Recipe(
@@ -60,6 +74,7 @@ def default_recipes(kernel: str = "levelset") -> list[Recipe]:
                 "SiO2": MaterialResponse("SiO2", 0.08),
                 "Si": MaterialResponse("Si", 0.0, stop_layer=True),
             },
+            group="Wet",
             id="recipe-boe",
         ),
         Recipe(
@@ -68,6 +83,7 @@ def default_recipes(kernel: str = "levelset") -> list[Recipe]:
             tool="ALD",
             output_material="Al2O3",
             parameters={"target": 0.04, "temperature_c": 250.0, "rate": 0.002},
+            group="ALD",
             id="recipe-ald-al2o3",
         ),
         Recipe(
@@ -76,6 +92,7 @@ def default_recipes(kernel: str = "levelset") -> list[Recipe]:
             tool="ALD",
             output_material="TiN",
             parameters={"target": 0.04, "temperature_c": 300.0, "rate": 0.003},
+            group="ALD",
             id="recipe-ald-tin",
         ),
         Recipe(

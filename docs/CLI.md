@@ -46,7 +46,8 @@ cd ~/devices/dram
 | `view top --step STEP -o top.png` | 俯视图 PNG |
 | `view mesh --step STEP -o step.glb` | 3D 表面，.glb / .gltf / .obj / .stl / .ply |
 | `materials list\|add NAME [--category --color --opacity]\|rm NAME` | 材料库 |
-| `recipes list\|export FILE.xlsx\|import FILE.xlsx` | Recipe 库 |
+| `recipes list\|export FILE.xlsx\|import FILE.xlsx` | Recipe 库，按类型和分组列出 |
+| `tools list\|add NAME [--group G] [--notes N]\|rm NAME` | 工具库；分组用斜杠分子组，如 `Etch/Dry` |
 | `sketch list\|show ID\|export ID FILE\|import ID FILE` | Quick Sketch |
 | `lines list\|add NAME X0 Y0 X1 Y1\|rm NAME` | 保存的 AA–BB 截面线；`view section --named NAME` 沿其中一条切 |
 | `flow dump [FILE]` / `flow apply FILE` | 整条流程写成一个文件 / 按文件设置工作目录 |

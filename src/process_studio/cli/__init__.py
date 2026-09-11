@@ -537,12 +537,61 @@ def cmd_materials_rm(session: Session, args: argparse.Namespace) -> int:
 
 def cmd_recipes_list(session: Session, args: argparse.Namespace) -> int:
     document = session.document()
+    ordered = sorted(document["recipes"], key=lambda r: (r["processType"], r.get("group") or "", r["name"].lower()))
     rows = [
-        [recipe["name"], recipe["processType"].replace("_", " "), recipe.get("tool") or "", recipe.get("outputMaterial") or "",
+        [recipe["processType"].replace("_", " "), recipe.get("group") or "", recipe["name"], recipe.get("tool") or "",
+         recipe.get("outputMaterial") or "",
          ", ".join(f"{key}={format_number(value)}" for key, value in recipe["parameters"].items())]
-        for recipe in document["recipes"]
+        for recipe in ordered
     ]
-    session.emit(document["recipes"], lambda: table(("Recipe", "Type", "Tool", "Material", "Parameters"), rows))
+    session.emit(document["recipes"], lambda: table(("Type", "Group", "Recipe", "Tool", "Material", "Parameters"), rows))
+    return EXIT_OK
+
+
+def cmd_tools_list(session: Session, args: argparse.Namespace) -> int:
+    document = session.document()
+    used: dict[str, int] = {}
+    for step in Session.steps(document):
+        if step.get("tool"):
+            used[step["tool"]] = used.get(step["tool"], 0) + 1
+    ordered = sorted(document.get("tools", []), key=lambda t: (t.get("group") or "", t["name"].lower()))
+    rows = [[tool.get("group") or "", tool["name"], tool.get("notes") or "", used.get(tool["name"], 0)] for tool in ordered]
+    session.emit(document.get("tools", []), lambda: table(("Group", "Tool", "Notes", "Used by"), rows) if rows else ["(no tools)"])
+    return EXIT_OK
+
+
+def cmd_tools_add(session: Session, args: argparse.Namespace) -> int:
+    document = session.document()
+    tools = list(document.get("tools", []))
+    current = next((tool for tool in tools if tool["name"].lower() == args.name.strip().lower()), None)
+    tool = {
+        "id": current["id"] if current else new_id(),
+        "name": args.name.strip(),
+        "group": args.group if args.group is not None else (current["group"] if current else ""),
+        "notes": args.notes if args.notes is not None else (current["notes"] if current else ""),
+    }
+    if current:
+        tools[tools.index(current)] = tool
+    else:
+        tools.append(tool)
+    document["tools"] = tools
+    saved = session.save(document)
+    session.note(("Updated" if current else "Added") + f" tool {tool['name']}")
+    session.emit(tool, lambda: [f"{t.get('group') or '-':<16} {t['name']}" for t in saved.get("tools", [])])
+    return EXIT_OK
+
+
+def cmd_tools_rm(session: Session, args: argparse.Namespace) -> int:
+    document = session.document()
+    tools = list(document.get("tools", []))
+    names = {name.lower() for name in args.name}
+    missing = [name for name in args.name if not any(t["name"].lower() == name.lower() for t in tools)]
+    if missing:
+        raise InvalidRequest(f"no tool named {', '.join(missing)}")
+    document["tools"] = [tool for tool in tools if tool["name"].lower() not in names]
+    saved = session.save(document)
+    session.note(f"Removed {', '.join(args.name)}; steps that named the tool keep the name as text.")
+    session.emit(saved.get("tools", []), lambda: [t["name"] for t in saved.get("tools", [])] or ["(no tools)"])
     return EXIT_OK
 
 
@@ -858,6 +907,19 @@ def build_parser() -> argparse.ArgumentParser:
     recipe_import = recipe_commands.add_parser("import", help="read recipes from .xlsx")
     recipe_import.add_argument("file")
     recipe_import.set_defaults(handler=cmd_recipes_import)
+
+    tools = commands.add_parser("tools", help="the tool library the Tool fields pick from")
+    tool_commands = tools.add_subparsers(dest="tools_command", metavar="ACTION")
+    tool_commands.required = True
+    tool_commands.add_parser("list", help="every tool, grouped").set_defaults(handler=cmd_tools_list)
+    tool_add = tool_commands.add_parser("add", help="add a tool, or change one that exists")
+    tool_add.add_argument("name")
+    tool_add.add_argument("--group", help="a path such as Etch/Dry; subgroups are separated by /")
+    tool_add.add_argument("--notes")
+    tool_add.set_defaults(handler=cmd_tools_add)
+    tool_rm = tool_commands.add_parser("rm", help="remove tools from the library")
+    tool_rm.add_argument("name", nargs="+")
+    tool_rm.set_defaults(handler=cmd_tools_rm)
 
     sketch = commands.add_parser("sketch", help="the Quick Sketch masks")
     sketch_commands = sketch.add_subparsers(dest="sketch_command", metavar="ACTION")

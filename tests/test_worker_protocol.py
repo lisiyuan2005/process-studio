@@ -864,3 +864,38 @@ def test_named_section_lines_live_in_the_project(workspace):
     document["project"]["sectionLines"] = [{"name": "Nowhere", "start": [0, 0], "end": [0, 0]}]
     with pytest.raises(InvalidRequest):
         call("save_document", root=str(workspace), document=document)
+
+
+def test_recipes_have_groups_and_tools_have_a_library(workspace, tmp_path):
+    """Recipes sit in groups below their type; tools are a grouped library the
+    document carries and the save writes back, and both survive Excel."""
+    document = call("open_workspace", root=str(workspace))
+    groups = {recipe["name"]: recipe["group"] for recipe in document["recipes"]}
+    assert groups["Conformal Al2O3"] == "ALD" and groups["BOE Oxide Etch"] == "Wet"
+    assert {tool["name"]: tool["group"] for tool in document["tools"]}["ICP-RIE"] == "Etch/Dry"
+
+    # A subgroup path is trimmed; a new tool joins, a renamed one keeps its id.
+    trench = next(recipe for recipe in document["recipes"] if recipe["name"] == "Si Directional Trench Etch")
+    trench["group"] = " ALD / Oxides "
+    document["tools"].append({"name": "Sputter-2", "group": "Deposition/PVD", "notes": "Ar only"})
+    ald = next(tool for tool in document["tools"] if tool["name"] == "ALD")
+    ald["name"] = "ALD-1"
+    saved = call("save_document", root=str(workspace), document=document)
+    assert next(r for r in saved["recipes"] if r["id"] == trench["id"])["group"] == "ALD/Oxides"
+    tools = {tool["name"]: tool for tool in saved["tools"]}
+    assert tools["Sputter-2"]["group"] == "Deposition/PVD" and tools["Sputter-2"]["id"]
+    assert tools["ALD-1"]["id"] == ald["id"] and "ALD" not in tools
+    # Dropping a tool from the document removes it.
+    saved["tools"] = [tool for tool in saved["tools"] if tool["name"] != "Ash"]
+    assert "Ash" not in {tool["name"] for tool in call("save_document", root=str(workspace), document=saved)["tools"]}
+    # Two tools cannot share a name.
+    saved["tools"].append({"name": "ICP-RIE", "group": ""})
+    with pytest.raises(InvalidRequest):
+        call("save_document", root=str(workspace), document=saved)
+
+    workbook = tmp_path / "recipes.xlsx"
+    call("export_recipes_xlsx", root=str(workspace), destination=str(workbook))
+    fresh = tmp_path / "fresh"
+    call("create_workspace", root=str(fresh), name="Fresh")
+    imported = call("import_recipes_xlsx", root=str(fresh), source=str(workbook))["document"]
+    assert {recipe["name"]: recipe["group"] for recipe in imported["recipes"]}["Si Directional Trench Etch"] == "ALD/Oxides"

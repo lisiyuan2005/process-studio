@@ -46,6 +46,29 @@ class MaterialResponse:
 
 
 @dataclass
+class ToolDefinition:
+    """A machine or bench a step runs on: a name to pick from, grouped."""
+
+    name: str
+    #: A path such as "Etch/Dry"; "/" separates a group from its subgroups.
+    group: str = ""
+    notes: str = ""
+    id: str = field(default_factory=new_id)
+
+    def __post_init__(self) -> None:
+        if not self.name.strip():
+            raise ValueError("tool name cannot be empty")
+        self.group = normalize_group(self.group)
+
+
+def normalize_group(value: str | None) -> str:
+    """Trim a group path: no empty segments, no stray slashes."""
+    if not value:
+        return ""
+    return "/".join(part.strip() for part in str(value).split("/") if part.strip())
+
+
+@dataclass
 class Recipe:
     name: str
     process_type: ProcessType
@@ -53,7 +76,13 @@ class Recipe:
     output_material: str | None = None
     parameters: dict[str, Any] = field(default_factory=dict)
     material_responses: dict[str, MaterialResponse] = field(default_factory=dict)
+    #: Where the recipe sits in the library below its process type, e.g.
+    #: "ALD/Oxides"; empty means directly under the type.
+    group: str = ""
     id: str = field(default_factory=new_id)
+
+    def __post_init__(self) -> None:
+        self.group = normalize_group(self.group)
 
     def resolved_parameters(self, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
         values = dict(self.parameters)

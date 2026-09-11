@@ -4,13 +4,17 @@ import {
   addStep,
   duplicateStep,
   getActiveBranch,
+  groupRecipes,
   getSteps,
   hasDirtySteps,
   loadRecipeIntoStep,
   moveStep,
   nextSectionLineName,
   removeSectionLine,
+  removeTool,
+  toolUsage,
   upsertSectionLine,
+  upsertTool,
   recipeFromStep,
   removeRecipe,
   removeStep,
@@ -58,7 +62,7 @@ describe("workspace document", () => {
   it("copies a recipe without retaining a library relationship", () => {
     const document = demoDocument();
     const recipe = document.recipes.find((item) => item.id === "recipe-boe") ?? {
-      id: "recipe-boe", name: "BOE", processType: "etch" as const, tool: "Wet Bench",
+      id: "recipe-boe", name: "BOE", processType: "etch" as const, tool: "Wet Bench", group: "",
       outputMaterial: null, parameters: { time_min: 1, temperature_c: 25 },
       materialResponses: {},
     };
@@ -221,5 +225,29 @@ describe("section lines", () => {
     // Editing lines never touches the flow or its results.
     expect(moved.branches).toBe(document.branches);
     expect(moved.stepStatuses).toBe(document.stepStatuses);
+  });
+});
+
+describe("libraries", () => {
+  it("arranges recipes as a tree of group paths", () => {
+    const base = { processType: "deposit" as const, tool: "", outputMaterial: null, parameters: {}, materialResponses: {} };
+    const tree = groupRecipes([
+      { ...base, id: "a", name: "Al2O3", group: "ALD/Oxides" },
+      { ...base, id: "b", name: "TiN", group: "ALD" },
+      { ...base, id: "c", name: "Sputter W", group: "" },
+    ]);
+    expect(tree.recipes.map((r) => r.name)).toEqual(["Sputter W"]);
+    expect(tree.children.map((g) => g.path)).toEqual(["ALD"]);
+    expect(tree.children[0].recipes.map((r) => r.name)).toEqual(["TiN"]);
+    expect(tree.children[0].children[0]).toMatchObject({ path: "ALD/Oxides", label: "Oxides" });
+    expect(tree.children[0].children[0].recipes.map((r) => r.name)).toEqual(["Al2O3"]);
+  });
+
+  it("keeps tools on the document and counts who names them", () => {
+    const document = upsertTool(demoDocument(), { id: "t1", name: "ICP-RIE", group: "Etch/Dry", notes: "" });
+    expect(document.tools).toHaveLength(1);
+    expect(upsertTool(document, { id: "t1", name: "ICP-RIE 2", group: "Etch", notes: "" }).tools[0].name).toBe("ICP-RIE 2");
+    expect(removeTool(document, "t1").tools).toEqual([]);
+    expect(toolUsage(document).get("ICP-RIE")).toBeGreaterThan(0);
   });
 });

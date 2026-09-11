@@ -42,6 +42,7 @@ from .serialize import (
     material_from_json,
     project_from_json,
     recipe_from_json,
+    tool_from_json,
 )
 from .workspace import (
     DigestCache,
@@ -159,6 +160,20 @@ def _persist_document(parameters: Mapping[str, Any]) -> dict[str, Any]:
             for row in connection.execute("SELECT name FROM materials").fetchall():
                 if row["name"] not in keep_names:
                     connection.execute("DELETE FROM materials WHERE name=?", (row["name"],))
+
+    tools = document.get("tools")
+    if isinstance(tools, list):
+        incoming_tools = [tool_from_json(tool) for tool in tools]
+        keep_tool_ids = {tool.id for tool in incoming_tools}
+        for tool in incoming_tools:
+            try:
+                repository.save_tool(tool)
+            except ValueError as error:
+                raise InvalidRequest(str(error)) from error
+        with repository.connect() as connection:
+            for row in connection.execute("SELECT id FROM tools").fetchall():
+                if row["id"] not in keep_tool_ids:
+                    connection.execute("DELETE FROM tools WHERE id=?", (row["id"],))
 
     branches = document.get("branches")
     if isinstance(branches, list):
