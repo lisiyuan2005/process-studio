@@ -2,6 +2,20 @@ name: Desktop builds
 
 on:
   workflow_dispatch:
+    # A manual run can be narrowed to one platform and one edition: a
+    # Windows build for a machine whose antivirus eats PyInstaller output is
+    # one job, not six. A tag builds everything.
+    inputs:
+      platforms:
+        description: Which platforms to build
+        type: choice
+        default: all
+        options: [all, windows, macos]
+      variants:
+        description: Which edition to build
+        type: choice
+        default: all
+        options: [all, full, slab, levelset]
   push:
     tags:
       - "v*"
@@ -13,21 +27,15 @@ on:
 # project made with the other one.
 jobs:
   windows:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platforms == 'all' || inputs.platforms == 'windows' }}
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        variant: [full, slab, levelset]
-        include:
-          - variant: full
-            kernels: levelset,slab
-            artifact: ProcessStudio-Windows
-          - variant: slab
-            kernels: slab
-            artifact: ProcessStudio-Slab-Windows
-          - variant: levelset
-            kernels: levelset
-            artifact: ProcessStudio-LevelSet-Windows
+        variant: ${{ fromJSON((github.event_name != 'workflow_dispatch' || inputs.variants == 'all') && '["full","slab","levelset"]' || format('["{0}"]', inputs.variants)) }}
+    env:
+      KERNELS: ${{ matrix.variant == 'full' && 'levelset,slab' || matrix.variant }}
+      ARTIFACT: ${{ matrix.variant == 'full' && 'ProcessStudio-Windows' || matrix.variant == 'slab' && 'ProcessStudio-Slab-Windows' || 'ProcessStudio-LevelSet-Windows' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -63,7 +71,7 @@ jobs:
       - name: Build the desktop shell
         shell: pwsh
         env:
-          PROCESS_STUDIO_KERNELS: ${{ matrix.kernels }}
+          PROCESS_STUDIO_KERNELS: ${{ env.KERNELS }}
         run: ./scripts/build_desktop.ps1
 
       # The executable resolves its worker under <exe dir>/resources, so the
@@ -77,7 +85,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
+          name: ${{ env.ARTIFACT }}
           path: release/ProcessStudio
           if-no-files-found: error
 
@@ -85,24 +93,16 @@ jobs:
     # Pinned to the image the emulator builds on. A newer runner means a newer
     # SDK and a different linker signature, and that app opens where this one
     # did not.
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.platforms == 'all' || inputs.platforms == 'macos' }}
     runs-on: macos-14
     strategy:
       fail-fast: false
       matrix:
-        variant: [full, slab, levelset]
-        include:
-          - variant: full
-            kernels: levelset,slab
-            product: Process Studio
-            artifact: ProcessStudio-macOS
-          - variant: slab
-            kernels: slab
-            product: Process Studio Slab
-            artifact: ProcessStudio-Slab-macOS
-          - variant: levelset
-            kernels: levelset
-            product: Process Studio Level Set
-            artifact: ProcessStudio-LevelSet-macOS
+        variant: ${{ fromJSON((github.event_name != 'workflow_dispatch' || inputs.variants == 'all') && '["full","slab","levelset"]' || format('["{0}"]', inputs.variants)) }}
+    env:
+      KERNELS: ${{ matrix.variant == 'full' && 'levelset,slab' || matrix.variant }}
+      PRODUCT: ${{ matrix.variant == 'full' && 'Process Studio' || matrix.variant == 'slab' && 'Process Studio Slab' || 'Process Studio Level Set' }}
+      ARTIFACT: ${{ matrix.variant == 'full' && 'ProcessStudio-macOS' || matrix.variant == 'slab' && 'ProcessStudio-Slab-macOS' || 'ProcessStudio-LevelSet-macOS' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -136,7 +136,7 @@ jobs:
 
       - name: Build the desktop shell
         env:
-          PROCESS_STUDIO_KERNELS: ${{ matrix.kernels }}
+          PROCESS_STUDIO_KERNELS: ${{ env.KERNELS }}
         run: bash scripts/build_desktop.sh
 
       # The linker's own signature covers the executable only. Without a bundle
@@ -145,7 +145,7 @@ jobs:
       # rather than shipping an app that cannot start.
       - name: Verify the bundle signature
         run: |
-          APP="desktop/src-tauri/target/release/bundle/macos/${{ matrix.product }}.app"
+          APP="desktop/src-tauri/target/release/bundle/macos/${{ env.PRODUCT }}.app"
           test -f "$APP/Contents/_CodeSignature/CodeResources" \
             || { echo "the bundle has no sealed resources"; exit 1; }
           codesign -dv --verbose=4 "$APP" 2>&1 | grep -E "Signature|flags|Info.plist"
@@ -157,13 +157,13 @@ jobs:
         run: |
           mkdir -p release
           ditto -c -k --sequesterRsrc --keepParent \
-            "desktop/src-tauri/target/release/bundle/macos/${{ matrix.product }}.app" \
-            "release/${{ matrix.artifact }}.zip"
+            "desktop/src-tauri/target/release/bundle/macos/${{ env.PRODUCT }}.app" \
+            "release/${{ env.ARTIFACT }}.zip"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
+          name: ${{ env.ARTIFACT }}
           path: |
-            release/${{ matrix.artifact }}.zip
+            release/${{ env.ARTIFACT }}.zip
             desktop/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
