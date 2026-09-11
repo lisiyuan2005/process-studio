@@ -22,8 +22,13 @@ def write_mesh(
     *,
     materials: Sequence[str] | None = None,
     interpolation: int = 1,
+    loft: bool = True,
 ) -> dict[str, Any]:
-    """Write the 3D surfaces of a state as one mesh file; returns what was written."""
+    """Write the 3D surfaces of a state as one mesh file; returns what was written.
+
+    ``loft`` writes the sampled bands of a film joined into the surface they
+    sample, as the 3D view shows them; ``False`` writes the stored slabs.
+    """
     try:
         import numpy as np
         import trimesh
@@ -39,6 +44,7 @@ def write_mesh(
     payload = kernel.surfaces(
         state, project=project, interpolation=interpolation,
         materials=None if materials is None else [str(name) for name in materials],
+        loft=loft,
     )
     scene = trimesh.Scene()
     counts: dict[str, int] = {}

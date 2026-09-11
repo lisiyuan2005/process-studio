@@ -100,6 +100,7 @@ class LevelSetKernel:
         project: ProjectDefinition,
         interpolation: int = 1,
         materials: Sequence[str] | None = None,
+        loft: bool = True,
     ) -> dict[str, Any]:
         return material_surfaces(
             state,

@@ -600,6 +600,7 @@ def dispatch(
             project=project,
             interpolation=parameters.get("interpolation", 1),
             materials=None if materials is None else [str(name) for name in materials],
+            loft=bool(parameters.get("loft", True)),
         )
         colors = _material_colors(repository)
         for surface in payload["surfaces"]:
@@ -632,6 +633,7 @@ def dispatch(
             kernel, state, project, _material_colors(repository), Path(destination),
             materials=None if materials is None else [str(name) for name in materials],
             interpolation=parameters.get("interpolation", 1),
+            loft=bool(parameters.get("loft", True)),
         )
     if method == "save_image":
         destination = parameters.get("destination")

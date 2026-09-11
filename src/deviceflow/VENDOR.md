@@ -25,6 +25,14 @@ under the MIT license in `LICENSE`.
   3D view shades each face on its own and never shares vertices, so the split
   bought it nothing at a third of the build time. Validation and export still
   build the manifold mesh.
+- `_internal/mesh/builder.py`, `_internal/mesh/loft.py`: an optional `loft`
+  (with `loft_reach`) on the same two functions. Slabs no thicker than
+  `loft` are the samples of a conformal film; where a ring of one continues
+  a ring of the next (matched one to one by overlap, no vertex further than
+  the reach), the two outlines are joined at the slabs' mid heights by
+  slanted triangles instead of a cap and two half-walls. The rings are the
+  arrangement's own edges, so the result is still closed. Display only;
+  the default builds the stored staircase exactly as before.
 - `process/conformal.py`, `process/isotropic_etch.py`, `device.py`: an
   optional `xy_resolution` beside `conformal_resolution`. The z step and the
   XY arc sagitta were one number; a project that wants a fine z step to

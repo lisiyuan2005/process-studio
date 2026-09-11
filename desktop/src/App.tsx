@@ -130,7 +130,7 @@ export default function App() {
   const [activeLineId, setActiveLineId] = useState<string | null>(null);
   const [sectionIndex, setSectionIndex] = useState<number | null>(null);
   // Sampled films drawn as the surface they sample, or as the stored slabs.
-  const [smoothSection, setSmoothSection] = useState(true);
+  const [smoothSteps, setSmoothSteps] = useState(true);
   // Side panel widths the user dragged; null means the stylesheet's defaults.
   const [panelWidths, setPanelWidths] = useState<PanelWidths | null>(loadPanelWidths);
   const resizePanel = (side: "steps" | "inspector", width: number) => {
@@ -345,7 +345,11 @@ export default function App() {
   const exportMesh = async () => {
     if (!document || !branch) return;
     try {
-      const path = await bridge.exportMesh(document.root, { branchId: branch.id, stepId: selectedStepId }, stepFileName());
+      const path = await bridge.exportMesh(
+        document.root,
+        { branchId: branch.id, stepId: selectedStepId, loft: smoothSteps },
+        stepFileName(),
+      );
       if (path) setEvents((current) => [...current, { kind: "log", message: `Exported the 3D surfaces to ${path}` }]);
     } catch (reason) {
       setEvents((current) => [...current, { kind: "log", message: `Mesh export failed: ${errorMessage(reason)}` }]);
@@ -409,7 +413,7 @@ export default function App() {
       // A stale step still has the result of the last run, so it is shown,
       // labelled out of date, instead of being refused.
       if (mode === "surfaces") {
-        const key = `surfaces:${target}:${interpolation}`;
+        const key = `surfaces:${target}:${interpolation}:${smoothSteps ? "loft" : "exact"}`;
         const hit = cached<SurfaceDocument>(key);
         if (hit) {
           setSurfaces(hit);
@@ -417,7 +421,7 @@ export default function App() {
           return;
         }
         setViewLoading(true);
-        const next = await bridge.getSurfaces(root, request);
+        const next = await bridge.getSurfaces(root, { ...request, loft: smoothSteps });
         if (token !== viewToken.current) return;
         setSurfaces(remember(key, next));
       } else if (mode === "section") {
@@ -428,13 +432,13 @@ export default function App() {
         }
         const position = sectionAxis === "line" ? undefined : sectionPosition.current ?? undefined;
         const line = sectionAxis === "line" && sectionLine ? sectionLine : undefined;
-        const key = `section:${target}:${interpolation}:${sectionAxis}:${position ?? "mid"}:${line ? line.start.join(",") + ">" + line.end.join(",") : ""}:${smoothSection ? "smooth" : "exact"}`;
+        const key = `section:${target}:${interpolation}:${sectionAxis}:${position ?? "mid"}:${line ? line.start.join(",") + ">" + line.end.join(",") : ""}:${smoothSteps ? "smooth" : "exact"}`;
         const hit = cached<SectionDocument>(key);
         const next = hit ?? (await (async () => {
           setViewLoading(true);
           return remember(
             key,
-            await bridge.getSection(root, { ...request, axis: sectionAxis, position, line, smooth: smoothSection }),
+            await bridge.getSection(root, { ...request, axis: sectionAxis, position, line, smooth: smoothSteps }),
           );
         })());
         if (token !== viewToken.current) return;
@@ -476,7 +480,7 @@ export default function App() {
     sectionAxis,
     sectionIndex,
     sectionLine,
-    smoothSection,
+    smoothSteps,
   ]);
 
   useEffect(() => {
@@ -956,8 +960,8 @@ export default function App() {
               if (sectionAxis === "line") setSectionAxis("y");
             }
           }}
-          smoothSection={smoothSection}
-          onSmoothSectionChange={setSmoothSection}
+          smoothSteps={smoothSteps}
+          onSmoothStepsChange={setSmoothSteps}
           onExportMesh={() => void exportMesh()}
           onSaveImage={(kind, image) => void saveImage(kind, image)}
           sectionIndex={sectionIndex ?? 0}

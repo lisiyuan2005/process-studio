@@ -120,8 +120,14 @@ class Kernel(Protocol):
         project: ProjectDefinition,
         interpolation: int = 1,
         materials: Sequence[str] | None = None,
+        loft: bool = True,
     ) -> dict[str, Any]:
-        """Triangles for the 3D view, one entry per material."""
+        """Triangles for the 3D view, one entry per material.
+
+        ``loft`` asks a kernel whose stored geometry is sampled in steps to
+        join the steps into the surface they sample; a kernel that has
+        nothing of the kind ignores it.
+        """
 
     def section(
         self,

@@ -212,6 +212,8 @@ export interface SurfaceDocument {
   sampledSpacingUm?: number;
   /** True when the surfaces are the geometry itself, not an isosurface. */
   exact?: boolean;
+  /** True when a sampled kernel's bands were joined into the surface they sample. */
+  loft?: boolean;
   bounds: {
     xMin: number;
     xMax: number;

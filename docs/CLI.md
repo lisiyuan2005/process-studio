@@ -44,7 +44,7 @@ cd ~/devices/dram
 | `window [--x A B] [--y A B] [--z A B] [--spacing NM] [--spacing-xy NM]` | 看或改工程窗口和精度（改动会丢弃全部结果）；slab 工程 `--spacing` 是 z 步长，`--spacing-xy` 是 XY 弧线弦高，0 表示跟随 z |
 | `view section --step STEP [--axis x\|y --at UM \| --line X0 Y0 X1 Y1] [--exact] -o cut.png` | 截面 PNG；`--exact` 画原始板层而不是平滑后的表面 |
 | `view top --step STEP -o top.png` | 俯视图 PNG |
-| `view mesh --step STEP -o step.glb` | 3D 表面，.glb / .gltf / .obj / .stl / .ply |
+| `view mesh --step STEP [--exact] -o step.glb` | 3D 表面，.glb / .gltf / .obj / .stl / .ply；默认把采样薄层放样成光滑表面，`--exact` 写原始板层 |
 | `materials list\|add NAME [--category --color --opacity]\|rm NAME` | 材料库 |
 | `recipes list\|export FILE.xlsx\|import FILE.xlsx` | Recipe 库，按类型和分组列出 |
 | `tools list\|add NAME [--group G] [--notes N]\|rm NAME` | 工具库；分组用斜杠分子组，如 `Etch/Dry` |

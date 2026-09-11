@@ -109,7 +109,7 @@ export class TauriBridge implements DesktopBridge {
     return invoke<void>("worker_cancel", { requestId });
   }
 
-  getSurfaces(root: string, request: ViewRequest): Promise<SurfaceDocument> {
+  getSurfaces(root: string, request: ViewRequest & { loft?: boolean }): Promise<SurfaceDocument> {
     return call<SurfaceDocument>("get_surfaces", { root, ...request });
   }
 
@@ -124,7 +124,11 @@ export class TauriBridge implements DesktopBridge {
     return call<TopViewDocument>("get_top_view", { root, ...request });
   }
 
-  async exportMesh(root: string, request: ViewRequest, defaultName: string): Promise<string | null> {
+  async exportMesh(
+    root: string,
+    request: ViewRequest & { loft?: boolean },
+    defaultName: string,
+  ): Promise<string | null> {
     const destination = await save({
       title: "Export the 3D surfaces",
       defaultPath: `${safeFileName(defaultName)}.glb`,

@@ -473,7 +473,7 @@ def cmd_view_mesh(session: Session, args: argparse.Namespace) -> int:
     result = session.call(
         "export_mesh", root=str(session.root), branchId=branch["id"], stepId=step_id,
         destination=str(Path(args.output).resolve()), interpolation=args.interpolation,
-        materials=args.material or None,
+        materials=args.material or None, loft=not args.exact,
     )
     session.emit(
         result,
@@ -881,6 +881,8 @@ def build_parser() -> argparse.ArgumentParser:
     _view_step(mesh)
     mesh.add_argument("--material", action="append", help="only these materials (repeatable)")
     mesh.add_argument("--interpolation", type=int, default=1, help="surface upsampling factor (level set)")
+    mesh.add_argument("--exact", action="store_true",
+                      help="write the stored slabs as they are, staircase included, instead of the surface they sample")
     mesh.set_defaults(handler=cmd_view_mesh)
 
     materials = commands.add_parser("materials", help="the material library")

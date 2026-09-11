@@ -49,7 +49,8 @@ export interface DesktopBridge {
   runFlow(root: string, options: RunOptions, requestId?: string): Promise<RunResult>;
   /** Stop a run: a queued one is refused at once, a running one at its next step. */
   cancel(requestId: string): Promise<void>;
-  getSurfaces(root: string, request: ViewRequest): Promise<SurfaceDocument>;
+  /** `loft` joins a sampled kernel's bands into the surface they sample; default true. */
+  getSurfaces(root: string, request: ViewRequest & { loft?: boolean }): Promise<SurfaceDocument>;
   /** `smooth` draws a sampled kernel's bands as the surface they sample; default true. */
   getSection(
     root: string,
@@ -57,7 +58,7 @@ export interface DesktopBridge {
   ): Promise<SectionDocument>;
   getTopView(root: string, request: ViewRequest): Promise<TopViewDocument>;
   /** Ask where to save, then write the 3D surfaces there; null when the dialog is dismissed. */
-  exportMesh(root: string, request: ViewRequest, defaultName: string): Promise<string | null>;
+  exportMesh(root: string, request: ViewRequest & { loft?: boolean }, defaultName: string): Promise<string | null>;
   /** Ask where to save, then write a PNG there; null when the dialog is dismissed. */
   saveImage(defaultName: string, imageBase64: string): Promise<string | null>;
   importGds(root: string): Promise<GdsImportResult | null>;
