@@ -95,31 +95,37 @@ function SurfaceMesh({
   opacity,
   offset,
   order,
-  showInterfaces,
+  exact,
+  hiddenMaterials,
 }: {
   surface: SurfacePayload;
   opacity: number;
   offset: THREE.Vector3;
   /** The material's place in the draw order, for a deterministic depth bias. */
   order: number;
-  /** Draw the faces that lie against another material, because one is hidden. */
-  showInterfaces: boolean;
+  /** True when the faces are the geometry itself, so no two drawn faces coincide. */
+  exact: boolean;
+  /** Materials not drawn; faces lying against one of them are shown. */
+  hiddenMaterials: string[];
 }) {
+  const hiddenKey = hiddenMaterials.join("\u0000");
   const geometry = useMemo(() => {
     const buffer = new THREE.BufferGeometry();
     buffer.setAttribute("position", new THREE.BufferAttribute(decodeFloats(surface.positions), 3));
     let indices = decodeIndices(surface.indices);
-    if (!showInterfaces && surface.interfaceFaces) {
-      // A face between two materials is in both meshes at exactly the same
-      // place. Drawn twice, the two copies fight for the pixels and shimmer
-      // as the camera moves. While every material is shown such a face is
-      // interior anyway, so it is drawn by neither; once a material is
-      // hidden the faces come back to show the cavity it leaves.
-      const flags = decodeBytes(surface.interfaceFaces);
+    // A face between two materials is in both meshes at exactly the same
+    // place. Drawn twice, the two copies fight for the pixels and shimmer
+    // as the camera moves; and a wafer top a few nanometres under a thin
+    // film fights the film's top just the same once the window is wide.
+    // So a face against another material is drawn only while that material
+    // is hidden, when it is the cavity the material leaves; while it is
+    // shown the face is interior anyway.
+    const drop = faceFilter(surface, hiddenMaterials);
+    if (drop) {
       const kept = new Uint32Array(indices.length);
       let count = 0;
-      for (let face = 0; face < flags.length; face += 1) {
-        if (flags[face]) continue;
+      for (let face = 0; face < drop.length; face += 1) {
+        if (drop[face]) continue;
         kept[count] = indices[face * 3];
         kept[count + 1] = indices[face * 3 + 1];
         kept[count + 2] = indices[face * 3 + 2];
@@ -139,7 +145,8 @@ function SurfaceMesh({
     flat.computeVertexNormals();
     buffer.dispose();
     return flat;
-  }, [surface.positions, surface.normals, surface.indices, surface.interfaceFaces, showInterfaces]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [surface, hiddenKey]);
 
   // Marching-cubes buffers are large; release them when the step changes.
   useEffect(() => () => geometry.dispose(), [geometry]);
@@ -152,17 +159,49 @@ function SurfaceMesh({
         opacity={opacity}
         roughness={0.62}
         metalness={0.08}
-        side={THREE.DoubleSide}
-        // Faces of different materials that still coincide (a level-set
-        // interface, or an interface shown because a neighbour is hidden)
-        // are settled by a small per-material depth bias instead of by
-        // whichever triangle happens to rasterise closer this frame.
-        polygonOffset
-        polygonOffsetFactor={order}
-        polygonOffsetUnits={order}
+        // Exact geometry is closed, so its back faces are never in view;
+        // culling them also keeps a thin film's underside from fighting
+        // its top for the same pixels in a window many micrometres wide.
+        side={exact ? THREE.FrontSide : THREE.DoubleSide}
+        // Level-set interfaces of different materials coincide; they are
+        // settled by a small per-material depth bias instead of by whichever
+        // triangle happens to rasterise closer this frame. Exact geometry
+        // never draws two coincident faces, and the bias would only push a
+        // steep wall behind a neighbour's top at grazing angles.
+        polygonOffset={!exact}
+        polygonOffsetFactor={exact ? 0 : order}
+        polygonOffsetUnits={exact ? 0 : order}
       />
     </mesh>
   );
+}
+
+/**
+ * Which faces of a surface to leave out: one flag per triangle, or null when
+ * every face is drawn. A face against a shown material is left out; a face
+ * against a hidden one, or against nothing, is drawn.
+ */
+function faceFilter(surface: SurfacePayload, hiddenMaterials: string[]): Uint8Array | null {
+  if (surface.neighbourFaces && surface.neighbourMaterials) {
+    const against = decodeBytes(surface.neighbourFaces);
+    const shownNeighbour = surface.neighbourMaterials.map((name) => !hiddenMaterials.includes(name));
+    const drop = new Uint8Array(against.length);
+    let any = false;
+    for (let face = 0; face < against.length; face += 1) {
+      const index = against[face];
+      if (index !== 255 && shownNeighbour[index]) {
+        drop[face] = 1;
+        any = true;
+      }
+    }
+    return any ? drop : null;
+  }
+  if (surface.interfaceFaces && hiddenMaterials.length === 0) {
+    // An older payload only says that a face touches something; such faces
+    // are interior while everything is shown.
+    return decodeBytes(surface.interfaceFaces);
+  }
+  return null;
 }
 
 /** Hands the parent a function that renders one frame and returns it as PNG. */
@@ -239,7 +278,8 @@ function SurfaceScene({
             opacity={materials.find((material) => material.name === surface.material)?.opacity ?? 1}
             offset={center}
             order={index}
-            showInterfaces={hiddenMaterials.length > 0}
+            exact={surfaces.exact === true}
+            hiddenMaterials={hiddenMaterials}
           />
         ))}
         <gridHelper

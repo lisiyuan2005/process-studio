@@ -48,7 +48,8 @@ class _MeshAccumulator:
         self._index: dict[XYZ, int] = {}
         self.vertices: list[XYZ] = []
         self.faces: list[tuple[int, int, int]] = []
-        self.interface: list[bool] = []  # True: face touches another material
+        #: per face: index of the material it lies against, -1 for none
+        self.neighbour: list[int] = []
 
     def vertex(self, x: float, y: float, z: float) -> int:
         key = (x, y, z)
@@ -59,9 +60,9 @@ class _MeshAccumulator:
             self.vertices.append(key)
         return i
 
-    def triangle(self, a: XYZ, b: XYZ, c: XYZ, interface: bool = False) -> None:
+    def triangle(self, a: XYZ, b: XYZ, c: XYZ, neighbour: int = -1) -> None:
         self.faces.append((self.vertex(*a), self.vertex(*b), self.vertex(*c)))
-        self.interface.append(bool(interface))
+        self.neighbour.append(int(neighbour))
 
     def to_trimesh(self) -> trimesh.Trimesh:
         return trimesh.Trimesh(
@@ -79,20 +80,32 @@ def build_material_meshes(
     ``manifold=False`` skips the vertex splitting that makes every vertex a
     single fan. A renderer that shades each face on its own never shares
     vertices anyway, and the split is a third of the build time.
+
+    Each mesh records, per face, which of the materials (by position in this
+    order) the face lies against, in ``metadata["neighbour_faces"]``.
     """
+    materials = _materials_in_order(state)
+    out: "OrderedDict[Material, trimesh.Trimesh]" = OrderedDict()
+    for m in materials:
+        out[m] = build_one_material(state, m, manifold=manifold, materials=materials)
+    return out
+
+
+def _materials_in_order(state: ProcessState) -> list[Material]:
     materials: list[Material] = []
     for slab in state.slabs:
         for m in slab.regions:
             if m not in materials:
                 materials.append(m)
-    out: "OrderedDict[Material, trimesh.Trimesh]" = OrderedDict()
-    for m in materials:
-        out[m] = build_one_material(state, m, manifold=manifold)
-    return out
+    return materials
 
 
 def build_one_material(
-    state: ProcessState, material: Material, *, manifold: bool = True
+    state: ProcessState,
+    material: Material,
+    *,
+    manifold: bool = True,
+    materials: list[Material] | None = None,
 ) -> trimesh.Trimesh:
     """Caps and walls of one material from a single planar arrangement.
 
@@ -100,7 +113,7 @@ def build_one_material(
     made of edges of one shared linework. Polygonizing that linework gives
     atomic faces; each face is either inside or outside the material's region
     in every slab (``member``) and inside or outside the other materials'
-    regions (``touch``). Then, with no tolerance anywhere:
+    regions (``neighbour``). Then, with no tolerance anywhere:
 
     * a face is an up-cap at plane k if member changes from True (below) to
       False (above), a down-cap for the opposite change;
@@ -109,7 +122,15 @@ def build_one_material(
 
     Around any 3D edge the number of incident mesh faces is then the number
     of changes around the four (below/above x left/right) cells: always even.
+
+    Every face carries the index (in ``materials``, first-appearance order
+    when not given) of the material on its other side, -1 for none, in
+    ``metadata["neighbour_faces"]``; ``metadata["interface_faces"]`` is the
+    same as a boolean.
     """
+    if materials is None:
+        materials = _materials_in_order(state)
+    index_of = {m: i for i, m in enumerate(materials)}
     slabs = state.slabs
     n = len(slabs)
     regions: list[MultiPolygon] = [s.regions.get(material, P.EMPTY) for s in slabs]
@@ -118,8 +139,8 @@ def build_one_material(
     if all(r.is_empty for r in regions):
         raise MeshError(f"{material.name}: no geometry")
     # the arrangement of *all* materials' rings: every face is then uniformly
-    # inside/outside every material in every slab, so interface classification
-    # (touch) is exact and needs no probing
+    # inside/outside every material in every slab, so the neighbour of a
+    # face is exact and needs no probing
     rings = [g.boundary for s in slabs for g in s.regions.values()]
     master = shapely.unary_union(rings)
     faces2d = [
@@ -132,17 +153,17 @@ def build_one_material(
     reps = shapely.points(np.array([[p.x, p.y] for p in (f.representative_point() for f in faces2d)]))
 
     member = np.zeros((n, len(faces2d)), dtype=bool)
-    touch = np.zeros((n, len(faces2d)), dtype=bool)
+    neighbour = np.full((n, len(faces2d)), -1, dtype=np.int16)  # which other material holds a face
     for k, slab in enumerate(slabs):
         r = regions[k]
         if not r.is_empty:
             shapely.prepare(r)
             member[k] = shapely.contains(r, reps)
-        parts = [g for m, g in slab.regions.items() if m is not material]
-        if parts:
-            u = shapely.unary_union(parts)
-            shapely.prepare(u)
-            touch[k] = shapely.contains(u, reps)
+        for m, g in slab.regions.items():
+            if m is material or g.is_empty:
+                continue
+            shapely.prepare(g)
+            neighbour[k][shapely.contains(g, reps)] = index_of[m]
 
     # directed edges of every face (face on the left) and edge -> adjacent faces
     edges_of_face = [_directed_edges(f) for f in faces2d]
@@ -156,29 +177,28 @@ def build_one_material(
 
     acc = _MeshAccumulator()
     empty = np.zeros(len(faces2d), dtype=bool)
+    nobody = np.full(len(faces2d), -1, dtype=np.int16)
 
-    # caps: merge faces with equal (direction, interface) labels per plane, then triangulate
+    # caps: merge faces with equal (direction, neighbour) labels per plane, then triangulate
     for k in range(n + 1):
         below = member[k - 1] if k > 0 else empty
         above = member[k] if k < n else empty
-        touch_below = touch[k - 1] if k > 0 else empty
-        touch_above = touch[k] if k < n else empty
+        neighbour_below = neighbour[k - 1] if k > 0 else nobody
+        neighbour_above = neighbour[k] if k < n else nobody
         zk = z[k]
         for up in (True, False):
             sel_dir = (below & ~above) if up else (above & ~below)
             if not sel_dir.any():
                 continue
-            iface_flag = touch_above if up else touch_below
-            for iface in (False, True):
-                sel = np.nonzero(sel_dir & (iface_flag == iface))[0]
-                if len(sel) == 0:
-                    continue
+            other = neighbour_above if up else neighbour_below
+            for who in np.unique(other[sel_dir]):
+                sel = np.nonzero(sel_dir & (other == who))[0]
                 for poly in _merge_faces(faces2d, edges_of_face, sel).geoms:
                     for a, b, c in triangulate(poly):
                         if up:
-                            acc.triangle((*a, zk), (*b, zk), (*c, zk), iface)
+                            acc.triangle((*a, zk), (*b, zk), (*c, zk), int(who))
                         else:
-                            acc.triangle((*a, zk), (*c, zk), (*b, zk), iface)
+                            acc.triangle((*a, zk), (*c, zk), (*b, zk), int(who))
 
     # walls: an arrangement edge bounds the solid in slab k where membership differs across it
     strips: dict[tuple, list[tuple[float, float]]] = defaultdict(list)
@@ -194,8 +214,8 @@ def build_one_material(
                 p, q, other = a, b, right
             else:
                 p, q, other = b, a, left
-            iface = bool(touch[k][other]) if other is not None else False
-            strips[(p[0], p[1], q[0], q[1], iface)].append((z[k], z[k + 1]))
+            who = int(neighbour[k][other]) if other is not None else -1
+            strips[(p[0], p[1], q[0], q[1], who)].append((z[k], z[k + 1]))
     _emit_walls(acc, strips)
 
     mesh = acc.to_trimesh()
@@ -206,7 +226,9 @@ def build_one_material(
     else:
         n_split = 0
     mesh.metadata["pinch_vertices_split"] = n_split
-    mesh.metadata["interface_faces"] = np.asarray(acc.interface, dtype=bool)
+    neighbours = np.asarray(acc.neighbour, dtype=np.int16)
+    mesh.metadata["neighbour_faces"] = neighbours
+    mesh.metadata["interface_faces"] = neighbours >= 0
     return mesh
 
 
@@ -267,7 +289,7 @@ def _emit_walls(acc: _MeshAccumulator, strips: dict) -> None:
         return v in cap_used or not contiguous_ok.get(v, False)
 
     for key, ivs in columns.items():
-        px, py, qx, qy, iface = key
+        px, py, qx, qy, who = key
         # maximal contiguous runs
         runs: list[list[float]] = []
         for z0, z1 in ivs:
@@ -281,14 +303,14 @@ def _emit_walls(acc: _MeshAccumulator, strips: dict) -> None:
             right = [zz for zz in inner if keep((qx, qy, zz))]
             if not left and not right:
                 p0, q0, q1, p1 = (px, py, za), (qx, qy, za), (qx, qy, zb), (px, py, zb)
-                acc.triangle(p0, q0, q1, iface)
-                acc.triangle(p0, q1, p1, iface)
+                acc.triangle(p0, q0, q1, who)
+                acc.triangle(p0, q1, p1, who)
                 continue
             # polygon in (u, z): u=0 is the p side, u=1 the q side; CCW = outward
             ring = [(0.0, za), (1.0, za)] + [(1.0, zz) for zz in right] + [(1.0, zb), (0.0, zb)]
             ring += [(0.0, zz) for zz in reversed(left)]
             for a, b, c in triangulate(Polygon(ring)):
-                acc.triangle(*(_wall_xyz(key, uv) for uv in (a, b, c)), iface)
+                acc.triangle(*(_wall_xyz(key, uv) for uv in (a, b, c)), who)
 
 
 def _wall_xyz(key, uv) -> XYZ:

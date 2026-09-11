@@ -625,3 +625,60 @@ def test_a_fine_z_step_rounds_a_shoulder_whatever_the_xy_value(kernel):
         ideal = math.sqrt(thickness**2 - dz**2)
         worst = max(worst, abs((outer - edge) - ideal))
     assert worst < 0.0015, f"the shoulder departs from the circle by {worst * 1000:.2f} nm"
+
+
+def test_each_face_names_the_material_it_lies_against(kernel):
+    """A face between two materials is drawn only while the material on its
+    other side is hidden, so the viewer must know which material that is:
+    a film's faces against the wafer, against the mesa and against the film
+    on top of it are told apart, and the payload names them by index."""
+    import base64
+
+    import numpy as np
+
+    from deviceflow._internal.mesh.builder import build_material_meshes
+
+    materials = default_materials()
+    project = ProjectDefinition(
+        "Mesa", grid_dict(default_grid()), kernel="slab", resolution_um=0.002, resolution_xy_um=0.002
+    )
+    sketches = {
+        "mesa": QuickSketch("mesa", [SketchShape("rectangle", parameters={"center": (0.0, 0.0), "size": (0.4, 0.4)})])
+    }
+
+    def run(state, item):
+        return kernel.run_step(
+            state, item, project=project, recipes={}, sketches=sketches, logger=lambda _m: None, materials=materials
+        )
+
+    state = kernel.initial_state(project, materials=materials)
+    state = run(state, step(ProcessType.DEPOSIT, parameters={"target": 0.048, "mode": "planar"}, output_material="W"))
+    state = run(
+        state,
+        step(
+            ProcessType.ETCH, mask_source="quick_sketch", keep="outside",
+            parameters={"target": 0.048, "directional_fraction": 1.0, "sketch_id": "mesa"},
+            material_responses={"W": MaterialResponse("W", 0.1)},
+        ),
+    )
+    state = run(state, step(ProcessType.DEPOSIT, parameters={"target": 0.010, "mode": "conformal"}, output_material="Al2O3"))
+    state = run(state, step(ProcessType.DEPOSIT, parameters={"target": 0.010, "mode": "conformal"}, output_material="TiN"))
+
+    built = build_material_meshes(state.device._state, manifold=False)
+    order = [material.name for material in built]
+    film = built[[m for m in built if m.name == "Al2O3"][0]]
+    against = film.metadata["neighbour_faces"]
+    assert set(np.unique(against)) == {-1, order.index("Si"), order.index("W"), order.index("TiN")}
+    assert np.array_equal(film.metadata["interface_faces"], against >= 0)
+    # The wafer's top is against the mesa where it stands and the film elsewhere.
+    wafer = built[[m for m in built if m.name == "Si"][0]]
+    up = wafer.face_normals[:, 2] > 0.999
+    assert set(np.unique(wafer.metadata["neighbour_faces"][up])) == {order.index("W"), order.index("Al2O3")}
+
+    payload = kernel.surfaces(state, project=project)
+    surface = next(item for item in payload["surfaces"] if item["material"] == "Al2O3")
+    faces = np.frombuffer(base64.b64decode(surface["neighbourFaces"]), dtype=np.uint8)
+    assert len(faces) == surface["triangleCount"]
+    names = surface["neighbourMaterials"]
+    assert {names[index] for index in np.unique(faces) if index != 255} == {"Si", "W", "TiN"}
+    assert 255 in faces  # the film's walls on the window edge lie against nothing

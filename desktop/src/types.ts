@@ -202,6 +202,9 @@ export interface SurfacePayload {
   indices: string;
   /** Base64 Uint8Array, one flag per triangle: 1 where the face lies against another material. */
   interfaceFaces?: string;
+  /** Base64 Uint8Array, one entry per triangle: the index in `neighbourMaterials` of the material the face lies against, 255 for none. */
+  neighbourFaces?: string;
+  neighbourMaterials?: string[];
   vertexCount: number;
   triangleCount: number;
 }
