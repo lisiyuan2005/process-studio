@@ -559,13 +559,22 @@ def test_a_section_draws_the_surface_the_sampled_bands_stand_for(kernel, project
     assert (drawn["width"], drawn["height"]) == (raw["width"], raw["height"])
 
 
-def test_the_xy_resolution_shapes_the_arcs_and_the_z_resolution_the_bands(kernel, sketches):
+def test_the_xy_resolution_shapes_the_arcs_and_the_z_resolution_the_bands(kernel):
     """A finer z step adds bands; a finer XY sagitta adds ring vertices. They
     are separate numbers, so a project can shrink the staircase on a
-    shoulder without paying for rounder corners in plan, or the reverse."""
+    shoulder without paying for rounder corners in plan, or the reverse.
+
+    The film coats a square mesa: its convex corners are where the XY arcs
+    live (a round hole's corners are concave and stay sharp)."""
     from process_studio.kernels.slab import resolution_xy_um
 
     materials = default_materials()
+    sketches = {
+        "default": QuickSketch(
+            "default",
+            [SketchShape("rectangle", parameters={"center": (0.0, 0.0), "size": (0.4, 0.4)})],
+        )
+    }
 
     def film(z_nm: float, xy_nm: float | None):
         project = ProjectDefinition(
@@ -577,10 +586,15 @@ def test_the_xy_resolution_shapes_the_arcs_and_the_z_resolution_the_bands(kernel
         state = kernel.initial_state(project, materials=materials)
         state = kernel.run_step(
             state,
+            step(ProcessType.DEPOSIT, parameters={"target": 0.05, "mode": "planar"}, output_material="W"),
+            project=project, recipes={}, sketches=sketches, logger=lambda _m: None, materials=materials,
+        )
+        state = kernel.run_step(
+            state,
             step(
-                ProcessType.ETCH, mask_source="quick_sketch",
-                parameters={"target": 0.3, "directional_fraction": 1.0, "sketch_id": "default"},
-                material_responses={"Si": MaterialResponse("Si", 0.1)},
+                ProcessType.ETCH, mask_source="quick_sketch", keep="outside",
+                parameters={"target": 0.05, "directional_fraction": 1.0, "sketch_id": "default"},
+                material_responses={"W": MaterialResponse("W", 0.1)},
             ),
             project=project, recipes={}, sketches=sketches, logger=lambda _m: None, materials=materials,
         )
@@ -617,3 +631,50 @@ def test_the_xy_resolution_shapes_the_arcs_and_the_z_resolution_the_bands(kernel
         loaded = kernel.load_state(path)
         assert loaded.device.conformal_resolution == pytest.approx(0.002)
         assert loaded.device.xy_resolution == pytest.approx(0.01)
+
+
+def test_a_fine_z_step_rounds_a_shoulder_whatever_the_xy_value(kernel):
+    """The staircase on a film's shoulder is bounded by the z step alone.
+
+    A 13 nm film over a tungsten mesa, sampled every nanometre with the XY
+    arcs left coarse at 20 nm: the outline above the mesa edge must follow
+    the quarter circle of the film's radius to within about the z step.
+    """
+    import math
+
+    materials = default_materials()
+    project = ProjectDefinition(
+        "Mesa", grid_dict(default_grid()), kernel="slab", resolution_um=0.001, resolution_xy_um=0.02
+    )
+    sketches = {
+        "mesa": QuickSketch("mesa", [SketchShape("rectangle", parameters={"center": (0.0, 0.0), "size": (0.4, 0.4)})])
+    }
+
+    def run(state, item):
+        return kernel.run_step(
+            state, item, project=project, recipes={}, sketches=sketches, logger=lambda _m: None, materials=materials
+        )
+
+    state = kernel.initial_state(project, materials=materials)
+    state = run(state, step(ProcessType.DEPOSIT, parameters={"target": 0.048, "mode": "planar"}, output_material="W"))
+    state = run(
+        state,
+        step(
+            ProcessType.ETCH, mask_source="quick_sketch", keep="outside",
+            parameters={"target": 0.048, "directional_fraction": 1.0, "sketch_id": "mesa"},
+            material_responses={"W": MaterialResponse("W", 0.1)},
+        ),
+    )
+    thickness = 0.0133
+    state = run(state, step(ProcessType.DEPOSIT, parameters={"target": thickness, "mode": "conformal"}, output_material="Al2O3"))
+    section = state.device.cross_section((-0.8, 0.0), (0.8, 0.0))
+    mesa_top = 0.8 + 0.048
+    edge = 1.0  # the mesa's right edge, as a distance along the cut
+    worst = 0.0
+    for k in range(13):
+        dz = k / 1000.0
+        intervals = [i for i in section.intervals(mesa_top + dz + 0.0002) if i[2] == "Al2O3"]
+        outer = max(b for _a, b, _m in intervals if b > edge)
+        ideal = math.sqrt(thickness**2 - dz**2)
+        worst = max(worst, abs((outer - edge) - ideal))
+    assert worst < 0.0015, f"the shoulder departs from the circle by {worst * 1000:.2f} nm"

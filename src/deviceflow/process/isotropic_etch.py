@@ -145,7 +145,7 @@ def _step(
     planes = sorted({floor, top} | {s.z0 for s in state.slabs} | {s.z1 for s in state.slabs})
     samples = _sample_intervals(planes, floor, top, d_max, min(resolution, d_max / 4))
     segs = {m: _quad_segs(d, xy) for m, d in depths.items()}
-    merge_tol = xy / 4
+    merge_tol = resolution / 4
 
     removed: dict[Material, list[tuple[float, float, MultiPolygon]]] = {m: [] for m in depths}
     previous: dict[Material, MultiPolygon | None] = {m: None for m in depths}

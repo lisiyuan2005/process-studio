@@ -53,10 +53,10 @@ def deposit_conformal(
 ) -> tuple[float, float, float]:
     """Deposit ``thickness`` conformally; returns (z_low, z_high, volume added).
 
-    ``resolution`` is the z step the film is sampled at; ``xy_resolution``
-    is the largest sagitta an XY arc may have and the tolerance two
-    consecutive samples are welded at. It defaults to ``resolution``, which
-    ties the two; setting it separately keeps rings cheap while z is fine.
+    ``resolution`` is the z step the film is sampled at, and the scale of
+    the staircase that sampling leaves; ``xy_resolution`` is the largest
+    sagitta an XY arc may have. It defaults to ``resolution``, which ties
+    the two; setting it separately keeps rings cheap while z is fine.
     """
     t = float(thickness)
     if not t > 0:
@@ -108,7 +108,11 @@ def deposit_conformal(
     # narrower than the resolution but wider than the grid, which survives
     # every cleaning step and makes the mesh non-manifold where it ends.
     # Cutting the ring from the snapped dilation keeps the interface exact.
-    merge_tol = xy / 4
+    # The welding tolerance between consecutive z samples belongs to the z
+    # step: it is what bounds the staircase. Tied to the XY value it would
+    # glue samples whose outline moved less than that, and a fine z step
+    # under a coarse XY value would still leave XY-sized steps.
+    merge_tol = resolution / 4
     # Sources are sorted by z0 and tile the stack, so the ones a sample can
     # reach form a contiguous run and are found by bisection instead of by
     # scanning every slab for every sample.
