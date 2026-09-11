@@ -79,9 +79,18 @@ function SurfaceMesh({
   const geometry = useMemo(() => {
     const buffer = new THREE.BufferGeometry();
     buffer.setAttribute("position", new THREE.BufferAttribute(decodeFloats(surface.positions), 3));
-    buffer.setAttribute("normal", new THREE.BufferAttribute(decodeFloats(surface.normals), 3));
     buffer.setIndex(new THREE.BufferAttribute(decodeIndices(surface.indices), 1));
-    return buffer;
+    if (surface.normals) {
+      buffer.setAttribute("normal", new THREE.BufferAttribute(decodeFloats(surface.normals), 3));
+      return buffer;
+    }
+    // Exact slab geometry arrives welded and indexed, without normals: each
+    // triangle gets its own corners here so a flat face shades flat and the
+    // sharp edges between faces stay sharp.
+    const flat = buffer.toNonIndexed();
+    flat.computeVertexNormals();
+    buffer.dispose();
+    return flat;
   }, [surface.positions, surface.normals, surface.indices]);
 
   // Marching-cubes buffers are large; release them when the step changes.
@@ -549,6 +558,20 @@ export function Viewport({
           <div className="view-placeholder">
             <CircleAlert size={20} />
             <p>{error}</p>
+          </div>
+        ) : loading && !(mode === "surfaces" ? surfaces : mode === "section" ? section : topView) ? (
+          // Nothing to show yet for this step, and the worker is on it: say
+          // so, rather than the "run the flow" the empty view would show,
+          // which reads as if the result were gone.
+          <div className="view-placeholder">
+            <LoaderCircle className="spin" size={20} />
+            <p>
+              {mode === "surfaces"
+                ? "Building the 3D view… the first look at a step builds its mesh; later ones are instant."
+                : mode === "section"
+                  ? "Cutting the section…"
+                  : "Drawing the top view…"}
+            </p>
           </div>
         ) : mode === "surfaces" ? (
           surfaces && surfaces.surfaces.length > 0 ? (

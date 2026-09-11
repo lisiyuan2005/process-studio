@@ -181,7 +181,9 @@ export interface SurfacePayload {
   color: string;
   /** Base64 little-endian Float32Array, three components per vertex. */
   positions: string;
+  /** Empty when the kernel sends flat geometry: the viewer then shades each face on its own. */
   normals: string;
+  shading?: "flat" | "smooth";
   /** Base64 little-endian Uint32Array, three indices per triangle. */
   indices: string;
   vertexCount: number;

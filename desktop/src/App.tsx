@@ -126,6 +126,11 @@ export default function App() {
   // must not land on top of it and show another step's geometry.
   const viewToken = useRef(0);
   const shownTarget = useRef<string>("");
+  // Views already fetched for a stored result, keyed by what was asked for.
+  // A stored result only changes when a run recomputes it, so the cache is
+  // dropped at every run and at every window change, and switching between
+  // 3D, section and top view of the same step costs nothing in between.
+  const viewCache = useRef(new Map<string, SurfaceDocument | SectionDocument | TopViewDocument>());
   // The cut position lives in micrometres so it survives a step change.
   const sectionPosition = useRef<number | null>(null);
 
@@ -218,6 +223,7 @@ export default function App() {
 
   const openDocument = (next: WorkspaceDocument) => {
     skipNextAutosave.current = true;
+    viewCache.current.clear();
     setDocumentState(next);
     setSaveState("saved");
     setRecent(rememberWorkspace(next.root, next.project.name));
@@ -327,28 +333,46 @@ export default function App() {
       setViewError("This step has not run yet. Run the flow to see it.");
       return;
     }
-    setViewLoading(true);
     setViewError(undefined);
     const request = { branchId, stepId: selectedStepId, interpolation };
+    const remember = <T extends SurfaceDocument | SectionDocument | TopViewDocument>(key: string, value: T) => {
+      const cache = viewCache.current;
+      cache.delete(key);
+      cache.set(key, value);
+      // A handful of views is plenty; a 3D payload can be tens of megabytes.
+      while (cache.size > 8) cache.delete(cache.keys().next().value as string);
+      return value;
+    };
+    const cached = <T,>(key: string): T | undefined => viewCache.current.get(key) as T | undefined;
     try {
       // A stale step still has the result of the last run, so it is shown,
       // labelled out of date, instead of being refused.
       if (mode === "surfaces") {
+        const key = `surfaces:${target}:${interpolation}`;
+        const hit = cached<SurfaceDocument>(key);
+        if (hit) {
+          setSurfaces(hit);
+          setViewLoading(false);
+          return;
+        }
+        setViewLoading(true);
         const next = await bridge.getSurfaces(root, request);
         if (token !== viewToken.current) return;
-        setSurfaces(next);
+        setSurfaces(remember(key, next));
       } else if (mode === "section") {
         if (sectionAxis === "line" && !sectionLine) {
           setViewLoading(false);
           setViewError("Draw the AA–BB line on the top view first.");
           return;
         }
-        const next = await bridge.getSection(root, {
-          ...request,
-          axis: sectionAxis,
-          position: sectionAxis === "line" ? undefined : sectionPosition.current ?? undefined,
-          line: sectionAxis === "line" && sectionLine ? sectionLine : undefined,
-        });
+        const position = sectionAxis === "line" ? undefined : sectionPosition.current ?? undefined;
+        const line = sectionAxis === "line" && sectionLine ? sectionLine : undefined;
+        const key = `section:${target}:${interpolation}:${sectionAxis}:${position ?? "mid"}:${line ? line.start.join(",") + ">" + line.end.join(",") : ""}`;
+        const hit = cached<SectionDocument>(key);
+        const next = hit ?? (await (async () => {
+          setViewLoading(true);
+          return remember(key, await bridge.getSection(root, { ...request, axis: sectionAxis, position, line }));
+        })());
         if (token !== viewToken.current) return;
         setSection(next);
         if (sectionAxis !== "line") {
@@ -356,9 +380,17 @@ export default function App() {
           if (next.index !== sectionIndex) setSectionIndex(next.index);
         }
       } else {
+        const key = `top:${target}`;
+        const hit = cached<TopViewDocument>(key);
+        if (hit) {
+          setTopView(hit);
+          setViewLoading(false);
+          return;
+        }
+        setViewLoading(true);
         const next = await bridge.getTopView(root, request);
         if (token !== viewToken.current) return;
-        setTopView(next);
+        setTopView(remember(key, next));
       }
     } catch (reason) {
       if (token !== viewToken.current) return;
@@ -390,6 +422,8 @@ export default function App() {
     if (!document || !branch || busy) return;
     setBusy(true);
     runningStepId.current = undefined;
+    // Whatever the run stores replaces what the views have seen.
+    viewCache.current.clear();
     const requestId = `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     runRequestId.current = requestId;
     let working: WorkspaceDocument = document;
@@ -546,6 +580,7 @@ export default function App() {
     try {
       const saved = await bridge.saveDocument(document);
       const updated = await bridge.setGrid(saved.root, targetSpacingNm, bounds);
+      viewCache.current.clear();
       skipNextAutosave.current = true;
       setDocumentState(updated);
       setSaveState("saved");

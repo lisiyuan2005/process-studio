@@ -249,16 +249,18 @@ def test_the_views_are_pictures_of_this_state(kernel, project, sketches):
     silicon = surfaces["surfaces"][0]
     assert silicon["triangleCount"] > 0
     assert surfaces["exact"] is True
-    # Flat faces are shaded flat: every corner of a triangle carries that
-    # triangle's own normal, and the wafer top points straight up.
+    # The geometry is exact, welded and indexed, and carries no normals: the
+    # viewer shades each face flat from it, so the wafer top is a set of
+    # triangles whose three corners all sit at z = 0.
     import numpy as np
 
-    normals = np.frombuffer(base64.b64decode(silicon["normals"]), dtype=np.float32).reshape(-1, 3, 3)
-    positions = np.frombuffer(base64.b64decode(silicon["positions"]), dtype=np.float32).reshape(-1, 3, 3)
-    assert np.allclose(normals[:, 0], normals[:, 1]) and np.allclose(normals[:, 0], normals[:, 2])
-    top = np.isclose(positions[:, :, 2], 0.0).all(axis=1)
+    assert silicon["normals"] == "" and silicon["shading"] == "flat"
+    positions = np.frombuffer(base64.b64decode(silicon["positions"]), dtype=np.float32).reshape(-1, 3)
+    faces = np.frombuffer(base64.b64decode(silicon["indices"]), dtype=np.uint32).reshape(-1, 3)
+    assert len(faces) == silicon["triangleCount"] and faces.max() < len(positions)
+    top = np.isclose(positions[faces][:, :, 2], 0.0).all(axis=1)
     assert top.any()
-    assert np.allclose(normals[top][:, 0], [0.0, 0.0, 1.0])
+    assert positions[:, 2].min() == pytest.approx(-0.8)
 
     section = kernel.section(state, colors, project=project, axis="y")
     assert section["axis"] == "y"
@@ -432,3 +434,58 @@ def test_repeated_conformal_films_of_one_material_mesh_as_one_solid(kernel, proj
     assert section.surface_z(0.8) == pytest.approx(0.5 + 0.24)
     # The 3D view builds the same mesh, so it must come back too.
     assert {s["material"] for s in kernel.surfaces(state, project=project)["surfaces"]} == {"Si", "W"}
+
+
+def test_the_3d_view_is_built_once_and_kept_beside_the_snapshot(tmp_path, kernel, project, sketches, monkeypatch):
+    """The mesh is the slow part, so it is built once per stored state.
+
+    The payload is welded, indexed geometry without normals; the viewer
+    shades each face itself. After the first build the triangles live in a
+    sidecar next to the snapshot, and a state loaded from disk later reads
+    them instead of building them again.
+    """
+    import numpy as np
+    import base64
+
+    from process_studio.kernels import slab as slab_module
+
+    materials = default_materials()
+    state = kernel.initial_state(project, materials=materials)
+    state = kernel.run_step(
+        state,
+        step(
+            ProcessType.ETCH,
+            mask_source="quick_sketch",
+            parameters={"target": 0.3, "directional_fraction": 1.0, "sketch_id": "default"},
+            material_responses={"Si": MaterialResponse("Si", 0.1)},
+        ),
+        project=project, recipes={}, sketches=sketches, logger=lambda _m: None, materials=materials,
+    )
+    path = tmp_path / "step.dfz"
+    state.save(path)
+    payload = kernel.surfaces(state, project=project)
+    surface = payload["surfaces"][0]
+    assert surface["normals"] == "" and surface["shading"] == "flat"
+    positions = np.frombuffer(base64.b64decode(surface["positions"]), dtype=np.float32).reshape(-1, 3)
+    indices = np.frombuffer(base64.b64decode(surface["indices"]), dtype=np.uint32)
+    assert surface["vertexCount"] == len(positions) < surface["triangleCount"] * 3
+    assert indices.max() < len(positions)
+    # Heights are the project's: the wafer top sits at z = 0.
+    assert positions[:, 2].max() == pytest.approx(0.0)
+
+    sidecar = path.with_name(path.name + slab_module.MESH_SIDECAR)
+    assert sidecar.is_file()
+
+    # A fresh load must not build again: the builder is made to fail.
+    from deviceflow._internal.mesh import builder
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("the mesh was rebuilt although the sidecar exists")
+
+    monkeypatch.setattr(builder, "build_material_meshes", refuse)
+    reloaded = kernel.load_state(path)
+    again = kernel.surfaces(reloaded, project=project)
+    assert again["surfaces"][0]["positions"] == surface["positions"]
+    assert again["surfaces"][0]["indices"] == surface["indices"]
+    # And the same state object answers from memory the second time.
+    assert kernel.surfaces(reloaded, project=project)["surfaces"][0]["indices"] == surface["indices"]

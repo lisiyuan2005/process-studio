@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import io
 import math
+import threading
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -135,6 +136,13 @@ class SlabState:
     def __init__(self, device: Device, z_offset: float) -> None:
         self.device = device
         self.z_offset = float(z_offset)
+        #: Where this state was stored, so its display mesh can live beside it.
+        self.path: Path | None = None
+        #: The display mesh, once built: material -> (vertices, triangles).
+        self.display_meshes: dict[str, tuple[np.ndarray, np.ndarray]] | None = None
+        #: Held while the mesh is being built, so a view asked for during
+        #: the background build waits for it instead of building a second one.
+        self.mesh_lock = threading.Lock()
 
     @property
     def priority(self) -> list[str]:
@@ -159,6 +167,7 @@ class SlabState:
                 conformal_resolution=self.device.conformal_resolution,
             )
         )
+        self.path = Path(path)
 
     @classmethod
     def load(cls, path: Path) -> "SlabState":
@@ -184,7 +193,69 @@ class SlabState:
         device._step_options = {"render": False}
         device.verbose = False
         device._snapshots = []
-        return cls(device, float(restored.metadata.get("zOffsetUm", 0.0)))
+        state = cls(device, float(restored.metadata.get("zOffsetUm", 0.0)))
+        state.path = Path(path)
+        return state
+
+
+MESH_SIDECAR = ".mesh.npz"
+
+
+def display_meshes(state: SlabState) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """The 3D view's triangles for each material, built once per stored state.
+
+    Building the mesh is the slow part of the slab kernel: seconds for a few
+    conformal films, longer for a filled and polished stack, and nothing in
+    it depends on how the view is drawn. So it is built once and kept twice:
+    on the state object, which the worker's state cache holds, and in a file
+    beside the snapshot, so reopening the workspace tomorrow does not pay
+    for it again. The vertices are welded and the triangles indexed, which
+    is a third of the size of one vertex per corner; the viewer shades each
+    face on its own from the indexed form.
+    """
+    if state.display_meshes is not None:
+        return state.display_meshes
+    with state.mesh_lock:
+        if state.display_meshes is None:
+            state.display_meshes = _load_or_build_meshes(state)
+        return state.display_meshes
+
+
+def _load_or_build_meshes(state: SlabState) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    sidecar = None if state.path is None else state.path.with_name(state.path.name + MESH_SIDECAR)
+    meshes: dict[str, tuple[np.ndarray, np.ndarray]] | None = None
+    if sidecar is not None and sidecar.is_file():
+        try:
+            with np.load(sidecar) as stored:
+                names = [str(name) for name in stored["materials"]]
+                meshes = {
+                    name: (stored[f"{index}.vertices"], stored[f"{index}.faces"])
+                    for index, name in enumerate(names)
+                }
+        except (OSError, KeyError, ValueError):
+            meshes = None  # an unreadable sidecar is simply rebuilt
+    if meshes is None:
+        from deviceflow._internal.mesh.builder import build_material_meshes
+
+        state.device._state.validate()
+        built = build_material_meshes(state.device._state, manifold=False)
+        meshes = {
+            material.name: (
+                np.ascontiguousarray(mesh.vertices, dtype=np.float32),
+                np.ascontiguousarray(mesh.faces, dtype=np.uint32),
+            )
+            for material, mesh in built.items()
+        }
+        if sidecar is not None:
+            arrays: dict[str, np.ndarray] = {"materials": np.array(list(meshes), dtype=str)}
+            for index, (vertices, faces) in enumerate(meshes.values()):
+                arrays[f"{index}.vertices"] = vertices
+                arrays[f"{index}.faces"] = faces
+            try:
+                np.savez(sidecar, **arrays)
+            except OSError:
+                pass  # the view still works; it is only not remembered
+    return meshes
 
 
 def _factory(grid: float):
@@ -630,6 +701,10 @@ class SlabKernel:
     def state_materials(self, state: SlabState) -> list[str]:
         return state.priority
 
+    def warm_views(self, state: SlabState) -> None:
+        """Build the display mesh now, so the 3D view does not have to."""
+        display_meshes(state)
+
     def state_bytes(self, state: SlabState) -> int:
         # Polygons are the bulk of a slab state: two doubles per coordinate
         # plus shapely's bookkeeping, which the factor of four stands in for.
@@ -638,6 +713,11 @@ class SlabKernel:
             for slab in state.device._state.slabs
             for region in slab.regions.values()
         )
+        if state.display_meshes is not None:
+            coordinates += sum(
+                (vertices.nbytes + faces.nbytes) // 8
+                for vertices, faces in state.display_meshes.values()
+            )
         return 64 * 1024 + coordinates * 4 * 16
 
     # -- views -------------------------------------------------------------
@@ -651,7 +731,7 @@ class SlabKernel:
         materials: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         device = state.device
-        meshes = device.build_mesh()
+        meshes = display_meshes(state)
         selected = [
             name
             for name in state.priority
@@ -659,23 +739,24 @@ class SlabKernel:
         ]
         payload = []
         for name in selected:
-            mesh = meshes[name]
+            vertices, faces = meshes[name]
             # Slab faces are flat and meet at sharp edges, and a flat face is
             # two triangles however large it is. Shading them with averaged
             # vertex normals would blend the top face into the walls along
             # those two diagonals, which shows up as a dark cross on a square.
-            # So each triangle gets its own three vertices and its face normal.
-            faces = np.asarray(mesh.faces, dtype=np.int64)
-            corners = np.asarray(mesh.vertices, dtype=np.float64)[faces].reshape(-1, 3)
-            corners[:, 2] += state.z_offset
-            normals = np.repeat(np.asarray(mesh.face_normals, dtype=np.float32), 3, axis=0)
+            # So no normals are sent: the viewer gives each triangle its own
+            # corners and its face normal, which it does faster than the
+            # worker can serialise three copies of every vertex.
+            positions = vertices.copy()
+            positions[:, 2] += np.float32(state.z_offset)
             payload.append(
                 {
                     "material": name,
-                    "positions": _encode(corners.astype(np.float32)),
-                    "normals": _encode(normals),
-                    "indices": _encode(np.arange(len(corners), dtype=np.uint32)),
-                    "vertexCount": int(len(corners)),
+                    "positions": _encode(positions),
+                    "normals": "",
+                    "shading": "flat",
+                    "indices": _encode(faces),
+                    "vertexCount": int(len(positions)),
                     "triangleCount": int(len(faces)),
                 }
             )

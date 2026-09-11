@@ -105,6 +105,14 @@ class Kernel(Protocol):
     def state_bytes(self, state: Any) -> int:
         """Roughly what the state costs to keep in memory, for the cache budget."""
 
+    def warm_views(self, state: Any) -> None:
+        """Prepare whatever the views of this state need that is slow to make.
+
+        Called in the background once a run has stored the state, so the
+        first look at a step does not pay for it. A kernel whose views are
+        cheap does nothing here.
+        """
+
     def surfaces(
         self,
         state: Any,

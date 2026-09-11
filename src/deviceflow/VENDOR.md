@@ -22,3 +22,8 @@ The license question is the one the emulator repository records in
 `LICENSE_STATUS.md`: the supplied source carries no license grant here, so
 confirm ownership and third-party obligations before publishing or
 distributing either repository broadly.
+- `_internal/mesh/builder.py`: `build_material_meshes` and `build_one_material`
+  take `manifold=False` to skip the pinch-vertex splitting. Process Studio's
+  3D view shades each face on its own and never shares vertices, so the split
+  bought it nothing at a third of the build time. Validation and export still
+  build the manifold mesh.

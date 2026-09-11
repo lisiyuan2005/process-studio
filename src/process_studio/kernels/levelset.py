@@ -87,6 +87,9 @@ class LevelSetKernel:
     def state_materials(self, state: MaterialState) -> list[str]:
         return list(state.priority)
 
+    def warm_views(self, state: MaterialState) -> None:
+        """Marching cubes is fast enough to run when asked."""
+
     def state_bytes(self, state: MaterialState) -> int:
         return sum(int(field.nbytes) for field in state.fields.values())
 

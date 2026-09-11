@@ -71,8 +71,15 @@ class _MeshAccumulator:
         )
 
 
-def build_material_meshes(state: ProcessState) -> "OrderedDict[Material, trimesh.Trimesh]":
-    """One mesh per material that owns any volume, in first-appearance order."""
+def build_material_meshes(
+    state: ProcessState, *, manifold: bool = True
+) -> "OrderedDict[Material, trimesh.Trimesh]":
+    """One mesh per material that owns any volume, in first-appearance order.
+
+    ``manifold=False`` skips the vertex splitting that makes every vertex a
+    single fan. A renderer that shades each face on its own never shares
+    vertices anyway, and the split is a third of the build time.
+    """
     materials: list[Material] = []
     for slab in state.slabs:
         for m in slab.regions:
@@ -80,11 +87,13 @@ def build_material_meshes(state: ProcessState) -> "OrderedDict[Material, trimesh
                 materials.append(m)
     out: "OrderedDict[Material, trimesh.Trimesh]" = OrderedDict()
     for m in materials:
-        out[m] = build_one_material(state, m)
+        out[m] = build_one_material(state, m, manifold=manifold)
     return out
 
 
-def build_one_material(state: ProcessState, material: Material) -> trimesh.Trimesh:
+def build_one_material(
+    state: ProcessState, material: Material, *, manifold: bool = True
+) -> trimesh.Trimesh:
     """Caps and walls of one material from a single planar arrangement.
 
     The state is harmonized, so the rings of this material in every slab are
@@ -192,7 +201,10 @@ def build_one_material(state: ProcessState, material: Material) -> trimesh.Trime
     mesh = acc.to_trimesh()
     if len(mesh.faces) == 0:
         raise MeshError(f"{material.name}: empty mesh")
-    mesh, n_split = split_nonmanifold(mesh)  # keeps face order
+    if manifold:
+        mesh, n_split = split_nonmanifold(mesh)  # keeps face order
+    else:
+        n_split = 0
     mesh.metadata["pinch_vertices_split"] = n_split
     mesh.metadata["interface_faces"] = np.asarray(acc.interface, dtype=bool)
     return mesh

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -233,6 +234,7 @@ def run_flow(
             "message": f"Finished {len(executed)} step(s), {len(cached)} cache hit(s) in {elapsed_ms:.0f} ms",
         }
     )
+    _warm_views_later(kernel, [repository.snapshot_path(branch.id, step_id) for step_id in executed])
     return {
         "branchId": branch.id,
         "executedStepIds": executed,
@@ -241,6 +243,29 @@ def run_flow(
         "materials": kernel.state_materials(state),
         "stepStatuses": step_statuses(repository, branch, recipes, sketches, project),
     }
+
+
+def _warm_views_later(kernel: Kernel, paths: list[Path]) -> None:
+    """Prepare the views of freshly stored states while the user looks at the log.
+
+    The last step is what the user opens first, so it goes first. A state
+    that has already left the cache is skipped rather than reloaded: the
+    warming is a courtesy, and the view builds what it needs on demand.
+    """
+    if not paths:
+        return
+
+    def work() -> None:
+        for path in reversed(paths):
+            state = STATE_CACHE.get(path)
+            if state is None:
+                continue
+            try:
+                kernel.warm_views(state)
+            except Exception:  # noqa: BLE001 - a warm-up must never surface as an error
+                continue
+
+    threading.Thread(target=work, name="warm-views", daemon=True).start()
 
 
 def state_for_step(
