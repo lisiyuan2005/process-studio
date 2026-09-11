@@ -151,28 +151,45 @@ function SurfaceMesh({
   // Marching-cubes buffers are large; release them when the step changes.
   useEffect(() => () => geometry.dispose(), [geometry]);
 
+  const position: [number, number, number] = [-offset.x, -offset.y, -offset.z];
+  const side = exact ? THREE.FrontSide : THREE.DoubleSide;
+  const translucent = opacity < 1;
   return (
-    <mesh geometry={geometry} position={[-offset.x, -offset.y, -offset.z]}>
-      <meshStandardMaterial
-        color={surface.color}
-        transparent={opacity < 1}
-        opacity={opacity}
-        roughness={0.62}
-        metalness={0.08}
-        // Exact geometry is closed, so its back faces are never in view;
-        // culling them also keeps a thin film's underside from fighting
-        // its top for the same pixels in a window many micrometres wide.
-        side={exact ? THREE.FrontSide : THREE.DoubleSide}
-        // Level-set interfaces of different materials coincide; they are
-        // settled by a small per-material depth bias instead of by whichever
-        // triangle happens to rasterise closer this frame. Exact geometry
-        // never draws two coincident faces, and the bias would only push a
-        // steep wall behind a neighbour's top at grazing angles.
-        polygonOffset={!exact}
-        polygonOffsetFactor={exact ? 0 : order}
-        polygonOffsetUnits={exact ? 0 : order}
-      />
-    </mesh>
+    <group>
+      {translucent && (
+        // A translucent solid shows what lies behind it, not its own inside:
+        // this pass writes only depth, so the colour pass below keeps just
+        // the nearest face of the material at each pixel. Without it the
+        // trench floor of a film blends through the film's top wherever its
+        // triangles happen to be drawn first. It sits in the transparent
+        // queue so the opaque materials behind the film are already drawn
+        // and still show through.
+        <mesh geometry={geometry} position={position} renderOrder={2 * order}>
+          <meshBasicMaterial transparent colorWrite={false} side={side} />
+        </mesh>
+      )}
+      <mesh geometry={geometry} position={position} renderOrder={translucent ? 2 * order + 1 : 0}>
+        <meshStandardMaterial
+          color={surface.color}
+          transparent={translucent}
+          opacity={opacity}
+          roughness={0.62}
+          metalness={0.08}
+          // Exact geometry is closed, so its back faces are never in view;
+          // culling them also keeps a thin film's underside from fighting
+          // its top for the same pixels in a window many micrometres wide.
+          side={side}
+          // Level-set interfaces of different materials coincide; they are
+          // settled by a small per-material depth bias instead of by whichever
+          // triangle happens to rasterise closer this frame. Exact geometry
+          // never draws two coincident faces, and the bias would only push a
+          // steep wall behind a neighbour's top at grazing angles.
+          polygonOffset={!exact}
+          polygonOffsetFactor={exact ? 0 : order}
+          polygonOffsetUnits={exact ? 0 : order}
+        />
+      </mesh>
+    </group>
   );
 }
 
