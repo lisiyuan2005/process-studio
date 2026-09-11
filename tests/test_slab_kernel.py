@@ -682,3 +682,60 @@ def test_each_face_names_the_material_it_lies_against(kernel):
     names = surface["neighbourMaterials"]
     assert {names[index] for index in np.unique(faces) if index != 255} == {"Si", "W", "TiN"}
     assert 255 in faces  # the film's walls on the window edge lie against nothing
+
+
+def test_an_isotropic_etch_steps_by_the_real_barrier_layer(kernel):
+    """The wet etch advances in steps no larger than half the thinnest layer
+    it must not jump over. That layer is the 25 nm oxide between two
+    sacrificial nitrides, not the 4 nm slab a film's sampling planes cut it
+    into; a liner that continues above and below is no barrier at all.
+    Counting slabs, a replacement-gate flow took a hundred-odd steps of
+    which every one re-noded the whole stack."""
+    from deviceflow._internal.geometry.state import znorm
+    from deviceflow.process.isotropic_etch import _barrier_thickness
+
+    materials = default_materials()
+    project = ProjectDefinition(
+        "Gate", grid_dict(default_grid()), kernel="slab", resolution_um=0.004, resolution_xy_um=0.004
+    )
+    sketches = {
+        "slit": QuickSketch("slit", [SketchShape("rectangle", parameters={"center": (0.0, 0.0), "size": (0.12, 1.6)})])
+    }
+
+    def run(state, item):
+        return kernel.run_step(
+            state, item, project=project, recipes={}, sketches=sketches, logger=lambda _m: None, materials=materials
+        )
+
+    state = kernel.initial_state(project, materials=materials)
+    for name, thickness in (("SiO2", 0.025), ("SiN", 0.03), ("SiO2", 0.025), ("SiN", 0.03), ("SiO2", 0.05)):
+        state = run(state, step(ProcessType.DEPOSIT, parameters={"target": thickness, "mode": "planar"}, output_material=name))
+    state = run(
+        state,
+        step(
+            ProcessType.ETCH, mask_source="quick_sketch",
+            parameters={"target": 0.16, "directional_fraction": 1.0, "sketch_id": "slit"},
+            material_responses={"SiO2": MaterialResponse("SiO2", 1.0), "SiN": MaterialResponse("SiN", 1.0)},
+        ),
+    )
+    geometry = state.device._state
+    nitride = state.device._materials._by_name["SiN"]
+    # Split the middle oxide into 4 nm slabs, as a film's sampling elsewhere would.
+    for z in (0.859, 0.863, 0.867, 0.871):
+        geometry.split_at(znorm(z))
+    assert min(s.thickness for s in geometry.slabs) == pytest.approx(0.004)
+    assert _barrier_thickness(geometry, {nitride: 0.3}) == pytest.approx(0.025)
+
+    # The etch itself: both nitrides recede from the slit walls, the oxides stay.
+    state = run(
+        state,
+        step(
+            ProcessType.ETCH, parameters={"target": 0.2, "directional_fraction": 0.0},
+            material_responses={"SiN": MaterialResponse("SiN", 1.0)},
+        ),
+    )
+    section = state.device.cross_section((-0.8, 0.0), (0.8, 0.0))
+    nitride_rows = [i for i in section.intervals(0.8 + 0.025 + 0.015) if i[2] == "SiN"]
+    assert nitride_rows and all(b <= 0.8 - 0.06 - 0.185 or a >= 0.8 + 0.06 + 0.185 for a, b, _m in nitride_rows)
+    oxide_rows = [i for i in section.intervals(0.8 + 0.025 + 0.03 + 0.012) if i[2] == "SiO2"]
+    assert oxide_rows and any(b - a > 0.7 for a, b, _m in oxide_rows)

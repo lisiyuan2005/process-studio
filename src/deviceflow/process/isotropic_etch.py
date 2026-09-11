@@ -15,11 +15,21 @@ an etch.
 The front is advanced in steps: each step dilates the current void by a
 small radius and removes what that reaches of each target; the void then
 grows and the next step starts from the new surface. A step is smaller
-than half the thinnest non-target layer, so the dilation cannot jump over
-a barrier, and a target uncovered during the etch is etched for the
-remaining time. Each step re-samples the curved front, so the profile
-error grows with the number of steps (about one ``conformal_resolution``
-per step); with a single target and no barrier one exact step is used.
+than half the thinnest barrier layer, so the dilation cannot jump over
+one, and a target uncovered during the etch is etched for the remaining
+time. Each step re-samples the curved front, so the profile error grows
+with the number of steps (about one ``conformal_resolution`` per step);
+with a single target and no barrier one exact step is used.
+
+A barrier layer is a run of consecutive slabs whose non-target footprint
+is the same, that borders void or a target above or below: a 25 nm oxide
+between two sacrificial nitrides is a 25 nm barrier however finely the
+sampling planes of a film elsewhere have split it into slabs, and a film
+liner that continues into the slab above and below is no barrier at all.
+
+The slabs are only harmonised (rings noded across slabs, seams removed)
+once, after the last step: between steps each slab is a clean polygon
+set of its own, which is all the next step reads.
 
 With a mask, the void that exists *before* the etch and lies outside the
 mask column is covered and never starts the etch (the mask is a vertical
@@ -81,11 +91,8 @@ def etch_isotropic(
         return {m: 0.0 for m in depths}
 
     d_max = max(depths.values())
-    # a step must not jump over a barrier: half the thinnest layer that holds a non-target
-    barrier = min(
-        (s.thickness for s in state.slabs if any(m not in depths for m in s.regions)),
-        default=math.inf,
-    )
+    # a step must not jump over a barrier: half the thinnest barrier layer
+    barrier = _barrier_thickness(state, depths)
     if math.isinf(barrier) and len(depths) == 1:
         n_steps = 1  # nothing to creep around, nothing to uncover: one exact dilation
     else:
@@ -94,8 +101,75 @@ def etch_isotropic(
     covered = _covered(state, opening)
     for _ in range(n_steps):
         _step(state, {m: d / n_steps for m, d in depths.items()}, resolution, covered, xy)
+    _yield_to_barriers(state, depths)
+    state.harmonize()
+    state.consolidate()
     state.validate()
     return {m: before[m] - state.volume(m) for m in depths}
+
+
+def _barrier_thickness(state: ProcessState, depths: dict[Material, float]) -> float:
+    """The thinnest layer the front must not jump over, in z.
+
+    Consecutive slabs with the same non-target footprint are one layer. A
+    layer counts when void or a target lies against that footprint above
+    or below it; a layer wrapped in non-target on both sides separates
+    nothing the etch could reach.
+    """
+    slabs = state.slabs
+    if not slabs:
+        return math.inf
+    window = box(*state.bounds)
+    footprints: list[MultiPolygon] = []
+    for s in slabs:
+        parts = [g for m, g in s.regions.items() if m not in depths]
+        footprints.append(P.as_multipolygon(shapely.unary_union(parts)) if parts else P.EMPTY)
+    # what is open (void or target) at each slab, and above the stack
+    open_at = [state.clean(window.difference(f)) if not f.is_empty else state.clean(window) for f in footprints]
+    eps = state.grid * state.grid
+    thinnest = math.inf
+    index = 0
+    while index < len(slabs):
+        if footprints[index].is_empty:
+            index += 1
+            continue
+        end = index
+        while end + 1 < len(slabs) and P.equals(footprints[end + 1], footprints[index]):
+            end += 1
+        footprint = footprints[index]
+        below = open_at[index - 1] if index > 0 else P.EMPTY  # the floor is inert
+        above = open_at[end + 1] if end + 1 < len(slabs) else window  # void above the top
+        borders_open = (
+            footprint.intersection(below).area > eps or footprint.intersection(above).area > eps
+        )
+        if borders_open:
+            thinnest = min(thinnest, znorm(slabs[end].z1 - slabs[index].z0))
+        index = end + 1
+    return thinnest
+
+
+def _yield_to_barriers(state: ProcessState, depths: dict[Material, float]) -> None:
+    """Any sliver a step's arithmetic left of a target inside a barrier goes.
+
+    The steps only ever shrink the targets, so an overlap can only be a
+    target that was not cut back cleanly; the barrier keeps its shape.
+    """
+    for s in state.slabs:
+        others = [g for m, g in s.regions.items() if m not in depths]
+        if not others:
+            continue
+        blocked = shapely.unary_union(others)
+        for m in list(s.regions):
+            if m not in depths:
+                continue
+            region = s.regions[m]
+            if not region.intersects(blocked):
+                continue
+            left = state.clean(region.difference(blocked))
+            if left.is_empty:
+                del s.regions[m]
+            else:
+                s.regions[m] = left
 
 
 def _covered(state: ProcessState, opening) -> list[tuple[float, float, MultiPolygon]]:
@@ -188,6 +262,5 @@ def _step(
                 else:
                     slab.regions[m] = left
                 changed.append(slab)
-    if changed:
-        state.harmonize(changed)
-    state.consolidate()
+    # No harmonise here: the next step reads each slab on its own, and one
+    # harmonise at the end of the etch settles every slab together.
