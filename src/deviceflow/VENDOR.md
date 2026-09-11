@@ -18,10 +18,8 @@ them:
   from the fourth film. This is the "repeated-deposition mesh defect" the
   emulator's changelog and `benchmarks/test_guardrails.py` record as open.
 
-The license question is the one the emulator repository records in
-`LICENSE_STATUS.md`: the supplied source carries no license grant here, so
-confirm ownership and third-party obligations before publishing or
-distributing either repository broadly.
+DeviceFlow is the author's own work and is released with this repository
+under the MIT license in `LICENSE`.
 - `_internal/mesh/builder.py`: `build_material_meshes` and `build_one_material`
   take `manifold=False` to skip the pinch-vertex splitting. Process Studio's
   3D view shades each face on its own and never shares vertices, so the split

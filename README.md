@@ -70,14 +70,14 @@ xattr -dr com.apple.quarantine "/Applications/Process Studio.app"
 - 流程驱动的细化执行 API：可证明数值影响范围时局部重算；全局依赖时统一细网格重算；不是动态 AMR
 - Level Set 干法刻蚀、方向性/各向同性混合刻蚀、简化湿法刻蚀
 - 可选二阶 HJ + SSP-RK2，同层分块每个时间子步同步边界；[配置和验证](docs/SYNCHRONIZED_SOLVER.md)
-- Windows 桌面版可在 `Project → Simulation Settings…` 选择 25/12.5/6.25 nm 或自定义真实网格间距；应用前显示节点数和内存估计，换精度会清除不兼容快照并要求重新运行
+- 顶栏的网格按钮可选 25/12.5/6.25 nm 预设或自定义网格间距，并改工程窗口；应用前显示节点数和内存估计，换精度会清除已存结果并要求重新运行
 - 等厚保形沉积、方向性图形沉积/填充、理想平面 CMP
 - Step 自带工艺类型和参数；Recipe Library 只用于加载模板或保存可复用模板
 - 可按时间运行，也可直接输入目标厚度或目标深度
 - 每个项目一个 GDS；步骤选择 layer/datatype、保留图形内或图形外
 - 未选择 mask 时默认整片暴露
 - Quick Sketch：矩形、圆、多边形、路径，merge/subtract/intersect 和参数化阵列
-- Process Flow：增删步骤、运行到选中步骤、运行全部、从当前步骤创建分支
+- Process Flow：增删、复制、移动、跳过步骤（右键菜单），运行到选中步骤、运行全部、中途停止；分支在数据模型和 worker 里已有，界面暂未提供创建入口
 - 每步自动保存快照；删除某一步时同步删除该步及下游无引用快照
 - 3D 旋转/缩放、材料显隐、Top View、任意画线 AA–BB 截面、截面与俯视图上的距离测量、坐标读数和比例尺
 - Material Library、Process/Recipe Library、简化 Excel 导入导出
@@ -90,11 +90,11 @@ xattr -dr com.apple.quarantine "/Applications/Process Studio.app"
 1. 在左侧 Process Flow 添加或选择步骤。
 2. 在右侧选择工艺类型；可加载已有 Recipe，也可只添加当前工艺需要的参数并另存为新 Recipe。
 3. 若不用 GDS，把掩膜来源选成 Quick Sketch，点 **Edit** 或 **New** 打开编辑器，在工程窗口上画矩形、圆、多边形或路径，右侧列表里改精确尺寸、布尔操作和阵列参数；填充显示的是内核实际会采样的曝光区域。
-4. 点击 **Run to Selected** 检查单步结果，或点击 **Run All** 计算整个流程。运行中顶栏按钮变成 **Stop**，点它在当前步骤算完后停下，已完成的步骤保留，下次运行从那里续。
+4. 点击右侧的 **Run to here** 检查单步结果，或点击顶栏的 **Run** 计算整个流程。运行中顶栏按钮变成 **Stop**，点它在当前步骤算完后停下，已完成的步骤保留，下次运行从那里续。
 5. 在中间切换 3D、Top View 和 AA–BB Section；点 3D 页底栏的材料图例可以隐藏或显示该材料，用来检查内部结构。
    改过参数但还没重新运行的步骤仍然显示上次运行存下的结果，视口上会标注它已过期；从未运行过的步骤则提示先运行。
    流程列表里每张卡片右侧的方框控制这一步是否参与运行，勾掉即跳过，该步及其之后需要重新运行。
-6. 需要比较方案时，在共同步骤上点击 **Branch Here**。新分支复用已有快照，只重新计算变化后的步骤。
+6. 需要比较方案时，右键步骤 **Duplicate** 复制一份改参数，或用命令行 `flow dump` 把流程存成文件再改；已存结果按位置复用，只重算变化后的步骤。
 
 ## Recipe Excel 格式
 
@@ -164,3 +164,7 @@ cd desktop && npm run test
 - 当前是单机单用户桌面原型；按需求未加入多人协作、工艺报告和演化动画。
 
 设计与数据结构见 `docs/DESIGN.md`，验证范围见 `docs/VALIDATION.md`。
+
+## 许可
+
+[MIT](LICENSE)。`src/deviceflow/` 是作者自己的 DeviceFlow 内核，随本仓库一并以 MIT 发布。
