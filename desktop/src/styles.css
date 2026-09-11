@@ -258,6 +258,8 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .kernel-lock { display: flex; align-items: flex-start; gap: 6px; margin: 10px 0 0 !important; color: #a0885c !important; font-size: 9px !important; line-height: 1.5; }
 .kernel-lock svg { flex: 0 0 auto; margin-top: 1px; }
 .stop-button { background: linear-gradient(145deg, #d9636b, #b8434b) !important; box-shadow: 0 6px 18px rgba(184, 67, 75, 0.25) !important; }
+.sketch-actions { display: flex; gap: 6px; margin: 2px 0 10px; }
+.sketch-actions .secondary-button { height: 28px; display: inline-flex; align-items: center; gap: 5px; padding: 0 9px; font-size: 9px; }
 .kernel-badge { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); font-size: 9.5px; }
 .home-divider { display: flex; align-items: center; gap: 9px; margin: 17px 0; color: #56636f; font-size: 8px; }
 .home-divider::before, .home-divider::after { content: ""; flex: 1; height: 1px; background: #29333c; }
@@ -401,7 +403,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .top-view-state { margin-left: auto; padding: 4px 7px; border: 1px solid #bcd9c9; border-radius: 10px; background: #f0faf4; color: #3c8060; font-size: 8px; }
 .top-view-state.stale { border-color: #e6ca9f; background: #fff8ec; color: #996418; }
 .mask-editor-body { display: grid; grid-template-columns: minmax(0, 1fr) 260px; min-height: 0; flex: 1; }
-.mask-canvas-wrap { position: relative; min-width: 0; min-height: 0; padding: 24px 30px 31px 38px; overflow: hidden; background: #eef2f5; }
+.mask-canvas-wrap { position: relative; display: grid; place-items: center; min-width: 0; min-height: 0; padding: 24px 30px 31px 38px; overflow: hidden; background: #eef2f5; }
 .mask-canvas { width: 100%; height: 100%; display: block; border: 1px solid #bfcbd4; background: #ffffff; box-shadow: 0 8px 24px rgba(50,68,83,0.1); cursor: crosshair; touch-action: none; }
 .mask-canvas.loading { cursor: progress; opacity: 0.7; }
 .mask-error { position: absolute; left: 48px; right: 40px; bottom: 42px; padding: 7px 9px; border: 1px solid #efb4b9; border-radius: 6px; background: rgba(255,245,246,0.95); color: #bd414b; font-size: 9px; }
@@ -418,6 +420,20 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .shape-card header button { width: 24px; height: 22px; display: grid; place-items: center; border: 0; background: transparent; color: #a05960; cursor: pointer; }
 .shape-card > label { display: grid; grid-template-columns: 58px 1fr; align-items: center; gap: 5px; margin-bottom: 6px; color: #778895; font-size: 8px; }
 .shape-card select, .shape-card input { width: 100%; height: 25px; border: 1px solid #cbd6de; border-radius: 4px; background: #fff; color: #42596b; font-size: 8.5px; }
+.shape-card.selected { border-color: rgba(85, 142, 209, 0.7); background: #eef5fc; }
+.shape-card header span:last-child { display: inline-flex; }
+.shape-card .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.shape-card .pair-note { color: #7b8b98; font-size: 8.5px; }
+.shape-name { display: grid; gap: 4px; margin: 2px 0 10px; color: #778895; font-size: 8px; }
+.shape-name input { height: 27px; padding: 0 7px; border: 1px solid #cbd6de; border-radius: 4px; font-size: 9.5px; }
+.mask-number { width: 52px; height: 24px; margin: 0 4px; padding: 0 5px; border: 1px solid #cdd7df; border-radius: 4px; font-size: 9px; }
+.mask-cursor { position: absolute; right: 40px; top: 30px; padding: 2px 6px; border-radius: 4px; background: rgba(255,255,255,0.9); color: #5d6d7b; font-size: 9px; }
+.shape-outline { fill: none; stroke: #226cb0; stroke-width: 1.5px; vector-effect: non-scaling-stroke; cursor: pointer; }
+.shape-outline.subtract { stroke: #b43845; stroke-dasharray: 4 3; }
+.shape-outline.intersect { stroke: #7a4fb8; stroke-dasharray: 2 2; }
+.shape-outline.selected { stroke-width: 3px; }
+.shape-outline.drawing { stroke: #1f7ae0; stroke-dasharray: 3 3; pointer-events: none; }
+.vertex { fill: #1f7ae0; stroke: #ffffff; stroke-width: 1px; vector-effect: non-scaling-stroke; }
 .shape-coordinates { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
 .shape-coordinates label { display: grid; grid-template-columns: 12px 1fr; align-items: center; gap: 3px; color: #7a8995; font-size: 8px; }
 .shape-unit { display: block; margin-top: 6px; color: #93a0aa; font-size: 7.5px; }

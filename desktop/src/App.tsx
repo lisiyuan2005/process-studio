@@ -20,11 +20,13 @@ import { Inspector } from "./components/Inspector";
 import { MaterialEditor } from "./components/MaterialEditor";
 import { ProjectHome } from "./components/ProjectHome";
 import { RecipeEditor } from "./components/RecipeEditor";
+import { SketchEditor } from "./components/SketchEditor";
 import { StepList } from "./components/StepList";
 import { Viewport, type ViewMode } from "./components/Viewport";
 import {
   addStep,
   getActiveBranch,
+  newId,
   getSteps,
   hasDirtySteps,
   loadRecipeIntoStep,
@@ -48,6 +50,7 @@ import {
 } from "./domain/project";
 import type {
   ParameterValue,
+  QuickSketch,
   SectionAxis,
   SectionDocument,
   SectionLine,
@@ -78,6 +81,9 @@ export default function App() {
   const [showMaterials, setShowMaterials] = useState(false);
   const [showRecipes, setShowRecipes] = useState(false);
   const [showGrid, setShowGrid] = useState(false);
+  // The sketch being drawn: an existing one by id, or a fresh one for this step.
+  const [sketchEditor, setSketchEditor] = useState<{ sketch: QuickSketch; isNew: boolean } | null>(null);
+  const [sketchBackdrop, setSketchBackdrop] = useState<TopViewDocument>();
   const [mode, setMode] = useState<ViewMode>("surfaces");
   const [interpolation, setInterpolation] = useState(1);
   const [sectionAxis, setSectionAxis] = useState<SectionAxis>("y");
@@ -356,6 +362,58 @@ export default function App() {
       if (!stopped) setShowLog(true);
     } finally {
       runRequestId.current = undefined;
+      setBusy(false);
+    }
+  };
+
+  const openSketchEditor = async (sketchId: string | null) => {
+    if (!document || !branch || !selectedStep) return;
+    const existing = sketchId ? document.sketches.find((item) => item.id === sketchId) : undefined;
+    const sketch: QuickSketch = existing ?? {
+      id: newId("sketch"),
+      name: "New sketch",
+      shapes: [],
+    };
+    setSketchBackdrop(undefined);
+    setSketchEditor({ sketch, isNew: !existing });
+    // The wafer this step's mask lands on is the result of the step before
+    // it; when that has not been run there is simply no backdrop.
+    const index = steps.indexOf(selectedStep);
+    const previous = index > 0 ? steps[index - 1].id : "";
+    if (previous && (statuses[previous] ?? "dirty") === "dirty") return;
+    try {
+      setSketchBackdrop(await bridge.getTopView(document.root, { branchId: branch.id, stepId: previous }));
+    } catch {
+      setSketchBackdrop(undefined);
+    }
+  };
+
+  const saveSketch = async (sketch: QuickSketch) => {
+    if (!document || !selectedStep || !sketchEditor) return;
+    setBusy(true);
+    try {
+      // Flush edits first so the returned document does not drop them.
+      const flushed = await bridge.saveDocument(document);
+      const saved = await bridge.saveSketch(flushed.root, sketch);
+      skipNextAutosave.current = true;
+      setDocumentState(
+        sketchEditor.isNew
+          ? updateStepParameters(saved, selectedStep.id, { sketch_id: sketch.id })
+          : saved,
+      );
+      if (sketchEditor.isNew) setSaveState("unsaved");
+      setSketchEditor(null);
+      setEvents((current) => [
+        ...current,
+        { kind: "log", message: `Saved sketch ${sketch.name} (${sketch.shapes.length} shape(s)).` },
+      ]);
+    } catch (reason) {
+      setEvents((current) => [
+        ...current,
+        { kind: "log", message: `Sketch save failed: ${errorMessage(reason)}` },
+      ]);
+      setShowLog(true);
+    } finally {
       setBusy(false);
     }
   };
@@ -705,6 +763,7 @@ export default function App() {
           onMaskChange={(patch) =>
             selectedStep && setDocument(updateStep(document, selectedStep.id, patch))
           }
+          onEditSketch={(sketchId) => void openSketchEditor(sketchId)}
           onRunToHere={() => selectedStep && void runFlow(selectedStep.id)}
           onRemove={() => {
             if (!selectedStep) return;
@@ -767,6 +826,20 @@ export default function App() {
             }
           }}
           onClose={() => setShowRecipes(false)}
+        />
+      )}
+
+      {sketchEditor && selectedStep && (
+        <SketchEditor
+          sketch={sketchEditor.sketch}
+          isNew={sketchEditor.isNew}
+          grid={document.project.grid}
+          keep={selectedStep.keep}
+          backdrop={sketchBackdrop}
+          busy={busy}
+          onPreview={(sketch) => bridge.previewMask(document.root, sketch, selectedStep.keep)}
+          onSave={(sketch) => void saveSketch(sketch)}
+          onClose={() => setSketchEditor(null)}
         />
       )}
 

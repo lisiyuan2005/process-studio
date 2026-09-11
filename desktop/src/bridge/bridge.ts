@@ -1,6 +1,8 @@
 import type {
   GdsImportResult,
   GridPlan,
+  MaskKeep,
+  MaskPreview,
   QuickSketch,
   RunResult,
   SectionAxis,
@@ -36,6 +38,8 @@ export interface DesktopBridge {
   planGrid(root: string, targetSpacingNm: number): Promise<GridPlan>;
   setGrid(root: string, targetSpacingNm: number): Promise<WorkspaceDocument>;
   saveSketch(root: string, sketch: QuickSketch): Promise<WorkspaceDocument>;
+  /** The kernel's own reading of an unsaved sketch, for the editor's fill. */
+  previewMask(root: string, sketch: QuickSketch, keep: MaskKeep): Promise<MaskPreview>;
   /** `requestId` names the run so `cancel` can withdraw it while it runs. */
   runFlow(root: string, options: RunOptions, requestId?: string): Promise<RunResult>;
   /** Stop a run: a queued one is refused at once, a running one at its next step. */

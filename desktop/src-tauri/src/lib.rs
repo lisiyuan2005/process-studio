@@ -19,6 +19,7 @@ const WORKER_METHODS: &[&str] = &[
     "plan_grid",
     "set_grid",
     "save_sketch",
+    "preview_mask",
     "run_flow",
     "get_surfaces",
     "get_section",

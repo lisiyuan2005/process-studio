@@ -1,4 +1,4 @@
-import { BookDown, CircleAlert, Layers, Play, Save, Trash2, X } from "lucide-react";
+import { BookDown, CircleAlert, Layers, PenLine, Play, Plus, Save, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type {
   KernelDescription,
@@ -38,6 +38,8 @@ interface InspectorProps {
     datatype?: number | null;
     keep?: MaskKeep;
   }) => void;
+  /** Open the sketch editor on a sketch, or on a new one when null. */
+  onEditSketch: (sketchId: string | null) => void;
   onRunToHere: () => void;
   onRemove: () => void;
 }
@@ -266,6 +268,7 @@ export function Inspector({
   onLoadRecipe,
   onSaveRecipe,
   onMaskChange,
+  onEditSketch,
   onRunToHere,
   onRemove,
 }: InspectorProps) {
@@ -551,19 +554,36 @@ export function Inspector({
             </select>
           </label>
           {step.maskSource === "quick_sketch" && (
-            <label className="field-row">
-              <span>Sketch</span>
-              <select
-                value={String(step.parameters.sketch_id ?? "default")}
-                onChange={(event) => onParameter({ sketch_id: event.target.value })}
-              >
-                {sketches.map((sketch) => (
-                  <option key={sketch.id} value={sketch.id}>
-                    {sketch.id} ({sketch.shapes.length} shapes)
-                  </option>
-                ))}
-              </select>
-            </label>
+            <>
+              <label className="field-row">
+                <span>Sketch</span>
+                <select
+                  value={String(step.parameters.sketch_id ?? "default")}
+                  onChange={(event) => onParameter({ sketch_id: event.target.value })}
+                >
+                  {sketches.map((sketch) => (
+                    <option key={sketch.id} value={sketch.id}>
+                      {sketch.name} · {sketch.shapes.length} shape{sketch.shapes.length === 1 ? "" : "s"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="sketch-actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={busy}
+                  onClick={() => onEditSketch(String(step.parameters.sketch_id ?? "default"))}
+                >
+                  <PenLine size={13} />
+                  Edit sketch
+                </button>
+                <button type="button" className="secondary-button" disabled={busy} onClick={() => onEditSketch(null)}>
+                  <Plus size={13} />
+                  New sketch
+                </button>
+              </div>
+            </>
           )}
           {step.maskSource === "gds" && (
             <>

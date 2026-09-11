@@ -1,6 +1,7 @@
 import type { DesktopBridge, RunOptions, ViewRequest } from "./bridge";
 import type {
   GdsImportResult,
+  MaskPreview,
   ProcessStep,
   GridPlan,
   QuickSketch,
@@ -113,6 +114,10 @@ export class BrowserBridge implements DesktopBridge {
       : [...this.document.sketches, sketch];
     this.document = { ...this.document, sketches };
     return this.document;
+  }
+
+  async previewMask(): Promise<MaskPreview> {
+    throw new Error(NO_KERNEL);
   }
 
   async runFlow(_root: string, _options: RunOptions): Promise<RunResult> {

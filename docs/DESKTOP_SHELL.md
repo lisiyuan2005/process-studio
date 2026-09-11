@@ -45,6 +45,7 @@ worker 内部读线程和执行线程分开：请求按到达顺序逐个执行�
 | `plan_grid` | 给出目标间距对应的格子形状、节点数与内存估计 |
 | `set_grid` | 按目标间距或显式格子更换网格；无网格的内核改的是几何分辨率。两种都会删除全部已存结果 |
 | `save_sketch` | 写入 Quick Sketch |
+| `preview_mask` | 未保存的 sketch 在工程窗口上的曝光区域 PNG，由内核自己的符号距离函数算出，编辑器拿它当填充 |
 | `run_flow` | 执行分支，可指定 `throughStepId` 或 `force` |
 | `get_surfaces` | 每种材料的 marching cubes 三角面，base64 传输 |
 | `get_section` / `get_top_view` | 截面与俯视图 PNG。截面可按 `axis`+`position` 沿 x 或 y 切，也可给 `line: {start:[x,y], end:[x,y]}` 沿任意 AA–BB 线切，此时横轴是沿线距离 |
@@ -98,6 +99,12 @@ worker 为每一步计算一个链式摘要，内容包括该步自带的工艺�
 - 截面和俯视图都有 **Measure**：点两下量距离，图上标出总长和两个方向的分量；鼠标移动时底栏实时显示坐标（俯视图是 x、y，截面是横轴和 z）；图的左下角有比例尺，长度自动取整数刻度。这些都只是读数，不改变计算结果。
 - 选中的步骤变化时视口先清空再取新结果，且只有最新一次请求可以写入视图，避免慢的旧请求把别的步骤的几何盖上来。
 
+## Quick Sketch 编辑器
+
+步骤的掩膜来源选 Quick Sketch 后，右侧可以选已有 sketch，也可以点 **Edit** 改它或 **New** 新建，都打开编辑器。工具有矩形（拖对角）、圆（从圆心拖）、多边形和路径（逐点点击，Enter 结束，Escape 放弃），每个新图形带一个布尔操作（merge、subtract、intersect），右侧列表按应用顺序列出图形，可以改数值、改操作、调阵列（个数与间距）、上下移动和删除。坐标默认吸附 5 nm，可改。
+
+画布底下垫着这一步之前一步的俯视图（没跑过就没有），填充是 worker 通过 `preview_mask` 用内核的 CSG 算出来的曝光区域，按步骤的 Keep 设置翻转，所以看到的就是运行时会采样的掩膜，不是前端自己画的近似。保存写入 `sketches/<id>.json`，用到它的步骤随之变成 stale。
+
 ## Step 与 Recipe Library
 
 流程中的 Step 是独立工艺实例：名称可自由编辑，只要求选择 deposition、etch、CMP 或 no geometry change 类型。右侧可从 Recipe Library 加载模板，也可从空白 Step 逐项添加参数并另存为 Recipe。加载和保存都是复制，不保留引用关系，因此修改或删除库里的 Recipe 不会改变已有流程。
@@ -138,7 +145,6 @@ worker 的查找顺序是先平台资源目录（`.app` 里的 `Contents/Resourc
 
 ## 尚未实现
 
-- 前端还没有图形化的 Quick Sketch 编辑器，只能选择已有 sketch；`save_sketch` 接口已经就绪。
 - 细化执行（`run_refined_branch`）还没有接到界面，仍需从 API 或示例脚本调用。
 - 分支只能切换，创建、重命名和删除还没有界面入口；`storage.create_branch` 已经就绪。
 - 前端不显示 CMP dishing、晶向湿蚀等未实现的物理，因为内核本身没有实现它们。

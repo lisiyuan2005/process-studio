@@ -607,6 +607,40 @@ def test_a_material_can_be_added_and_then_renamed(workspace):
         call("save_document", root=str(workspace), document=renamed)
 
 
+def test_a_sketch_can_be_previewed_before_it_is_saved(workspace):
+    """The editor's fill is the kernel's own CSG over the project window."""
+    preview = call(
+        "preview_mask", root=str(workspace),
+        sketch={"name": "draft", "shapes": [
+            {"kind": "rectangle", "operation": "merge", "parameters": {"center": [0, 0], "size": [0.8, 0.8]}, "array": [1, 1, 0, 0]},
+            {"kind": "circle", "operation": "subtract", "parameters": {"center": [0, 0], "radius": 0.2}, "array": [1, 1, 0, 0]},
+        ]},
+    )
+    image = Image.open(io.BytesIO(base64.b64decode(preview["image"]))).convert("RGBA")
+    width, height = image.size
+    assert preview["extent"]["horizontalMin"] == pytest.approx(-0.8)
+    # The square is exposed, its centre is carved out, the corners are not.
+    assert image.getpixel((int(width * 0.7), int(height * 0.5)))[3] > 0
+    assert image.getpixel((width // 2, height // 2))[3] == 0
+    assert image.getpixel((2, 2))[3] == 0
+    square = 0.8 * 0.8 - 3.14159 * 0.2**2
+    assert preview["exposedFraction"] == pytest.approx(square / (1.6 * 1.6), abs=0.01)
+    flipped = call(
+        "preview_mask", root=str(workspace), keep="outside",
+        sketch={"name": "draft", "shapes": [
+            {"kind": "circle", "operation": "merge", "parameters": {"center": [0, 0], "radius": 0.2}, "array": [1, 1, 0, 0]},
+        ]},
+    )
+    assert flipped["exposedFraction"] == pytest.approx(1 - 3.14159 * 0.04 / 2.56, abs=0.01)
+    with pytest.raises(InvalidRequest, match="three points"):
+        call(
+            "preview_mask", root=str(workspace),
+            sketch={"name": "bad", "shapes": [
+                {"kind": "polygon", "operation": "merge", "parameters": {"points": [[0, 0], [1, 1]]}, "array": [1, 1, 0, 0]},
+            ]},
+        )
+
+
 def test_project_id_cannot_be_swapped(workspace):
     document = call("open_workspace", root=str(workspace))
     document["project"]["id"] = "someone-elses-project"

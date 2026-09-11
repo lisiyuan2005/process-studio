@@ -229,6 +229,15 @@ export interface SectionDocument {
   exact?: boolean;
 }
 
+/** Where a sketch exposes the wafer, drawn by the worker over the project window. */
+export interface MaskPreview {
+  image: string;
+  width: number;
+  height: number;
+  exposedFraction: number;
+  extent: ImageExtent;
+}
+
 export interface TopViewDocument {
   image: string;
   width: number;

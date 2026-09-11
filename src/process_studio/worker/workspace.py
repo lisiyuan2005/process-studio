@@ -87,6 +87,49 @@ def _read_sketch(path: Path, *, quiet: bool = False) -> QuickSketch | None:
         raise WorkspaceError(f"Cannot read sketch {path.name}: {error}") from error
 
 
+def sketch_from_payload(payload: Mapping[str, Any], fallback_name: str = "sketch") -> QuickSketch:
+    """A sketch from the client's JSON, validated the way the kernel needs it."""
+    shapes = payload.get("shapes", [])
+    if not isinstance(shapes, list):
+        raise InvalidRequest("sketch shapes must be a list")
+    try:
+        sketch = QuickSketch(
+            name=str(payload.get("name") or fallback_name),
+            shapes=[
+                SketchShape(
+                    str(shape["kind"]),
+                    str(shape.get("operation", "merge")),
+                    dict(shape.get("parameters", {})),
+                    tuple(shape.get("array", (1, 1, 0.0, 0.0))),  # type: ignore[arg-type]
+                )
+                for shape in shapes
+            ],
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise InvalidRequest(f"sketch is invalid: {error}") from error
+    for index, shape in enumerate(sketch.shapes, start=1):
+        parameters = shape.parameters
+        try:
+            if shape.kind == "rectangle":
+                width, height = (float(value) for value in parameters["size"])
+                if min(width, height) <= 0.0:
+                    raise ValueError("rectangle size must be positive")
+            elif shape.kind == "circle":
+                if float(parameters["radius"]) <= 0.0:
+                    raise ValueError("circle radius must be positive")
+            elif shape.kind == "polygon":
+                if len(parameters["points"]) < 3:
+                    raise ValueError("a polygon needs at least three points")
+            else:
+                if len(parameters["points"]) < 2:
+                    raise ValueError("a path needs at least two points")
+                if float(parameters["width"]) <= 0.0:
+                    raise ValueError("path width must be positive")
+        except (KeyError, TypeError, ValueError) as error:
+            raise InvalidRequest(f"shape {index} ({shape.kind}): {error}") from error
+    return sketch
+
+
 def save_sketch(root: Path, sketch_id: str, payload: Mapping[str, Any]) -> QuickSketch:
     shapes = payload.get("shapes", [])
     if not isinstance(shapes, list):

@@ -23,7 +23,7 @@ from ..libraries import RecipeLibrary
 from ..models import ProcessType
 from ..simulation_settings import MAXIMUM_NODES, estimate_grid, grid_for_target_spacing
 from .errors import InvalidRequest, WorkerError, WorkspaceError
-from .render import MAXIMUM_INTERPOLATION, MESHES_AVAILABLE
+from .render import MAXIMUM_INTERPOLATION, MESHES_AVAILABLE, sketch_preview_image
 from .runner import (
     apply_grid,
     apply_resolution,
@@ -47,6 +47,7 @@ from .workspace import (
     load_sketches,
     open_repository,
     save_sketch,
+    sketch_from_payload,
 )
 
 MASK_SOURCES = ("none", "quick_sketch", "gds")
@@ -416,6 +417,22 @@ def dispatch(
         save_sketch(root, sketch_id, sketch)
         repository = open_repository(root)
         return build_document(root, repository, load_project(repository, parameters.get("projectId")))
+    if method == "preview_mask":
+        root = _root(parameters)
+        payload = parameters.get("sketch")
+        if not isinstance(payload, Mapping):
+            raise InvalidRequest("preview_mask requires a sketch object.")
+        repository = open_repository(root)
+        project = load_project(repository, parameters.get("projectId"))
+        grid = project.grid
+        keep = str(parameters.get("keep", "inside"))
+        if keep not in ("inside", "outside"):
+            raise InvalidRequest("keep must be inside or outside.")
+        return sketch_preview_image(
+            sketch_from_payload(payload),
+            extent=(grid["x_min"], grid["x_max"], grid["y_min"], grid["y_max"]),
+            keep=keep,
+        )
     if method == "run_flow":
         root = _root(parameters)
 

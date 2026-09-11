@@ -5,6 +5,8 @@ import type { DesktopBridge, RunOptions, ViewRequest } from "./bridge";
 import type {
   GdsImportResult,
   GridPlan,
+  MaskKeep,
+  MaskPreview,
   QuickSketch,
   RunResult,
   SectionAxis,
@@ -78,6 +80,14 @@ export class TauriBridge implements DesktopBridge {
     return call<WorkspaceDocument>("save_sketch", {
       root,
       sketchId: sketch.id,
+      sketch: { name: sketch.name, shapes: sketch.shapes },
+    });
+  }
+
+  previewMask(root: string, sketch: QuickSketch, keep: MaskKeep): Promise<MaskPreview> {
+    return call<MaskPreview>("preview_mask", {
+      root,
+      keep,
       sketch: { name: sketch.name, shapes: sketch.shapes },
     });
   }
