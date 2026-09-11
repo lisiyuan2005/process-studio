@@ -202,19 +202,30 @@ export interface ImageExtent {
   verticalMax: number;
 }
 
+/** The AA–BB line of a free section: two points in micrometres. */
+export interface SectionLine {
+  start: [number, number];
+  end: [number, number];
+}
+
+export type SectionAxis = "x" | "y" | "line";
+
 export interface SectionDocument {
   /** Base64 PNG of the cut, already flipped so row zero is the top. */
   image: string;
-  axis: "x" | "y";
+  axis: SectionAxis;
   position: number;
   index: number;
   interpolation: number;
   sampledSpacingUm: number;
   width: number;
   height: number;
-  horizontalAxis: "x" | "y";
+  /** "s" is distance along the AA–BB line. */
+  horizontalAxis: "x" | "y" | "s";
   extent: ImageExtent;
+  /** Empty for a line cut, which has no slider. */
   positions: number[];
+  line?: SectionLine;
   exact?: boolean;
 }
 

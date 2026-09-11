@@ -105,6 +105,38 @@ def test_a_slab_project_runs_its_flow_and_draws_every_view(tmp_path):
     assert base64.b64decode(top["image"])[:4] == b"\x89PNG"
 
 
+@pytest.mark.parametrize("kernel", ["levelset", "slab"])
+def test_a_section_can_run_along_any_line(tmp_path, kernel):
+    """The AA–BB cut: a diagonal through the trench shows the trench."""
+    root = tmp_path / f"line-{kernel}"
+    document = call("create_workspace", root=str(root), name="Line", kernel=kernel)
+    branch = document["branches"][0]
+    call("run_flow", root=str(root), throughStepId=branch["steps"][1]["id"])
+    etched = branch["steps"][1]["id"]
+    diagonal = call(
+        "get_section", root=str(root), branchId=branch["id"], stepId=etched,
+        line={"start": [-0.6, -0.6], "end": [0.6, 0.6]},
+    )
+    assert diagonal["axis"] == "line"
+    assert diagonal["horizontalAxis"] == "s"
+    assert diagonal["extent"]["horizontalMax"] == pytest.approx(1.2 * 2**0.5)
+    assert diagonal["line"] == {"start": [-0.6, -0.6], "end": [0.6, 0.6]}
+    image = Image.open(io.BytesIO(base64.b64decode(diagonal["image"]))).convert("RGB")
+    width, height = image.size
+    # The trench is a 0.22 um circle at the origin, so the middle of the cut
+    # is open just under the wafer surface (z = -0.02, the frame runs from
+    # z = 0.4 at the top row down to -0.8) while the ends are still silicon.
+    surface_row = int(round((0.4 + 0.02) / 1.2 * (height - 1)))
+    background = image.getpixel((width // 2, surface_row))
+    silicon = image.getpixel((2, surface_row))
+    assert background != silicon
+    with pytest.raises(InvalidRequest):
+        call(
+            "get_section", root=str(root), branchId=branch["id"], stepId=etched,
+            line={"start": [0.0, 0.0], "end": [0.0, 0.0]},
+        )
+
+
 def test_a_slab_project_sets_a_resolution_rather_than_a_grid(tmp_path):
     root = tmp_path / "slab-resolution"
     call("create_workspace", root=str(root), name="Slab", kernel="slab")

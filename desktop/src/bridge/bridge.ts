@@ -3,7 +3,9 @@ import type {
   GridPlan,
   QuickSketch,
   RunResult,
+  SectionAxis,
   SectionDocument,
+  SectionLine,
   SurfaceDocument,
   TopViewDocument,
   WorkerCapabilities,
@@ -41,7 +43,7 @@ export interface DesktopBridge {
   getSurfaces(root: string, request: ViewRequest): Promise<SurfaceDocument>;
   getSection(
     root: string,
-    request: ViewRequest & { axis: "x" | "y"; position?: number },
+    request: ViewRequest & { axis: SectionAxis; position?: number; line?: SectionLine },
   ): Promise<SectionDocument>;
   getTopView(root: string, request: ViewRequest): Promise<TopViewDocument>;
   importGds(root: string): Promise<GdsImportResult | null>;

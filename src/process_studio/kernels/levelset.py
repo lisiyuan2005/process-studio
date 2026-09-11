@@ -18,6 +18,7 @@ from ..models import MaterialDefinition, ProcessStep, ProjectDefinition, Recipe
 from ..simulation_settings import MAXIMUM_NODES, SPACING_PRESETS_NM
 from ..worker.render import (
     MESHES_AVAILABLE,
+    line_section_image,
     material_surfaces,
     section_image,
     top_view_image,
@@ -112,7 +113,12 @@ class LevelSetKernel:
         axis: str = "y",
         position: float | None = None,
         interpolation: int = 1,
+        line: tuple[tuple[float, float], tuple[float, float]] | None = None,
     ) -> dict[str, Any]:
+        if line is not None:
+            return line_section_image(
+                state, colors, start=line[0], end=line[1], interpolation=interpolation
+            )
         return section_image(
             state, colors, axis=axis, position=position, interpolation=interpolation
         )

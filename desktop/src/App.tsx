@@ -48,7 +48,9 @@ import {
 } from "./domain/project";
 import type {
   ParameterValue,
+  SectionAxis,
   SectionDocument,
+  SectionLine,
   SurfaceDocument,
   TopViewDocument,
   WorkerCapabilities,
@@ -78,7 +80,9 @@ export default function App() {
   const [showGrid, setShowGrid] = useState(false);
   const [mode, setMode] = useState<ViewMode>("surfaces");
   const [interpolation, setInterpolation] = useState(1);
-  const [sectionAxis, setSectionAxis] = useState<"x" | "y">("y");
+  const [sectionAxis, setSectionAxis] = useState<SectionAxis>("y");
+  // The AA–BB line drawn on the top view, in micrometres; null until drawn.
+  const [sectionLine, setSectionLine] = useState<SectionLine | null>(null);
   const [sectionIndex, setSectionIndex] = useState<number | null>(null);
   const [surfaces, setSurfaces] = useState<SurfaceDocument>();
   const [section, setSection] = useState<SectionDocument>();
@@ -252,15 +256,23 @@ export default function App() {
         if (token !== viewToken.current) return;
         setSurfaces(next);
       } else if (mode === "section") {
+        if (sectionAxis === "line" && !sectionLine) {
+          setViewLoading(false);
+          setViewError("Draw the AA–BB line on the top view first.");
+          return;
+        }
         const next = await bridge.getSection(root, {
           ...request,
           axis: sectionAxis,
-          position: sectionPosition.current ?? undefined,
+          position: sectionAxis === "line" ? undefined : sectionPosition.current ?? undefined,
+          line: sectionAxis === "line" && sectionLine ? sectionLine : undefined,
         });
         if (token !== viewToken.current) return;
         setSection(next);
-        sectionPosition.current = next.position;
-        if (next.index !== sectionIndex) setSectionIndex(next.index);
+        if (sectionAxis !== "line") {
+          sectionPosition.current = next.position;
+          if (next.index !== sectionIndex) setSectionIndex(next.index);
+        }
       } else {
         const next = await bridge.getTopView(root, request);
         if (token !== viewToken.current) return;
@@ -285,6 +297,7 @@ export default function App() {
     interpolation,
     sectionAxis,
     sectionIndex,
+    sectionLine,
   ]);
 
   useEffect(() => {
@@ -627,6 +640,17 @@ export default function App() {
             setSectionAxis(axis);
             setSectionIndex(null);
             sectionPosition.current = null;
+          }}
+          sectionLine={sectionLine}
+          onSectionLineChange={(line) => {
+            setSectionLine(line);
+            if (line) {
+              // A freshly drawn line is what the user wants to look at.
+              setSectionAxis("line");
+              setMode("section");
+            } else if (sectionAxis === "line") {
+              setSectionAxis("y");
+            }
           }}
           sectionIndex={sectionIndex ?? 0}
           onSectionIndexChange={(index) => {

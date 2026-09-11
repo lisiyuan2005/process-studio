@@ -280,6 +280,26 @@ def _view_state(parameters: Mapping[str, Any]):
     )
 
 
+def _section_line(value: Any) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    """The AA–BB line of a section request: two (x, y) points in micrometres."""
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise InvalidRequest("line must be an object with start and end.")
+    points = []
+    for key in ("start", "end"):
+        point = value.get(key)
+        if not isinstance(point, (list, tuple)) or len(point) != 2:
+            raise InvalidRequest(f"line.{key} must be [x, y] in micrometres.")
+        try:
+            points.append((float(point[0]), float(point[1])))
+        except (TypeError, ValueError) as error:
+            raise InvalidRequest(f"line.{key} must be two numbers.") from error
+    if points[0] == points[1]:
+        raise InvalidRequest("A section line needs two distinct points.")
+    return points[0], points[1]
+
+
 def _material_colors(repository) -> dict[str, str]:
     return {material.name: material.color for material in repository.load_materials()}
 
@@ -436,6 +456,7 @@ def dispatch(
                 None if parameters.get("position") is None else float(parameters["position"])
             ),
             interpolation=parameters.get("interpolation", 1),
+            line=_section_line(parameters.get("line")),
         )
     if method == "get_top_view":
         state, repository, project, kernel = _view_state(parameters)

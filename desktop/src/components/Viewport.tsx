@@ -7,14 +7,19 @@ import {
   EyeOff,
   Image as ImageIcon,
   LoaderCircle,
+  PenLine,
   Ruler,
   TriangleAlert,
+  X,
 } from "lucide-react";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import type {
+  ImageExtent,
   MaterialDefinition,
+  SectionAxis,
   SectionDocument,
+  SectionLine,
   SurfaceDocument,
   SurfacePayload,
   TopViewDocument,
@@ -34,10 +39,12 @@ interface ViewportProps {
   maximumInterpolation: number;
   interpolation: number;
   onInterpolationChange: (value: number) => void;
-  sectionAxis: "x" | "y";
-  onSectionAxisChange: (axis: "x" | "y") => void;
+  sectionAxis: SectionAxis;
+  onSectionAxisChange: (axis: SectionAxis) => void;
   sectionIndex: number;
   onSectionIndexChange: (index: number) => void;
+  sectionLine: SectionLine | null;
+  onSectionLineChange: (line: SectionLine | null) => void;
   materials: MaterialDefinition[];
   hiddenMaterials: string[];
   onToggleMaterial: (material: string) => void;
@@ -149,6 +156,118 @@ function SurfaceScene({
   );
 }
 
+/**
+ * The largest box inside its parent with the picture's own aspect ratio.
+ *
+ * A native-grid picture can be 57 pixels wide; left at its own size it is a
+ * postage stamp, and CSS object-fit would letterbox it inside a box whose
+ * edges no longer coincide with the picture, which breaks the overlay's
+ * click mapping. Measuring the parent and sizing the frame to fit keeps the
+ * frame and the picture the same rectangle.
+ */
+function useFittedSize(
+  container: React.RefObject<HTMLDivElement | null>,
+  pixelWidth: number,
+  pixelHeight: number,
+) {
+  const [size, setSize] = useState<{ width: number; height: number } | null>(null);
+  useEffect(() => {
+    const element = container.current;
+    if (!element) return;
+    const fit = () => {
+      const available = element.getBoundingClientRect();
+      if (available.width === 0 || available.height === 0 || pixelWidth === 0) return;
+      const scale = Math.min(available.width / pixelWidth, available.height / pixelHeight);
+      setSize({ width: pixelWidth * scale, height: pixelHeight * scale });
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [container, pixelWidth, pixelHeight]);
+  return size;
+}
+
+/** A section or top-view picture, scaled to fill the view without distortion. */
+function FittedImage({ image, width, height, alt }: { image: string; width: number; height: number; alt: string }) {
+  const container = useRef<HTMLDivElement>(null);
+  const size = useFittedSize(container, width, height);
+  return (
+    <div className="image-view" ref={container}>
+      <div className="image-frame" style={size ?? undefined}>
+        <img src={`data:image/png;base64,${image}`} alt={alt} />
+      </div>
+    </div>
+  );
+}
+
+/** The top view, with the AA–BB line over it and a way to draw a new one. */
+function TopViewImage({
+  topView,
+  line,
+  drawing,
+  pendingStart,
+  onPick,
+}: {
+  topView: TopViewDocument;
+  line: SectionLine | null;
+  drawing: boolean;
+  pendingStart: [number, number] | null;
+  onPick: (point: [number, number]) => void;
+}) {
+  const container = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLDivElement>(null);
+  const size = useFittedSize(container, topView.width, topView.height);
+  const extent: ImageExtent = topView.extent;
+  const width = extent.horizontalMax - extent.horizontalMin;
+  const height = extent.verticalMax - extent.verticalMin;
+  // The picture is drawn top-down with y increasing upward, like the section;
+  // positions on it are fractions of the frame, which is the picture exactly.
+  const toFraction = ([x, y]: [number, number]): [number, number] => [
+    (x - extent.horizontalMin) / width,
+    (extent.verticalMax - y) / height,
+  ];
+  const pick = (event: React.MouseEvent<HTMLElement>) => {
+    const box = frame.current?.getBoundingClientRect();
+    if (!box || box.width === 0 || box.height === 0) return;
+    const u = Math.min(1, Math.max(0, (event.clientX - box.left) / box.width));
+    const v = Math.min(1, Math.max(0, (event.clientY - box.top) / box.height));
+    onPick([extent.horizontalMin + u * width, extent.verticalMax - v * height]);
+  };
+  const ends = line ? [toFraction(line.start), toFraction(line.end)] : null;
+  const pending = pendingStart ? toFraction(pendingStart) : null;
+  return (
+    <div className="image-view" ref={container}>
+      <div
+        ref={frame}
+        className={`image-frame ${drawing ? "drawing" : ""}`}
+        style={size ?? undefined}
+        onClick={drawing ? pick : undefined}
+      >
+        <img src={`data:image/png;base64,${topView.image}`} alt="Top view" />
+        {ends && (
+          <svg className="image-overlay" viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true">
+            <line x1={ends[0][0]} y1={ends[0][1]} x2={ends[1][0]} y2={ends[1][1]} />
+          </svg>
+        )}
+        {ends && (
+          <>
+            <i className="line-dot" style={percent(ends[0])} />
+            <i className="line-dot" style={percent(ends[1])} />
+            <span className="line-label" style={percent(ends[0])}>A</span>
+            <span className="line-label" style={percent(ends[1])}>B</span>
+          </>
+        )}
+        {pending && <i className="line-dot pending" style={percent(pending)} />}
+      </div>
+    </div>
+  );
+}
+
+function percent([u, v]: [number, number]) {
+  return { left: `${u * 100}%`, top: `${v * 100}%` };
+}
+
 export function Viewport({
   mode,
   onModeChange,
@@ -164,6 +283,8 @@ export function Viewport({
   onSectionAxisChange,
   sectionIndex,
   onSectionIndexChange,
+  sectionLine,
+  onSectionLineChange,
   materials,
   hiddenMaterials,
   onToggleMaterial,
@@ -171,6 +292,23 @@ export function Viewport({
   section,
   topView,
 }: ViewportProps) {
+  // Drawing the AA–BB line: two clicks on the top view, A then B.
+  const [drawing, setDrawing] = useState(false);
+  const [pendingStart, setPendingStart] = useState<[number, number] | null>(null);
+  const pickPoint = (point: [number, number]) => {
+    if (!pendingStart) {
+      setPendingStart(point);
+      return;
+    }
+    if (pendingStart[0] === point[0] && pendingStart[1] === point[1]) return;
+    onSectionLineChange({ start: pendingStart, end: point });
+    setPendingStart(null);
+    setDrawing(false);
+  };
+  const stopDrawing = () => {
+    setDrawing(false);
+    setPendingStart(null);
+  };
   const triangles = surfaces?.surfaces.reduce((total, item) => total + item.triangleCount, 0) ?? 0;
   const shownMaterials = (
     mode === "surfaces" ? surfaces?.surfaces.map((surface) => surface.material) : undefined
@@ -216,6 +354,25 @@ export function Viewport({
             Top view
           </button>
         </div>
+        {mode === "top" && topView && (
+          <div className="view-tabs draw-tools">
+            <button
+              type="button"
+              className={drawing ? "active" : ""}
+              title="Draw the AA–BB section line: click A, then B"
+              onClick={() => (drawing ? stopDrawing() : setDrawing(true))}
+            >
+              <PenLine size={13} />
+              {drawing ? (pendingStart ? "Click B" : "Click A") : "Draw AA–BB"}
+            </button>
+            {sectionLine && !drawing && (
+              <button type="button" title="Remove the AA–BB line" onClick={() => onSectionLineChange(null)}>
+                <X size={13} />
+                Clear line
+              </button>
+            )}
+          </div>
+        )}
         <div className="viewport-badges">
           {loading && (
             <span className="viewport-badge">
@@ -256,21 +413,29 @@ export function Viewport({
           )
         ) : mode === "section" ? (
           section ? (
-            <div className="image-view">
-              <img
-                src={`data:image/png;base64,${section.image}`}
-                alt={`Section at ${section.axis} = ${section.position.toFixed(3)} µm`}
-              />
-            </div>
+            <FittedImage
+              image={section.image}
+              width={section.width}
+              height={section.height}
+              alt={
+                section.axis === "line"
+                  ? "Section along the AA–BB line"
+                  : `Section at ${section.axis} = ${section.position.toFixed(3)} µm`
+              }
+            />
           ) : (
             <div className="view-placeholder">
               <p>Run the flow to see a cut through the stack.</p>
             </div>
           )
         ) : topView ? (
-          <div className="image-view">
-            <img src={`data:image/png;base64,${topView.image}`} alt="Top view" />
-          </div>
+          <TopViewImage
+            topView={topView}
+            line={sectionLine}
+            drawing={drawing}
+            pendingStart={pendingStart}
+            onPick={pickPoint}
+          />
         ) : (
           <div className="view-placeholder">
             <p>Run the flow to see the top view.</p>
@@ -292,29 +457,43 @@ export function Viewport({
       </div>
 
       <div className="viewport-footer">
-        {mode === "section" && section && (
+        {mode === "section" && (
           <>
             <label>
-              Axis
+              Cut
               <select
                 value={sectionAxis}
-                onChange={(event) => onSectionAxisChange(event.target.value as "x" | "y")}
+                onChange={(event) => onSectionAxisChange(event.target.value as SectionAxis)}
               >
-                <option value="y">Cut along y</option>
-                <option value="x">Cut along x</option>
+                <option value="y">Along y</option>
+                <option value="x">Along x</option>
+                <option value="line" disabled={!sectionLine}>
+                  AA–BB line{sectionLine ? "" : " (draw it on the top view)"}
+                </option>
               </select>
             </label>
-            <label>
-              Position
-              <input
-                type="range"
-                min={0}
-                max={Math.max(0, section.positions.length - 1)}
-                value={sectionIndex}
-                onChange={(event) => onSectionIndexChange(Number(event.target.value))}
-              />
-              <code>{section.position.toFixed(3)} µm</code>
-            </label>
+            {sectionAxis === "line" ? (
+              sectionLine && (
+                <code className="line-ends">
+                  A ({sectionLine.start[0].toFixed(3)}, {sectionLine.start[1].toFixed(3)}) → B (
+                  {sectionLine.end[0].toFixed(3)}, {sectionLine.end[1].toFixed(3)}) µm
+                </code>
+              )
+            ) : (
+              section && (
+                <label>
+                  Position
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.max(0, section.positions.length - 1)}
+                    value={sectionIndex}
+                    onChange={(event) => onSectionIndexChange(Number(event.target.value))}
+                  />
+                  <code>{section.position.toFixed(3)} µm</code>
+                </label>
+              )
+            )}
           </>
         )}
         {mode !== "top" && (

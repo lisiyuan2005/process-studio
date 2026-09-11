@@ -14,7 +14,7 @@ from typing import Any, Mapping
 
 import numpy as np
 from PIL import Image
-from scipy.ndimage import zoom
+from scipy.ndimage import map_coordinates, zoom
 
 from ..kernel.material_state import MaterialState
 from ..visualization import top_view_labels
@@ -219,6 +219,74 @@ def section_image(
             "verticalMax": grid.z_max,
         },
         "positions": [float(value) for value in coordinates],
+    }
+
+
+def line_section_image(
+    state: MaterialState,
+    colors: Mapping[str, str],
+    *,
+    start: tuple[float, float],
+    end: tuple[float, float],
+    interpolation: int = 1,
+) -> dict[str, Any]:
+    """Render a vertical cut along the line from ``start`` to ``end`` (µm).
+
+    The fields are sampled bilinearly in the plane at the grid spacing over
+    the display factor, so a cut at 45 degrees shows the same interfaces the
+    axis cuts do rather than the nearest node's. Heights are not resampled
+    beyond the same factor, as in the axis cuts.
+    """
+    factor = _checked_interpolation(interpolation)
+    grid = state.grid
+    length = float(np.hypot(end[0] - start[0], end[1] - start[1]))
+    if length <= 0.0:
+        raise InvalidRequest("a section line needs two distinct points")
+    step = grid.dx / factor
+    samples = max(2, int(round(length / step)) + 1)
+    xs = np.linspace(start[0], end[0], samples)
+    ys = np.linspace(start[1], end[1], samples)
+    column = (xs - grid.x_min) / grid.dx
+    row = (ys - grid.y_min) / grid.dy
+    names = list(state.priority)
+    if not names:
+        labels = np.full((1, samples), -1, dtype=np.int16)
+    else:
+        zs = np.arange(grid.nz, dtype=float)
+        coordinates = np.stack(
+            [
+                np.repeat(zs, samples),
+                np.tile(row, grid.nz),
+                np.tile(column, grid.nz),
+            ]
+        )
+        labels = np.full((grid.nz, samples), -1, dtype=np.int16)
+        for index, name in enumerate(names):
+            plane = map_coordinates(
+                state.fields[name], coordinates, order=1, mode="nearest"
+            ).reshape(grid.nz, samples)
+            labels[plane <= 0.0] = index
+        if factor > 1:
+            labels = np.repeat(labels, factor, axis=0)
+    rgb = _colorize(labels, names, colors)[::-1]
+    return {
+        "image": _png(rgb),
+        "axis": "line",
+        "position": 0.0,
+        "index": 0,
+        "interpolation": factor,
+        "sampledSpacingUm": step,
+        "width": int(rgb.shape[1]),
+        "height": int(rgb.shape[0]),
+        "horizontalAxis": "s",
+        "extent": {
+            "horizontalMin": 0.0,
+            "horizontalMax": length,
+            "verticalMin": grid.z_min,
+            "verticalMax": grid.z_max,
+        },
+        "positions": [],
+        "line": {"start": [float(start[0]), float(start[1])], "end": [float(end[0]), float(end[1])]},
     }
 
 

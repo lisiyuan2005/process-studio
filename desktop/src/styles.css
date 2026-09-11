@@ -448,7 +448,16 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .viewport-footer .footer-spacer { flex: 1; }
 
 .image-view { width: 100%; height: 100%; display: grid; place-items: center; padding: 18px; }
-.image-view img { max-width: 100%; max-height: 100%; border: 1px solid var(--line); background: var(--panel); image-rendering: pixelated; box-shadow: 0 8px 24px rgba(50, 68, 83, 0.1); }
+.image-frame { position: relative; line-height: 0; }
+.image-frame.drawing { cursor: crosshair; }
+.image-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.image-overlay line { stroke: #e04e5a; stroke-width: 2px; vector-effect: non-scaling-stroke; }
+.line-dot { position: absolute; width: 9px; height: 9px; margin: -5px 0 0 -5px; border: 2px solid #ffffff; border-radius: 50%; background: #e04e5a; box-shadow: 0 1px 4px rgba(0,0,0,0.3); pointer-events: none; }
+.line-dot.pending { background: #ffffff; border-color: #e04e5a; }
+.line-label { position: absolute; transform: translate(7px, -19px); padding: 0 4px; border-radius: 3px; background: #e04e5a; color: #ffffff; font-size: 9px; font-weight: 700; line-height: 14px; pointer-events: none; }
+.line-ends { color: var(--muted); font-size: 9px; }
+.draw-tools { margin-left: 8px; }
+.image-view img { display: block; width: 100%; height: 100%; border: 1px solid var(--line); background: var(--panel); image-rendering: pixelated; box-shadow: 0 8px 24px rgba(50, 68, 83, 0.1); }
 .view-placeholder { display: grid; place-items: center; gap: 9px; height: 100%; padding: 24px; color: var(--muted); font-size: 10.5px; text-align: center; }
 .view-placeholder p { max-width: 380px; margin: 0; line-height: 1.6; }
 

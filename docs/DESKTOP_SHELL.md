@@ -47,7 +47,7 @@ worker 内部读线程和执行线程分开：请求按到达顺序逐个执行�
 | `save_sketch` | 写入 Quick Sketch |
 | `run_flow` | 执行分支，可指定 `throughStepId` 或 `force` |
 | `get_surfaces` | 每种材料的 marching cubes 三角面，base64 传输 |
-| `get_section` / `get_top_view` | 截面与俯视图 PNG |
+| `get_section` / `get_top_view` | 截面与俯视图 PNG。截面可按 `axis`+`position` 沿 x 或 y 切，也可给 `line: {start:[x,y], end:[x,y]}` 沿任意 AA–BB 线切，此时横轴是沿线距离 |
 | `import_gds` / `gds_layers` | 导入布局并列出 layer/datatype |
 | `export_recipes_xlsx` / `import_recipes_xlsx` | Recipe 库 Excel 往返 |
 
@@ -94,6 +94,7 @@ worker 为每一步计算一个链式摘要，内容包括该步自带的工艺�
 
 - 步骤卡片右侧的方框是**是否参与运行**，不是显示开关：勾上表示这一步在运行里，取消勾选表示跳过它。跳过会改变后续几何，因此该步及其之后都会变成 `stale`，需要重新运行。跳过的步骤在副标题里标 `skipped`。
 - 3D 视图底栏的材料图例是**显示开关**：点一下隐藏该材料的表面，再点一下显示，便于看内部结构。它只过滤已经取回的三角面，不重新计算，也不改变截面和俯视图（那两张图由 worker 渲染成 PNG）。
+- 俯视图上的 **Draw AA–BB** 点两下（A、B）画一条截面线，画完自动切到截面页沿这条线出图；截面页的 Cut 选择器里可以在沿 x、沿 y 和这条线之间切换，线一直画在俯视图上，**Clear line** 清掉。level set 内核沿线双线性采样场，slab 内核直接用 DeviceFlow 的任意直线截面。
 - 选中的步骤变化时视口先清空再取新结果，且只有最新一次请求可以写入视图，避免慢的旧请求把别的步骤的几何盖上来。
 
 ## Step 与 Recipe Library

@@ -615,9 +615,12 @@ class SlabKernel:
         axis: str = "y",
         position: float | None = None,
         interpolation: int = 1,
+        line: tuple[tuple[float, float], tuple[float, float]] | None = None,
     ) -> dict[str, Any]:
         device = state.device
         x_min, y_min, x_max, y_max = device.bounds
+        if line is not None:
+            return self._line_section(state, colors, project=project, line=line, interpolation=interpolation)
         if axis == "y":
             coordinates = np.linspace(y_min, y_max, SECTION_POSITIONS)
         elif axis == "x":
@@ -667,6 +670,55 @@ class SlabKernel:
                 "verticalMax": extent[3],
             },
             "positions": [float(value) for value in coordinates],
+        }
+
+    def _line_section(
+        self,
+        state: SlabState,
+        colors: Mapping[str, str],
+        *,
+        project: ProjectDefinition,
+        line: tuple[tuple[float, float], tuple[float, float]],
+        interpolation: int,
+    ) -> dict[str, Any]:
+        """The exact cut along any line: DeviceFlow sections are not axis-bound."""
+        device = state.device
+        start, end = line
+        length = float(math.hypot(end[0] - start[0], end[1] - start[1]))
+        if length <= 0.0:
+            raise SlabError("a section line needs two distinct points")
+        section = device.cross_section(start, end)
+        top = device.top or 0.0
+        extent = (
+            0.0,
+            length,
+            state.z_offset,
+            max(float(project.grid["z_max"]), top + state.z_offset),
+        )
+        pixels_per_um = _pixels_per_um(extent, interpolation)
+        rgb = _raster(_section_shapes(section, state.z_offset), colors, extent, pixels_per_um)
+        return {
+            "image": _png(rgb),
+            "axis": "line",
+            "position": 0.0,
+            "index": 0,
+            "interpolation": interpolation,
+            "sampledSpacingUm": 1.0 / pixels_per_um,
+            "exact": True,
+            "width": int(rgb.shape[1]),
+            "height": int(rgb.shape[0]),
+            "horizontalAxis": "s",
+            "extent": {
+                "horizontalMin": 0.0,
+                "horizontalMax": length,
+                "verticalMin": extent[2],
+                "verticalMax": extent[3],
+            },
+            "positions": [],
+            "line": {
+                "start": [float(start[0]), float(start[1])],
+                "end": [float(end[0]), float(end[1])],
+            },
         }
 
     def top_view(

@@ -124,8 +124,14 @@ class Kernel(Protocol):
         axis: str = "y",
         position: float | None = None,
         interpolation: int = 1,
+        line: tuple[tuple[float, float], tuple[float, float]] | None = None,
     ) -> dict[str, Any]:
-        """A vertical cut, as a PNG plus the frame it was drawn in."""
+        """A vertical cut, as a PNG plus the frame it was drawn in.
+
+        ``line`` is a pair of (x, y) points in micrometres; when given, the
+        cut runs from the first to the second and ``axis``/``position`` are
+        ignored. The picture's horizontal axis is then the distance along it.
+        """
 
     def top_view(
         self,
