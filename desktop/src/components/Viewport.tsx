@@ -57,8 +57,6 @@ interface ViewportProps {
   /** An empty id means a new line; the app names and numbers it. */
   onSaveLine: (line: SectionLine) => void;
   onRemoveLine: (lineId: string) => void;
-  smoothSteps: boolean;
-  onSmoothStepsChange: (smooth: boolean) => void;
   materials: MaterialDefinition[];
   hiddenMaterials: string[];
   onToggleMaterial: (material: string) => void;
@@ -597,8 +595,6 @@ export function Viewport({
   onSelectLine,
   onSaveLine,
   onRemoveLine,
-  smoothSteps,
-  onSmoothStepsChange,
   materials,
   hiddenMaterials,
   onToggleMaterial,
@@ -1028,20 +1024,6 @@ export function Viewport({
               )
             )}
           </>
-        )}
-        {((mode === "section" && section?.exact) || (mode === "surfaces" && surfaces?.exact)) && (
-          <button
-            type="button"
-            className={smoothSteps ? "footer-toggle active" : "footer-toggle"}
-            title={
-              smoothSteps
-                ? "Sampled films are drawn as the surface they sample, in the section and in 3D. Click to see the stored slabs, staircase included."
-                : "The stored slabs are drawn as they are. Click to join the sampled bands into the surface they sample, in the section and in 3D."
-            }
-            onClick={() => onSmoothStepsChange(!smoothSteps)}
-          >
-            {smoothSteps ? "Smooth steps" : "Exact slabs"}
-          </button>
         )}
         {mode !== "top" && (
           <label>

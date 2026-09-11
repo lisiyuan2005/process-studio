@@ -422,7 +422,6 @@ def cmd_view_section(session: Session, args: argparse.Namespace) -> int:
     step_id = step_reference(session, document, args.step)
     request: dict[str, Any] = {
         "branchId": branch["id"], "stepId": step_id, "interpolation": args.interpolation,
-        "smooth": not args.exact,
     }
     if args.named is not None:
         line = _named_line(document, args.named)
@@ -473,7 +472,7 @@ def cmd_view_mesh(session: Session, args: argparse.Namespace) -> int:
     result = session.call(
         "export_mesh", root=str(session.root), branchId=branch["id"], stepId=step_id,
         destination=str(Path(args.output).resolve()), interpolation=args.interpolation,
-        materials=args.material or None, loft=not args.exact,
+        materials=args.material or None,
     )
     session.emit(
         result,
@@ -871,8 +870,6 @@ def build_parser() -> argparse.ArgumentParser:
     section.add_argument("--line", nargs=4, type=float, metavar=("X0", "Y0", "X1", "Y1"), help="cut along an arbitrary line")
     section.add_argument("--named", metavar="LINE", help="cut along a saved section line, by name or number from `lines list`")
     section.add_argument("--interpolation", type=int, default=1, help="display upsampling factor")
-    section.add_argument("--exact", action="store_true",
-                         help="draw the stored slabs as they are, staircase included, instead of the surface they sample")
     section.set_defaults(handler=cmd_view_section)
     top = view_commands.add_parser("top", help="the top view as PNG")
     _view_step(top)
@@ -881,8 +878,6 @@ def build_parser() -> argparse.ArgumentParser:
     _view_step(mesh)
     mesh.add_argument("--material", action="append", help="only these materials (repeatable)")
     mesh.add_argument("--interpolation", type=int, default=1, help="surface upsampling factor (level set)")
-    mesh.add_argument("--exact", action="store_true",
-                      help="write the stored slabs as they are, staircase included, instead of the surface they sample")
     mesh.set_defaults(handler=cmd_view_mesh)
 
     materials = commands.add_parser("materials", help="the material library")

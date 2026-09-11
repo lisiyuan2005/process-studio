@@ -212,8 +212,6 @@ export interface SurfaceDocument {
   sampledSpacingUm?: number;
   /** True when the surfaces are the geometry itself, not an isosurface. */
   exact?: boolean;
-  /** True when a sampled kernel's bands were joined into the surface they sample. */
-  loft?: boolean;
   bounds: {
     xMin: number;
     xMax: number;
@@ -246,8 +244,6 @@ export type SectionAxis = "x" | "y" | "line";
 export interface SectionDocument {
   /** Base64 PNG of the cut, already flipped so row zero is the top. */
   image: string;
-  /** True when sampled bands were drawn as the surface they sample (slab kernel). */
-  smoothed?: boolean;
   axis: SectionAxis;
   position: number;
   index: number;

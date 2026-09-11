@@ -130,7 +130,6 @@ export default function App() {
   const [activeLineId, setActiveLineId] = useState<string | null>(null);
   const [sectionIndex, setSectionIndex] = useState<number | null>(null);
   // Sampled films drawn as the surface they sample, or as the stored slabs.
-  const [smoothSteps, setSmoothSteps] = useState(true);
   // Side panel widths the user dragged; null means the stylesheet's defaults.
   const [panelWidths, setPanelWidths] = useState<PanelWidths | null>(loadPanelWidths);
   const resizePanel = (side: "steps" | "inspector", width: number) => {
@@ -347,7 +346,7 @@ export default function App() {
     try {
       const path = await bridge.exportMesh(
         document.root,
-        { branchId: branch.id, stepId: selectedStepId, loft: smoothSteps },
+        { branchId: branch.id, stepId: selectedStepId },
         stepFileName(),
       );
       if (path) setEvents((current) => [...current, { kind: "log", message: `Exported the 3D surfaces to ${path}` }]);
@@ -413,7 +412,7 @@ export default function App() {
       // A stale step still has the result of the last run, so it is shown,
       // labelled out of date, instead of being refused.
       if (mode === "surfaces") {
-        const key = `surfaces:${target}:${interpolation}:${smoothSteps ? "loft" : "exact"}`;
+        const key = `surfaces:${target}:${interpolation}`;
         const hit = cached<SurfaceDocument>(key);
         if (hit) {
           setSurfaces(hit);
@@ -421,7 +420,7 @@ export default function App() {
           return;
         }
         setViewLoading(true);
-        const next = await bridge.getSurfaces(root, { ...request, loft: smoothSteps });
+        const next = await bridge.getSurfaces(root, request);
         if (token !== viewToken.current) return;
         setSurfaces(remember(key, next));
       } else if (mode === "section") {
@@ -432,13 +431,13 @@ export default function App() {
         }
         const position = sectionAxis === "line" ? undefined : sectionPosition.current ?? undefined;
         const line = sectionAxis === "line" && sectionLine ? sectionLine : undefined;
-        const key = `section:${target}:${interpolation}:${sectionAxis}:${position ?? "mid"}:${line ? line.start.join(",") + ">" + line.end.join(",") : ""}:${smoothSteps ? "smooth" : "exact"}`;
+        const key = `section:${target}:${interpolation}:${sectionAxis}:${position ?? "mid"}:${line ? line.start.join(",") + ">" + line.end.join(",") : ""}:`;
         const hit = cached<SectionDocument>(key);
         const next = hit ?? (await (async () => {
           setViewLoading(true);
           return remember(
             key,
-            await bridge.getSection(root, { ...request, axis: sectionAxis, position, line, smooth: smoothSteps }),
+            await bridge.getSection(root, { ...request, axis: sectionAxis, position, line }),
           );
         })());
         if (token !== viewToken.current) return;
@@ -480,7 +479,6 @@ export default function App() {
     sectionAxis,
     sectionIndex,
     sectionLine,
-    smoothSteps,
   ]);
 
   useEffect(() => {
@@ -960,8 +958,6 @@ export default function App() {
               if (sectionAxis === "line") setSectionAxis("y");
             }
           }}
-          smoothSteps={smoothSteps}
-          onSmoothStepsChange={setSmoothSteps}
           onExportMesh={() => void exportMesh()}
           onSaveImage={(kind, image) => void saveImage(kind, image)}
           sectionIndex={sectionIndex ?? 0}

@@ -144,10 +144,9 @@ class SlabState:
         self.z_offset = float(z_offset)
         #: Where this state was stored, so its display mesh can live beside it.
         self.path: Path | None = None
-        #: The display meshes, once built, keyed by whether the sampled bands
-        #: are lofted: material -> (vertices, triangles, one flag per triangle
-        #: saying it lies against another material).
-        self.display_meshes: dict[bool, DisplayMeshes] = {}
+        #: The display mesh, once built: material -> (vertices, triangles,
+        #: one flag per triangle saying it lies against another material).
+        self.display_meshes: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] | None = None
         #: Held while the mesh is being built, so a view asked for during
         #: the background build waits for it instead of building a second one.
         self.mesh_lock = threading.Lock()
@@ -212,18 +211,13 @@ class SlabState:
         return state
 
 
-MESH_SIDECAR = {False: ".mesh.npz", True: ".loft.npz"}
-
-#: Bands up to this many z steps thick are the sampled kind, which the loft joins.
-LOFT_BANDS = 2.0
-#: How far an outline may move between two joined bands, in z steps.
-LOFT_REACH = 8.0
+MESH_SIDECAR = ".mesh.npz"
 
 
 DisplayMeshes = dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]
 
 
-def display_meshes(state: SlabState, *, loft: bool = True) -> DisplayMeshes:
+def display_meshes(state: SlabState) -> DisplayMeshes:
     """The 3D view's triangles for each material, built once per stored state.
 
     Building the mesh is the slow part of the slab kernel: seconds for a few
@@ -234,22 +228,17 @@ def display_meshes(state: SlabState, *, loft: bool = True) -> DisplayMeshes:
     for it again. The vertices are welded and the triangles indexed, which
     is a third of the size of one vertex per corner; the viewer shades each
     face on its own from the indexed form.
-
-    ``loft`` joins the sampled bands of a film with slanted faces, the
-    surface they stand for, instead of the stored staircase; either kind is
-    kept on its own.
     """
-    cached = state.display_meshes.get(loft)
-    if cached is not None:
-        return cached
+    if state.display_meshes is not None:
+        return state.display_meshes
     with state.mesh_lock:
-        if loft not in state.display_meshes:
-            state.display_meshes[loft] = _load_or_build_meshes(state, loft)
-        return state.display_meshes[loft]
+        if state.display_meshes is None:
+            state.display_meshes = _load_or_build_meshes(state)
+        return state.display_meshes
 
 
-def _load_or_build_meshes(state: SlabState, loft: bool) -> DisplayMeshes:
-    sidecar = None if state.path is None else state.path.with_name(state.path.name + MESH_SIDECAR[loft])
+def _load_or_build_meshes(state: SlabState) -> DisplayMeshes:
+    sidecar = None if state.path is None else state.path.with_name(state.path.name + MESH_SIDECAR)
     meshes: DisplayMeshes | None = None
     if sidecar is not None and sidecar.is_file():
         try:
@@ -269,13 +258,7 @@ def _load_or_build_meshes(state: SlabState, loft: bool) -> DisplayMeshes:
         from deviceflow._internal.mesh.builder import build_material_meshes
 
         state.device._state.validate()
-        step = float(state.device.conformal_resolution)
-        built = build_material_meshes(
-            state.device._state,
-            manifold=False,
-            loft=LOFT_BANDS * step if loft else None,
-            loft_reach=LOFT_REACH * step,
-        )
+        built = build_material_meshes(state.device._state, manifold=False)
         meshes = {
             material.name: (
                 np.ascontiguousarray(mesh.vertices, dtype=np.float32),
@@ -650,110 +633,6 @@ def _section_shapes(section, z_offset: float):
     ]
 
 
-def _pair_intervals(
-    below: Sequence[tuple[float, float]],
-    above: Sequence[tuple[float, float]],
-    slack: float,
-    reach: float,
-) -> dict[int, int]:
-    """Which interval of the next band each interval of this one continues.
-
-    An interval pairs with the one interval of the other band it overlaps
-    (or all but touches, within the slack) when neither end has moved by
-    more than the reach; an interval that overlaps two, or is overlapped by
-    two, as at a pinch-off or a split, pairs with neither.
-    """
-    forward: dict[int, list[int]] = {}
-    backward: dict[int, list[int]] = {}
-    for i, (a0, a1) in enumerate(below):
-        for j, (b0, b1) in enumerate(above):
-            if min(a1, b1) - max(a0, b0) > -slack:
-                forward.setdefault(i, []).append(j)
-                backward.setdefault(j, []).append(i)
-    pairs: dict[int, int] = {}
-    for i, js in forward.items():
-        if len(js) != 1 or len(backward[js[0]]) != 1:
-            continue
-        (a0, a1), (b0, b1) = below[i], above[js[0]]
-        if abs(a0 - b0) <= reach and abs(a1 - b1) <= reach:
-            pairs[i] = js[0]
-    return pairs
-
-
-def _smooth_section_shapes(section, state: SlabState, resolution: float):
-    """The sampled bands of a film drawn as the surface they sample.
-
-    Conformal deposition walks the surface in z steps of the resolution:
-    each step is a slab whose outline is exact at that height, and between
-    heights the outline jumps. The stored geometry is those jumps, a
-    staircase whose step is the resolution. The film it stands for is
-    smooth, so for the picture the outline at each thin slab's mid height
-    is joined to the next one by straight edges. This touches nothing that
-    is stored; the exact staircase is one switch away.
-
-    Only bands no thicker than twice the resolution are the sampled kind.
-    Thick slabs (the wafer, planar films, anything etched straight down)
-    keep their vertical walls. Each interval of a band is joined on its own
-    to the one interval of the next band it continues, so a feature
-    elsewhere along the cut never keeps this one from being joined; where
-    an interval has no continuation, at a pinch-off, a split or a floor
-    much wider than the reach, it is drawn as stored. The same rules join
-    the 3D view's bands.
-    """
-    from shapely.geometry import Polygon, box
-
-    slabs = state.device._state.slabs
-    thin = [slab.thickness <= LOFT_BANDS * resolution + 1e-9 for slab in slabs]
-    reach = LOFT_REACH * resolution
-    rows: list[dict[str, list[tuple[float, float]]]] = []
-    for slab in slabs:
-        row: dict[str, list[tuple[float, float]]] = {}
-        for material, region in slab.regions.items():
-            segments = section._segments(region)
-            if segments:
-                row[material.name] = segments
-        rows.append(row)
-    mids = [0.5 * (slab.z0 + slab.z1) for slab in slabs]
-    # pairs[k][name]: interval index in band k -> its continuation in band k+1
-    pairs: list[dict[str, dict[int, int]]] = [{} for _ in slabs]
-    for k in range(len(slabs) - 1):
-        if not (thin[k] and thin[k + 1]):
-            continue
-        for name, segments in rows[k].items():
-            above = rows[k + 1].get(name)
-            if above is not None:
-                pairs[k][name] = _pair_intervals(segments, above, resolution, reach)
-    pieces: dict[str, list] = {}
-    order: list[str] = []
-    for k, slab in enumerate(slabs):
-        for name, segments in rows[k].items():
-            if name not in pieces:
-                pieces[name] = []
-                order.append(name)
-            up = pairs[k].get(name, {})
-            down = set(pairs[k - 1].get(name, {}).values()) if k > 0 else set()
-            for index, (s0, s1) in enumerate(segments):
-                if index not in down:
-                    pieces[name].append(box(s0, slab.z0, s1, mids[k]))
-                if index in up:
-                    t0, t1 = rows[k + 1][name][up[index]]
-                    pieces[name].append(
-                        Polygon([(s0, mids[k]), (s1, mids[k]), (t1, mids[k + 1]), (t0, mids[k + 1])])
-                    )
-                else:
-                    pieces[name].append(box(s0, mids[k], s1, slab.z1))
-    shapes = []
-    for name in order:
-        merged = shapely.unary_union(pieces[name]).buffer(0)
-        for polygon in shapely.get_parts(merged):
-            if polygon.geom_type != "Polygon" or polygon.area <= 0:
-                continue
-            rings = [list(polygon.exterior.coords[:-1])]
-            rings += [list(ring.coords[:-1]) for ring in polygon.interiors]
-            shapes.append(([[(s, z + state.z_offset) for s, z in ring] for ring in rings], name))
-    return shapes
-
-
 def _top_view_shapes(top_view):
     return [(rings, name) for rings, _color, name in top_view._shapes()]
 
@@ -851,7 +730,7 @@ class SlabKernel:
 
     def warm_views(self, state: SlabState) -> None:
         """Build the display mesh now, so the 3D view does not have to."""
-        display_meshes(state, loft=True)
+        display_meshes(state)
 
     def state_bytes(self, state: SlabState) -> int:
         # Polygons are the bulk of a slab state: two doubles per coordinate
@@ -861,10 +740,10 @@ class SlabKernel:
             for slab in state.device._state.slabs
             for region in slab.regions.values()
         )
-        for meshes in state.display_meshes.values():
+        if state.display_meshes is not None:
             coordinates += sum(
                 (vertices.nbytes + faces.nbytes) // 8
-                for vertices, faces, _interface in meshes.values()
+                for vertices, faces, _interface in state.display_meshes.values()
             )
         return 64 * 1024 + coordinates * 4 * 16
 
@@ -877,10 +756,9 @@ class SlabKernel:
         project: ProjectDefinition,
         interpolation: int = 1,
         materials: Sequence[str] | None = None,
-        loft: bool = True,
     ) -> dict[str, Any]:
         device = state.device
-        meshes = display_meshes(state, loft=loft)
+        meshes = display_meshes(state)
         selected = [
             name
             for name in state.priority
@@ -915,7 +793,6 @@ class SlabKernel:
         return {
             "interpolation": 1,
             "exact": True,
-            "loft": bool(loft),
             "bounds": {
                 "xMin": x_min,
                 "xMax": x_max,
@@ -937,13 +814,12 @@ class SlabKernel:
         position: float | None = None,
         interpolation: int = 1,
         line: tuple[tuple[float, float], tuple[float, float]] | None = None,
-        smooth: bool = True,
     ) -> dict[str, Any]:
         device = state.device
         x_min, y_min, x_max, y_max = device.bounds
         if line is not None:
             return self._line_section(
-                state, colors, project=project, line=line, interpolation=interpolation, smooth=smooth
+                state, colors, project=project, line=line, interpolation=interpolation
             )
         if axis == "y":
             coordinates = np.linspace(y_min, y_max, SECTION_POSITIONS)
@@ -970,14 +846,9 @@ class SlabKernel:
             state.z_offset,
             max(float(project.grid["z_max"]), top + state.z_offset),
         )
-        drawn = (
-            _smooth_section_shapes(section, state, resolution_um(project))
-            if smooth
-            else _section_shapes(section, state.z_offset)
-        )
         shapes = [
             ([[(s + horizontal[0], z) for s, z in ring] for ring in rings], name)
-            for rings, name in drawn
+            for rings, name in _section_shapes(section, state.z_offset)
         ]
         pixels_per_um = _pixels_per_um(extent, interpolation)
         rgb = _raster(shapes, colors, extent, pixels_per_um)
@@ -989,7 +860,6 @@ class SlabKernel:
             "interpolation": interpolation,
             "sampledSpacingUm": 1.0 / pixels_per_um,
             "exact": True,
-            "smoothed": bool(smooth),
             "width": int(rgb.shape[1]),
             "height": int(rgb.shape[0]),
             "horizontalAxis": horizontal_label,
@@ -1010,7 +880,6 @@ class SlabKernel:
         project: ProjectDefinition,
         line: tuple[tuple[float, float], tuple[float, float]],
         interpolation: int,
-        smooth: bool = True,
     ) -> dict[str, Any]:
         """The exact cut along any line: DeviceFlow sections are not axis-bound."""
         device = state.device
@@ -1027,12 +896,7 @@ class SlabKernel:
             max(float(project.grid["z_max"]), top + state.z_offset),
         )
         pixels_per_um = _pixels_per_um(extent, interpolation)
-        drawn = (
-            _smooth_section_shapes(section, state, resolution_um(project))
-            if smooth
-            else _section_shapes(section, state.z_offset)
-        )
-        rgb = _raster(drawn, colors, extent, pixels_per_um)
+        rgb = _raster(_section_shapes(section, state.z_offset), colors, extent, pixels_per_um)
         return {
             "image": _png(rgb),
             "axis": "line",
@@ -1041,7 +905,6 @@ class SlabKernel:
             "interpolation": interpolation,
             "sampledSpacingUm": 1.0 / pixels_per_um,
             "exact": True,
-            "smoothed": bool(smooth),
             "width": int(rgb.shape[1]),
             "height": int(rgb.shape[0]),
             "horizontalAxis": "s",

@@ -37,7 +37,6 @@ from ...exceptions import MeshError
 from ...material import Material
 from ..geometry import polygons as P
 from ..geometry.state import ProcessState
-from .loft import chain_rings, match_rings, zipper
 from .manifold import split_nonmanifold
 from .triangulate import triangulate
 
@@ -73,22 +72,13 @@ class _MeshAccumulator:
 
 
 def build_material_meshes(
-    state: ProcessState,
-    *,
-    manifold: bool = True,
-    loft: float | None = None,
-    loft_reach: float | None = None,
+    state: ProcessState, *, manifold: bool = True
 ) -> "OrderedDict[Material, trimesh.Trimesh]":
     """One mesh per material that owns any volume, in first-appearance order.
 
     ``manifold=False`` skips the vertex splitting that makes every vertex a
     single fan. A renderer that shades each face on its own never shares
     vertices anyway, and the split is a third of the build time.
-
-    ``loft`` joins the outlines of consecutive slabs no thicker than it with
-    slanted faces instead of a step, for a display mesh of a film sampled
-    in z steps (see :mod:`.loft`). ``loft_reach`` is how far an outline may
-    move between two joined slabs; four times ``loft`` when not given.
     """
     materials: list[Material] = []
     for slab in state.slabs:
@@ -97,17 +87,12 @@ def build_material_meshes(
                 materials.append(m)
     out: "OrderedDict[Material, trimesh.Trimesh]" = OrderedDict()
     for m in materials:
-        out[m] = build_one_material(state, m, manifold=manifold, loft=loft, loft_reach=loft_reach)
+        out[m] = build_one_material(state, m, manifold=manifold)
     return out
 
 
 def build_one_material(
-    state: ProcessState,
-    material: Material,
-    *,
-    manifold: bool = True,
-    loft: float | None = None,
-    loft_reach: float | None = None,
+    state: ProcessState, material: Material, *, manifold: bool = True
 ) -> trimesh.Trimesh:
     """Caps and walls of one material from a single planar arrangement.
 
@@ -124,11 +109,6 @@ def build_one_material(
 
     Around any 3D edge the number of incident mesh faces is then the number
     of changes around the four (below/above x left/right) cells: always even.
-
-    With ``loft`` set, a plane between two thin slabs whose rings continue
-    each other gets no caps: each slab's wall stops at its mid height and
-    the two outlines are joined there by slanted triangles (:mod:`.loft`).
-    The outlines are the arrangement edges, so they share the walls' nodes.
     """
     slabs = state.slabs
     n = len(slabs)
@@ -174,56 +154,6 @@ def build_one_material(
             else:
                 adjacent[(b, a)].append((fi, False))
 
-    # walls: an arrangement edge bounds the solid in slab k where membership differs across it
-    wall_edges: list[list[tuple[tuple, tuple, bool]]] = [[] for _ in range(n)]
-    for (a, b), adj in adjacent.items():
-        left = next((fi for fi, fwd in adj if fwd), None)
-        right = next((fi for fi, fwd in adj if not fwd), None)
-        for k in range(n):
-            in_left = bool(member[k][left]) if left is not None else False
-            in_right = bool(member[k][right]) if right is not None else False
-            if in_left == in_right:
-                continue
-            if in_left:
-                p, q, other = a, b, right
-            else:
-                p, q, other = b, a, left
-            iface = bool(touch[k][other]) if other is not None else False
-            wall_edges[k].append((p, q, iface))
-
-    # lofted planes: a ring of slab k joined to the ring of slab k+1 it
-    # continues, at their mid heights, instead of a cap between them
-    mids = [0.5 * (z[k] + z[k + 1]) for k in range(n)]
-    rings: list[list | None] = [None] * n  # the chained rings of each thin slab
-    ring_of_edge: list[dict[tuple, int]] = [{} for _ in range(n)]
-    pairs: list[list] = [[] for _ in range(n)]  # pairs[k]: (ring of k, ring of k+1, region between)
-    covered: list[np.ndarray] = [np.zeros(len(faces2d), dtype=bool)] * (n + 1)
-    joined_up: list[set[int]] = [set() for _ in range(n)]
-    joined_down: list[set[int]] = [set() for _ in range(n)]
-    if loft is not None:
-        reach = 4.0 * loft if loft_reach is None else loft_reach
-        thin = [slabs[k].thickness <= loft + 1e-9 and bool(wall_edges[k]) for k in range(n)]
-        for k in range(n):
-            if thin[k] and (k + 1 < n and thin[k + 1] or k > 0 and thin[k - 1]):
-                rings[k] = chain_rings(wall_edges[k])
-                if rings[k] is not None:
-                    for index, (loop, _flags) in enumerate(rings[k]):
-                        for a, b in zip(loop, loop[1:] + loop[:1]):
-                            ring_of_edge[k][(a, b)] = index
-        for k in range(n - 1):
-            if rings[k] is None or rings[k + 1] is None:
-                continue
-            pairs[k] = match_rings(rings[k], rings[k + 1], reach)
-            if not pairs[k]:
-                continue
-            mask = np.zeros(len(faces2d), dtype=bool)
-            for i, j, between in pairs[k]:
-                joined_up[k].add(i)
-                joined_down[k + 1].add(j)
-                shapely.prepare(between)
-                mask |= shapely.contains(between, reps)
-            covered[k + 1] = mask
-
     acc = _MeshAccumulator()
     empty = np.zeros(len(faces2d), dtype=bool)
 
@@ -235,7 +165,7 @@ def build_one_material(
         touch_above = touch[k] if k < n else empty
         zk = z[k]
         for up in (True, False):
-            sel_dir = ((below & ~above) if up else (above & ~below)) & ~covered[k]
+            sel_dir = (below & ~above) if up else (above & ~below)
             if not sel_dir.any():
                 continue
             iface_flag = touch_above if up else touch_below
@@ -250,20 +180,22 @@ def build_one_material(
                         else:
                             acc.triangle((*a, zk), (*c, zk), (*b, zk), iface)
 
-    # lofts, before the walls so their vertices count as used at the mid planes
-    for k in range(n - 1):
-        for i, j, _between in pairs[k]:
-            zipper(acc.triangle, rings[k][i], mids[k], rings[k + 1][j], mids[k + 1])  # type: ignore[index]
-
-    # walls: the full slab, or only the half of it a loft does not replace
+    # walls: an arrangement edge bounds the solid in slab k where membership differs across it
     strips: dict[tuple, list[tuple[float, float]]] = defaultdict(list)
-    for k in range(n):
-        for p, q, iface in wall_edges[k]:
-            ring = ring_of_edge[k].get((p, q))
-            lo = mids[k] if ring in joined_down[k] else z[k]
-            hi = mids[k] if ring in joined_up[k] else z[k + 1]
-            if lo < hi:
-                strips[(p[0], p[1], q[0], q[1], iface)].append((lo, hi))
+    for (a, b), adj in adjacent.items():
+        left = next((fi for fi, fwd in adj if fwd), None)
+        right = next((fi for fi, fwd in adj if not fwd), None)
+        for k in range(n):
+            in_left = bool(member[k][left]) if left is not None else False
+            in_right = bool(member[k][right]) if right is not None else False
+            if in_left == in_right:
+                continue
+            if in_left:
+                p, q, other = a, b, right
+            else:
+                p, q, other = b, a, left
+            iface = bool(touch[k][other]) if other is not None else False
+            strips[(p[0], p[1], q[0], q[1], iface)].append((z[k], z[k + 1]))
     _emit_walls(acc, strips)
 
     mesh = acc.to_trimesh()
