@@ -523,6 +523,12 @@ def test_a_newer_view_request_supersedes_a_queued_one(workspace):
             "id": f"view-{index}", "method": "get_section",
             "params": {"root": str(workspace), "branchId": branch["id"], "stepId": step["id"], "axis": "y"},
         }) + "\n")
+    writer.flush()
+    # Closing the input tells the server its client is gone, which cancels
+    # whatever is running; keep it open until the last answer has arrived.
+    deadline = time.time() + 120
+    while time.time() < deadline and '"id":"view-3"' not in output.getvalue().replace(" ", ""):
+        time.sleep(0.02)
     writer.close()
     thread.join(timeout=120)
     assert not thread.is_alive()
