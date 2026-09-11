@@ -378,3 +378,57 @@ def test_a_masked_film_survives_a_save_and_a_later_step(tmp_path, kernel, projec
     section = covered.device.cross_section((-0.8, 0.0), (0.8, 0.0))
     assert section.surface_z(0.8) == pytest.approx(0.8 + 0.05 + 0.02)
     assert section.surface_z(0.1) == pytest.approx(0.8 + 0.02)
+
+
+def test_repeated_conformal_films_of_one_material_mesh_as_one_solid(kernel, project):
+    """Lining a square trench with four films of the same metal.
+
+    The kernel it ships with grew each film as a ring snapped to the ring
+    below, which pulled the ring's interface with the earlier film off it by
+    a few nanometres: a crack between films that no view could show and that
+    made the mesh non-manifold from the fourth film on. The films must build
+    one sound solid, and each must still be its nominal thickness.
+    """
+    materials = default_materials()
+    sketches = {
+        "default": QuickSketch(
+            "default",
+            [SketchShape("rectangle", parameters={"center": (0.0, 0.0), "size": (0.6, 0.6)})],
+        )
+    }
+    state = kernel.initial_state(project, materials=materials)
+    state = kernel.run_step(
+        state,
+        step(
+            ProcessType.ETCH,
+            mask_source="quick_sketch",
+            parameters={"target": 0.3, "directional_fraction": 1.0, "sketch_id": "default"},
+            material_responses={"Si": MaterialResponse("Si", 0.1)},
+        ),
+        project=project,
+        recipes={},
+        sketches=sketches,
+        logger=lambda _message: None,
+        materials=materials,
+    )
+    for _ in range(4):
+        state = kernel.run_step(
+            state,
+            step(ProcessType.DEPOSIT, parameters={"target": 0.06, "mode": "conformal"}, output_material="W"),
+            project=project,
+            recipes={},
+            sketches=sketches,
+            logger=lambda _message: None,
+            materials=materials,
+        )
+    report = state.device.validate_mesh()
+    assert report.valid, report.materials["W"].errors
+    assert report.materials["W"].components == 1
+    section = state.device.cross_section((-0.8, 0.0), (0.8, 0.0))
+    # Four films of 60 nm, read at distances along the section line: 240 nm
+    # over the wafer at x = -0.7, and 240 nm over the trench floor at x = 0,
+    # where the 600 nm opening is not yet pinched off.
+    assert section.surface_z(0.1) == pytest.approx(0.8 + 0.24)
+    assert section.surface_z(0.8) == pytest.approx(0.5 + 0.24)
+    # The 3D view builds the same mesh, so it must come back too.
+    assert {s["material"] for s in kernel.surfaces(state, project=project)["surfaces"]} == {"Si", "W"}

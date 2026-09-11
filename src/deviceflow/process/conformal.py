@@ -83,9 +83,18 @@ def deposit_conformal(
 
     new_regions: list[tuple[float, float, MultiPolygon]] = []
     previous: MultiPolygon | None = None
-    # Consecutive samples whose regions differ by less than a quarter of the
-    # resolution are given the same region: the staircase then only has steps
-    # at the resolution scale, never picometre ledges between rings.
+    # Consecutive samples whose dilations differ by less than a quarter of
+    # the resolution are given the same dilation: the staircase then only has
+    # steps at the resolution scale, never picometre ledges between rings.
+    # It is the dilation that is compared and snapped, not the film ring cut
+    # from it, because a ring has two boundaries: the free surface, which is
+    # the one the staircase concerns, and the interface with the solid it
+    # grows on. Snapping the ring would move that interface off the solid by
+    # up to the tolerance, and a film of the material already there would
+    # then meet its own earlier film along a gap of a few nanometres: a hole
+    # narrower than the resolution but wider than the grid, which survives
+    # every cleaning step and makes the mesh non-manifold where it ends.
+    # Cutting the ring from the snapped dilation keeps the interface exact.
     merge_tol = resolution / 4
     # Sources are sorted by z0 and tile the stack, so the ones a sample can
     # reach form a contiguous run and are found by bisection instead of by
@@ -122,18 +131,18 @@ def deposit_conformal(
             parts.append(dilated_part)
         if not parts:
             continue
-        dilated = shapely.unary_union(parts)
+        dilated = state.clean(shapely.unary_union(parts))
+        if previous is not None:
+            if _nearly_same(previous, dilated, merge_tol):
+                dilated = previous
+            else:
+                # where the new surface runs within merge_tol of the previous one, make
+                # it identical: no picometre slivers between consecutive samples
+                dilated = state.clean(shapely.snap(dilated, previous, merge_tol))
+        previous = dilated
         new = state.clean(dilated.difference(solid_at(zm)))
         if not new.is_empty:
-            if previous is not None:
-                if _nearly_same(previous, new, merge_tol):
-                    new = previous
-                else:
-                    # where the new ring runs within merge_tol of the previous one, make
-                    # it identical: no picometre slivers between consecutive samples
-                    new = state.clean(shapely.snap(new, previous, merge_tol))
             new_regions.append((za, zb, new))
-        previous = new if not new.is_empty else None
 
     before = state.volume(material)
     changed = _apply(state, material, new_regions)
