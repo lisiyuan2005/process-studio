@@ -257,6 +257,8 @@ export interface WorkerCapabilities {
   sketch: { shapes: string[]; operations: string[] };
   kernels: KernelDescription[];
   defaultKernel: string;
+  /** "full", or the id of the one kernel a single-kernel build ships. */
+  buildVariant?: string;
   rendering: { surfaces: boolean; maximumInterpolation: number };
   numerics: {
     solverOrders: number[];

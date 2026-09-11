@@ -3,6 +3,25 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $ProjectRoot
 
+# Which kernels this build ships. PROCESS_STUDIO_KERNELS is what the worker
+# reads (a comma-separated list of ids, unset for both); the variant names the
+# product so two builds can sit side by side on one machine.
+$Kernels = if ($env:PROCESS_STUDIO_KERNELS) { $env:PROCESS_STUDIO_KERNELS } else { "levelset,slab" }
+$env:PROCESS_STUDIO_KERNELS = $Kernels
+switch ($Kernels) {
+  "slab"     { $Product = "Process Studio Slab";      $Identifier = "com.processstudio.desktop.slab" }
+  "levelset" { $Product = "Process Studio Level Set"; $Identifier = "com.processstudio.desktop.levelset" }
+  default    { $Product = "Process Studio";           $Identifier = "com.processstudio.desktop" }
+}
+New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot "work") | Out-Null
+$VariantConfig = Join-Path $ProjectRoot "work/tauri-variant.json"
+@{
+  productName = $Product
+  identifier = $Identifier
+  app = @{ windows = @(@{ title = $Product; width = 1440; height = 900; minWidth = 960; minHeight = 640; resizable = $true; fullscreen = $false; center = $true }) }
+} | ConvertTo-Json -Depth 5 | Set-Content -Path $VariantConfig -Encoding UTF8
+Write-Host "Building $Product with kernels: $Kernels"
+
 python -m pip install -e ".[render]"
 python -m pip install "pyinstaller>=6.10"
 
@@ -25,8 +44,8 @@ $Response = '{"kind":"request","id":1,"method":"describe"}' | & $Worker
 if ($LASTEXITCODE -ne 0 -or -not ($Response -match '"protocolVersion"')) {
   throw "The packaged worker failed its describe smoke test."
 }
-foreach ($Kernel in @('"id":"levelset"', '"id":"slab"')) {
-  if (-not ($Response -replace '\s', '' -match [regex]::Escape($Kernel))) {
+foreach ($Kernel in $Kernels.Split(",")) {
+  if (-not ($Response -replace '\s', '' -match [regex]::Escape("`"id`":`"$Kernel`""))) {
     throw "The packaged worker does not offer the $Kernel kernel."
   }
 }
@@ -34,7 +53,7 @@ foreach ($Kernel in @('"id":"levelset"', '"id":"slab"')) {
 Set-Location (Join-Path $ProjectRoot "desktop")
 npm ci
 npm run test
-npm run tauri build -- --no-bundle
+npm run tauri build -- --no-bundle --config $VariantConfig
 if ($LASTEXITCODE -ne 0) { throw "Tauri failed to build the desktop shell." }
 
 Write-Host "Built desktop/src-tauri/target/release/process-studio-desktop.exe"

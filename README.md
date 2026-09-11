@@ -31,8 +31,12 @@ level set 工程的网格在顶栏的间距按钮里改：填目标间距（nm�
 
 | 产物 | 内容 |
 | --- | --- |
-| `ProcessStudio-Windows` | `ProcessStudio.exe` 与同级的 `resources/` |
-| `ProcessStudio-macOS` | `Process Studio.app` 的压缩包和 DMG |
+| `ProcessStudio-Windows` | `ProcessStudio.exe` 与同级的 `resources/`，两个内核都有 |
+| `ProcessStudio-macOS` | `Process Studio.app` 的压缩包和 DMG，两个内核都有 |
+| `ProcessStudio-Slab-Windows` / `-macOS` | 只带 slab 内核的 `Process Studio Slab` |
+| `ProcessStudio-LevelSet-Windows` / `-macOS` | 只带 level set 内核的 `Process Studio Level Set` |
+
+单内核版新建工作区时没有内核选择，打开用另一个内核建的工程会被拒绝并提示去对应版本打开。三个版本产品名不同，可以并存。
 
 Windows 产物必须整个目录一起用：exe 会在自己同级的 `resources/worker` 下找 worker，单独拷出 exe 无法运行。
 

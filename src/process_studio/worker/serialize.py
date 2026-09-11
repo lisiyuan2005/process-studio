@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from ..kernel.grid import UniformGrid3D
-from ..kernels import DEFAULT_KERNEL
+from ..kernels import default_kernel
 from ..models import (
     FlowBranch,
     MaterialDefinition,
@@ -298,6 +298,6 @@ def project_from_json(payload: Mapping[str, Any]) -> ProjectDefinition:
         None if payload.get("gdsPath") in (None, "") else str(payload["gdsPath"]),
         payload.get("activeBranchId"),
         id=project_id,
-        kernel=str(payload.get("kernel") or DEFAULT_KERNEL),
+        kernel=str(payload.get("kernel") or default_kernel()),
         resolution_um=None if resolution in (None, "") else float(resolution),
     )

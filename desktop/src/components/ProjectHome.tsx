@@ -83,6 +83,14 @@ export function ProjectHome({
             />
           </label>
 
+          {kernels.length === 1 && (
+            <p className="kernel-lock">
+              <Lock size={12} />
+              This build ships the {kernels[0].name} kernel only. New workspaces use it, and a
+              workspace made with another kernel needs the build that includes that kernel.
+            </p>
+          )}
+
           {kernels.length > 1 && (
             <div className="kernel-choice">
               <span className="section-label">SIMULATION KERNEL</span>

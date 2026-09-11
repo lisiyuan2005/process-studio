@@ -37,7 +37,7 @@ def project_kernel(project: ProjectDefinition) -> Kernel:
     try:
         return get_kernel(project.kernel)
     except KeyError as error:
-        raise WorkspaceError(str(error)) from error
+        raise WorkspaceError(error.args[0]) from error
 
 
 def _branch_or_fail(repository: ProjectRepository, branch_id: str) -> FlowBranch:

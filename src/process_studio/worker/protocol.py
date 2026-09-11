@@ -17,7 +17,7 @@ from typing import Any, IO, Mapping
 
 from . import PROTOCOL_VERSION, __version__
 from ..kernel.grid import UniformGrid3D
-from ..kernels import DEFAULT_KERNEL, available_kernels, get_kernel
+from ..kernels import available_kernels, build_variant, default_kernel, get_kernel
 from ..layout.gds import available_gds_layers
 from ..libraries import RecipeLibrary
 from ..models import ProcessType
@@ -75,7 +75,8 @@ def _describe() -> dict[str, Any]:
         "maskSources": list(MASK_SOURCES),
         "sketch": {"shapes": list(SKETCH_SHAPES), "operations": list(SKETCH_OPERATIONS)},
         "kernels": [kernel.info.to_json() for kernel in available_kernels()],
-        "defaultKernel": DEFAULT_KERNEL,
+        "defaultKernel": default_kernel(),
+        "buildVariant": build_variant(),
         "rendering": {
             "surfaces": MESHES_AVAILABLE,
             "maximumInterpolation": MAXIMUM_INTERPOLATION,
@@ -393,7 +394,7 @@ def dispatch(
     if method == "create_workspace":
         root = _root(parameters)
         name = str(parameters.get("name") or "Process Studio Project")
-        kernel = str(parameters.get("kernel") or DEFAULT_KERNEL)
+        kernel = str(parameters.get("kernel") or default_kernel())
         repository = initialize_workspace(root, name, kernel)
         return build_document(root, repository, load_project(repository))
     if method == "open_workspace":

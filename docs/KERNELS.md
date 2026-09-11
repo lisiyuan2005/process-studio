@@ -48,6 +48,10 @@ src/process_studio/kernels/slab.py      DeviceFlow 适配：步骤翻译、掩�
 
 `runner.py`、`protocol.py` 只通过这个接口工作，不判断内核 id。新增内核只需实现接口并在 `kernels/__init__.py` 注册。
 
+## 单内核版本
+
+打包时设 `PROCESS_STUDIO_KERNELS=slab` 或 `levelset` 可以只带一个内核，`Desktop builds` 工作流每个平台都出三份。单内核版的 `describe` 只列出它带的内核，`defaultKernel` 就是它，`buildVariant` 说明是哪一版；用另一个内核建的工程打开时会被拒绝，错误信息说明该去哪个版本。
+
 ## 依赖
 
 slab 内核需要 `shapely` 和 `trimesh`，两者已在 `pyproject.toml` 的依赖里，打包脚本也会一起收进 worker。缺少它们时注册表只提供 level set 内核，`describe` 的 `kernels` 列表随之变短，不会假装可用。

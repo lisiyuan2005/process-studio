@@ -137,6 +137,53 @@ def test_a_section_can_run_along_any_line(tmp_path, kernel):
         )
 
 
+@pytest.fixture()
+def slab_only_build():
+    """A worker built with the slab kernel alone, restored afterwards."""
+    from process_studio import kernels
+
+    kernels.configure({"slab"})
+    try:
+        yield
+    finally:
+        kernels.configure(None)
+
+
+def test_a_single_kernel_build_offers_only_that_kernel(slab_only_build):
+    described = call("describe")
+    assert [kernel["id"] for kernel in described["kernels"]] == ["slab"]
+    assert described["defaultKernel"] == "slab"
+    assert described["buildVariant"] == "slab"
+
+
+def test_a_single_kernel_build_refuses_the_other_kernel(tmp_path, slab_only_build):
+    root = tmp_path / "unnamed"
+    created = call("create_workspace", root=str(root), name="Unnamed")
+    # Unnamed means the default, which is the one kernel there is.
+    assert created["project"]["kernel"] == "slab"
+    with pytest.raises(InvalidRequest, match="not in this build"):
+        call("create_workspace", root=str(tmp_path / "other"), name="Other", kernel="levelset")
+
+
+def test_a_project_from_the_missing_kernel_is_refused_with_directions(tmp_path):
+    from process_studio import kernels
+
+    root = tmp_path / "levelset-project"
+    call("create_workspace", root=str(root), name="Level set", kernel="levelset")
+    call("run_flow", root=str(root))
+    kernels.configure({"slab"})
+    try:
+        document = call("open_workspace", root=str(root))
+        assert document["project"]["kernel"] == "levelset"
+        with pytest.raises(WorkspaceError, match="includes 'levelset'"):
+            call("run_flow", root=str(root))
+        branch = document["branches"][0]
+        with pytest.raises(WorkspaceError, match="includes 'levelset'"):
+            call("get_top_view", root=str(root), branchId=branch["id"], stepId=branch["steps"][0]["id"])
+    finally:
+        kernels.configure(None)
+
+
 def test_a_slab_project_sets_a_resolution_rather_than_a_grid(tmp_path):
     root = tmp_path / "slab-resolution"
     call("create_workspace", root=str(root), name="Slab", kernel="slab")

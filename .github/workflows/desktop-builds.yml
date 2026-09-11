@@ -8,9 +8,26 @@ on:
 
 # The Tauri shell is the desktop application; the artifacts are the
 # executable and the .app, with no installer or disk image.
+# Three builds of each: both kernels, the slab kernel alone, the level-set
+# kernel alone. A single-kernel build offers no kernel choice and refuses a
+# project made with the other one.
 jobs:
   windows:
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [full, slab, levelset]
+        include:
+          - variant: full
+            kernels: levelset,slab
+            artifact: ProcessStudio-Windows
+          - variant: slab
+            kernels: slab
+            artifact: ProcessStudio-Slab-Windows
+          - variant: levelset
+            kernels: levelset
+            artifact: ProcessStudio-LevelSet-Windows
     steps:
       - uses: actions/checkout@v4
 
@@ -45,6 +62,8 @@ jobs:
 
       - name: Build the desktop shell
         shell: pwsh
+        env:
+          PROCESS_STUDIO_KERNELS: ${{ matrix.kernels }}
         run: ./scripts/build_desktop.ps1
 
       # The executable resolves its worker under <exe dir>/resources, so the
@@ -58,7 +77,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ProcessStudio-Windows
+          name: ${{ matrix.artifact }}
           path: release/ProcessStudio
           if-no-files-found: error
 
@@ -67,6 +86,23 @@ jobs:
     # SDK and a different linker signature, and that app opens where this one
     # did not.
     runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [full, slab, levelset]
+        include:
+          - variant: full
+            kernels: levelset,slab
+            product: Process Studio
+            artifact: ProcessStudio-macOS
+          - variant: slab
+            kernels: slab
+            product: Process Studio Slab
+            artifact: ProcessStudio-Slab-macOS
+          - variant: levelset
+            kernels: levelset
+            product: Process Studio Level Set
+            artifact: ProcessStudio-LevelSet-macOS
     steps:
       - uses: actions/checkout@v4
 
@@ -99,6 +135,8 @@ jobs:
           python -m pytest -q
 
       - name: Build the desktop shell
+        env:
+          PROCESS_STUDIO_KERNELS: ${{ matrix.kernels }}
         run: bash scripts/build_desktop.sh
 
       # The linker's own signature covers the executable only. Without a bundle
@@ -107,7 +145,7 @@ jobs:
       # rather than shipping an app that cannot start.
       - name: Verify the bundle signature
         run: |
-          APP="desktop/src-tauri/target/release/bundle/macos/Process Studio.app"
+          APP="desktop/src-tauri/target/release/bundle/macos/${{ matrix.product }}.app"
           test -f "$APP/Contents/_CodeSignature/CodeResources" \
             || { echo "the bundle has no sealed resources"; exit 1; }
           codesign -dv --verbose=4 "$APP" 2>&1 | grep -E "Signature|flags|Info.plist"
@@ -119,13 +157,13 @@ jobs:
         run: |
           mkdir -p release
           ditto -c -k --sequesterRsrc --keepParent \
-            "desktop/src-tauri/target/release/bundle/macos/Process Studio.app" \
-            release/ProcessStudio-macOS.zip
+            "desktop/src-tauri/target/release/bundle/macos/${{ matrix.product }}.app" \
+            "release/${{ matrix.artifact }}.zip"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ProcessStudio-macOS
+          name: ${{ matrix.artifact }}
           path: |
-            release/ProcessStudio-macOS.zip
+            release/${{ matrix.artifact }}.zip
             desktop/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error

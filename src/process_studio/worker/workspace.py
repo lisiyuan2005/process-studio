@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from ..defaults import default_branch, default_grid, default_materials, default_recipes
-from ..kernels import DEFAULT_KERNEL, get_kernel
+from ..kernels import default_kernel, get_kernel
 from ..layout.quick_sketch import QuickSketch, SketchShape
 from ..models import FlowBranch, ProcessStep, ProjectDefinition, Recipe
 from ..storage import ProjectRepository
@@ -129,7 +129,7 @@ def sketch_to_json(sketch_id: str, sketch: QuickSketch) -> dict[str, Any]:
 
 
 def initialize_workspace(
-    root: Path, name: str, kernel: str = DEFAULT_KERNEL
+    root: Path, name: str, kernel: str | None = None
 ) -> ProjectRepository:
     """Create the starter project a new workspace opens with.
 
@@ -137,9 +137,10 @@ def initialize_workspace(
     result is computed and stored, so it is part of what the project is.
     """
     try:
-        chosen = get_kernel(kernel)
+        chosen = get_kernel(kernel or default_kernel())
     except KeyError as error:
-        raise InvalidRequest(str(error)) from error
+        # KeyError quotes its message when printed; the text itself is wanted.
+        raise InvalidRequest(error.args[0]) from error
     root.mkdir(parents=True, exist_ok=True)
     repository = open_repository(root, create=True)
     if repository.list_projects():
