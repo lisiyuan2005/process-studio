@@ -30,3 +30,10 @@ under the MIT license in `LICENSE`.
   XY arc sagitta were one number; a project that wants a fine z step to
   shrink the staircase on a shoulder need not pay for finer rings as well.
   Unset, the XY value is the z value, exactly as before.
+- `process/isotropic_etch.py`: the step size follows the thinnest *barrier
+  layer* (a run of slabs with one non-target footprint that borders void or
+  a target) instead of the thinnest slab, and the slabs are harmonised once
+  after the last step instead of after every step; a sliver of a target
+  left inside a barrier is cut back before validation. A replacement-gate
+  flow went from a hundred-odd steps, each re-noding the whole stack, to a
+  handful.
