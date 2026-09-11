@@ -243,3 +243,22 @@ def test_tools_are_a_grouped_library(workspace: Path):
     assert code == EXIT_USAGE and "no tool" in err
     code, out, _ = run("recipes", "list", root=workspace)
     assert code == EXIT_OK and "ALD" in out
+
+
+def test_the_3d_nand_example_flow_applies(tmp_path: Path):
+    """The shipped 3D NAND flow stands up a workspace as written, so the
+    example cannot drift from what the CLI accepts."""
+    example = Path(__file__).resolve().parent.parent / "examples" / "3d-nand" / "flow.json"
+    root = tmp_path / "nand"
+    code, _out, err = run("flow", "apply", str(example), root=root)
+    assert code == EXIT_OK, err
+    info = as_json("info", root=root)
+    assert info["project"]["kernel"] == "slab"
+    assert info["project"]["resolutionUm"] == pytest.approx(0.004)
+    steps = as_json("steps", "list", root=root)
+    assert len(steps) == 39
+    assert [step["processType"] for step in steps[:2]] == ["deposit", "deposit"]
+    names = [step["name"] for step in steps]
+    assert "SiN removal (hot H3PO4)" in names and names[-1] == "Final CMP"
+    assert {sketch["id"] for sketch in as_json("sketch", "list", root=root)} >= {"holes", "slits", "wlc", "stair1"}
+    assert {m["name"] for m in as_json("materials", "list", root=root)} >= {"Poly-Si", "SiN-trap", "SiN", "W"}

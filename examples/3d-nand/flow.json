@@ -1,0 +1,679 @@
+{
+  "name": "3D NAND (gate-last, 6 pairs)",
+  "kernel": "slab",
+  "window": {
+    "x": [
+      -0.35,
+      0.55
+    ],
+    "y": [
+      -0.35,
+      0.35
+    ],
+    "z": [
+      -0.3,
+      0.85
+    ]
+  },
+  "resolution_nm": 4,
+  "resolution_xy_nm": 4,
+  "materials": [
+    {
+      "name": "Poly-Si",
+      "category": "Semiconductor",
+      "color": "#a9563e",
+      "opacity": 1.0
+    },
+    {
+      "name": "SiN-trap",
+      "category": "Dielectric",
+      "color": "#2f7f7f",
+      "opacity": 0.9
+    }
+  ],
+  "section_lines": [
+    {
+      "name": "Through holes and slit",
+      "start": [
+        -0.35,
+        0.17
+      ],
+      "end": [
+        0.55,
+        0.17
+      ]
+    },
+    {
+      "name": "Along the slit",
+      "start": [
+        -0.04,
+        -0.35
+      ],
+      "end": [
+        -0.04,
+        0.35
+      ]
+    },
+    {
+      "name": "Across the staircase",
+      "start": [
+        0.2,
+        0.0
+      ],
+      "end": [
+        0.55,
+        0.0
+      ]
+    }
+  ],
+  "sketches": {
+    "holes": {
+      "name": "Channel holes",
+      "shapes": [
+        {
+          "kind": "circle",
+          "operation": "merge",
+          "parameters": {
+            "center": [
+              -0.24,
+              -0.17
+            ],
+            "radius": 0.055
+          }
+        },
+        {
+          "kind": "circle",
+          "operation": "merge",
+          "parameters": {
+            "center": [
+              -0.24,
+              0.0
+            ],
+            "radius": 0.055
+          }
+        },
+        {
+          "kind": "circle",
+          "operation": "merge",
+          "parameters": {
+            "center": [
+              -0.24,
+              0.17
+            ],
+            "radius": 0.055
+          }
+        },
+        {
+          "kind": "circle",
+          "operation": "merge",
+          "parameters": {
+            "center": [
+              0.16,
+              -0.17
+            ],
+            "radius": 0.055
+          }
+        },
+        {
+          "kind": "circle",
+          "operation": "merge",
+          "parameters": {
+            "center": [
+              0.16,
+              0.0
+            ],
+            "radius": 0.055
+          }
+        },
+        {
+          "kind": "circle",
+          "operation": "merge",
+          "parameters": {
+            "center": [
+              0.16,
+              0.17
+            ],
+            "radius": 0.055
+          }
+        }
+      ]
+    },
+    "slits": {
+      "name": "Slits",
+      "shapes": [
+        {
+          "kind": "rectangle",
+          "operation": "merge",
+          "parameters": {
+            "center": [
+              -0.04,
+              0.0
+            ],
+            "size": [
+              0.12,
+              0.8
+            ]
+          }
+        },
+        {
+          "kind": "rectangle",
+          "operation": "merge",
+          "parameters": {
+            "center": [
+              0.55,
+              0.0
+            ],
+            "size": [
+              0.12,
+              0.8
+            ]
+          }
+        }
+      ]
+    },
+    "wlc": {
+      "name": "Word-line contacts",
+      "shapes": [
+        {
+          "kind": "circle",
+          "operation": "merge",
+          "parameters": {
+            "center": [
+              0.32999999999999996,
+              0.0
+            ],
+            "radius": 0.02
+          }
+        },
+        {
+          "kind": "circle",
+          "operation": "merge",
+          "parameters": {
+            "center": [
+              0.39,
+              0.0
+            ],
+            "radius": 0.02
+          }
+        },
+        {
+          "kind": "circle",
+          "operation": "merge",
+          "parameters": {
+            "center": [
+              0.44999999999999996,
+              0.0
+            ],
+            "radius": 0.02
+          }
+        }
+      ]
+    },
+    "stair1": {
+      "name": "Staircase mask 1",
+      "shapes": [
+        {
+          "kind": "rectangle",
+          "operation": "merge",
+          "parameters": {
+            "center": [
+              0.42500000000000004,
+              0.0
+            ],
+            "size": [
+              0.25000000000000006,
+              0.8
+            ]
+          }
+        }
+      ]
+    },
+    "stair2": {
+      "name": "Staircase mask 2",
+      "shapes": [
+        {
+          "kind": "rectangle",
+          "operation": "merge",
+          "parameters": {
+            "center": [
+              0.455,
+              0.0
+            ],
+            "size": [
+              0.19000000000000006,
+              0.8
+            ]
+          }
+        }
+      ]
+    },
+    "stair3": {
+      "name": "Staircase mask 3",
+      "shapes": [
+        {
+          "kind": "rectangle",
+          "operation": "merge",
+          "parameters": {
+            "center": [
+              0.485,
+              0.0
+            ],
+            "size": [
+              0.13000000000000006,
+              0.8
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "name": "Source plate (n+ poly)",
+      "type": "deposit",
+      "material": "Poly-Si",
+      "parameters": {
+        "target": 0.1,
+        "mode": "planar"
+      },
+      "tool": "LPCVD"
+    },
+    {
+      "name": "Etch-stop oxide",
+      "type": "deposit",
+      "material": "SiO2",
+      "parameters": {
+        "target": 0.02,
+        "mode": "planar"
+      },
+      "tool": "CVD"
+    },
+    {
+      "name": "ON pair 1: SiO2",
+      "type": "deposit",
+      "material": "SiO2",
+      "parameters": {
+        "target": 0.025,
+        "mode": "planar"
+      },
+      "tool": "PECVD"
+    },
+    {
+      "name": "ON pair 1: SiN (sacrificial)",
+      "type": "deposit",
+      "material": "SiN",
+      "parameters": {
+        "target": 0.03,
+        "mode": "planar"
+      },
+      "tool": "PECVD"
+    },
+    {
+      "name": "ON pair 2: SiO2",
+      "type": "deposit",
+      "material": "SiO2",
+      "parameters": {
+        "target": 0.025,
+        "mode": "planar"
+      },
+      "tool": "PECVD"
+    },
+    {
+      "name": "ON pair 2: SiN (sacrificial)",
+      "type": "deposit",
+      "material": "SiN",
+      "parameters": {
+        "target": 0.03,
+        "mode": "planar"
+      },
+      "tool": "PECVD"
+    },
+    {
+      "name": "ON pair 3: SiO2",
+      "type": "deposit",
+      "material": "SiO2",
+      "parameters": {
+        "target": 0.025,
+        "mode": "planar"
+      },
+      "tool": "PECVD"
+    },
+    {
+      "name": "ON pair 3: SiN (sacrificial)",
+      "type": "deposit",
+      "material": "SiN",
+      "parameters": {
+        "target": 0.03,
+        "mode": "planar"
+      },
+      "tool": "PECVD"
+    },
+    {
+      "name": "ON pair 4: SiO2",
+      "type": "deposit",
+      "material": "SiO2",
+      "parameters": {
+        "target": 0.025,
+        "mode": "planar"
+      },
+      "tool": "PECVD"
+    },
+    {
+      "name": "ON pair 4: SiN (sacrificial)",
+      "type": "deposit",
+      "material": "SiN",
+      "parameters": {
+        "target": 0.03,
+        "mode": "planar"
+      },
+      "tool": "PECVD"
+    },
+    {
+      "name": "ON pair 5: SiO2",
+      "type": "deposit",
+      "material": "SiO2",
+      "parameters": {
+        "target": 0.025,
+        "mode": "planar"
+      },
+      "tool": "PECVD"
+    },
+    {
+      "name": "ON pair 5: SiN (sacrificial)",
+      "type": "deposit",
+      "material": "SiN",
+      "parameters": {
+        "target": 0.03,
+        "mode": "planar"
+      },
+      "tool": "PECVD"
+    },
+    {
+      "name": "ON pair 6: SiO2",
+      "type": "deposit",
+      "material": "SiO2",
+      "parameters": {
+        "target": 0.025,
+        "mode": "planar"
+      },
+      "tool": "PECVD"
+    },
+    {
+      "name": "ON pair 6: SiN (sacrificial)",
+      "type": "deposit",
+      "material": "SiN",
+      "parameters": {
+        "target": 0.03,
+        "mode": "planar"
+      },
+      "tool": "PECVD"
+    },
+    {
+      "name": "Cap oxide",
+      "type": "deposit",
+      "material": "SiO2",
+      "parameters": {
+        "target": 0.05,
+        "mode": "planar"
+      },
+      "tool": "PECVD"
+    },
+    {
+      "name": "Channel hole etch",
+      "type": "etch",
+      "parameters": {
+        "target": 0.41,
+        "directional_fraction": 1.0
+      },
+      "rates": {
+        "SiO2": 1,
+        "SiN": 1
+      },
+      "mask": "sketch:holes",
+      "tool": "HAR etcher"
+    },
+    {
+      "name": "Blocking oxide",
+      "type": "deposit",
+      "material": "SiO2",
+      "parameters": {
+        "target": 0.006,
+        "mode": "conformal"
+      },
+      "tool": "ALD"
+    },
+    {
+      "name": "Charge-trap nitride",
+      "type": "deposit",
+      "material": "SiN-trap",
+      "parameters": {
+        "target": 0.006,
+        "mode": "conformal"
+      },
+      "tool": "ALD"
+    },
+    {
+      "name": "Tunnel oxide",
+      "type": "deposit",
+      "material": "SiO2",
+      "parameters": {
+        "target": 0.005,
+        "mode": "conformal"
+      },
+      "tool": "ALD"
+    },
+    {
+      "name": "Poly-Si channel",
+      "type": "deposit",
+      "material": "Poly-Si",
+      "parameters": {
+        "target": 0.008,
+        "mode": "conformal"
+      },
+      "tool": "LPCVD"
+    },
+    {
+      "name": "Core oxide fill",
+      "type": "deposit",
+      "material": "SiO2",
+      "parameters": {
+        "target": 0.05,
+        "mode": "conformal"
+      },
+      "tool": "ALD"
+    },
+    {
+      "name": "CMP to cap",
+      "type": "cmp",
+      "parameters": {
+        "target_z": 0.5
+      }
+    },
+    {
+      "name": "Staircase trim-etch 1",
+      "type": "etch",
+      "parameters": {
+        "target": 0.105,
+        "directional_fraction": 1.0
+      },
+      "rates": {
+        "SiO2": 1,
+        "SiN": 1
+      },
+      "mask": "sketch:stair1",
+      "tool": "Trim etcher"
+    },
+    {
+      "name": "Staircase trim-etch 2",
+      "type": "etch",
+      "parameters": {
+        "target": 0.055,
+        "directional_fraction": 1.0
+      },
+      "rates": {
+        "SiO2": 1,
+        "SiN": 1
+      },
+      "mask": "sketch:stair2",
+      "tool": "Trim etcher"
+    },
+    {
+      "name": "Staircase trim-etch 3",
+      "type": "etch",
+      "parameters": {
+        "target": 0.055,
+        "directional_fraction": 1.0
+      },
+      "rates": {
+        "SiO2": 1,
+        "SiN": 1
+      },
+      "mask": "sketch:stair3",
+      "tool": "Trim etcher"
+    },
+    {
+      "name": "Staircase oxide fill",
+      "type": "deposit",
+      "material": "SiO2",
+      "parameters": {
+        "target": 0.25,
+        "mode": "planar"
+      },
+      "tool": "HDP CVD"
+    },
+    {
+      "name": "CMP after fill",
+      "type": "cmp",
+      "parameters": {
+        "target_z": 0.5
+      }
+    },
+    {
+      "name": "Slit etch",
+      "type": "etch",
+      "parameters": {
+        "target": 0.41,
+        "directional_fraction": 1.0
+      },
+      "rates": {
+        "SiO2": 1,
+        "SiN": 1
+      },
+      "mask": "sketch:slits",
+      "tool": "HAR etcher"
+    },
+    {
+      "name": "SiN removal (hot H3PO4)",
+      "type": "etch",
+      "parameters": {
+        "target": 0.27,
+        "directional_fraction": 0.0
+      },
+      "rates": {
+        "SiN": 1
+      },
+      "tool": "Wet bench"
+    },
+    {
+      "name": "High-k blocking Al2O3",
+      "type": "deposit",
+      "material": "Al2O3",
+      "parameters": {
+        "target": 0.003,
+        "mode": "conformal"
+      },
+      "tool": "ALD"
+    },
+    {
+      "name": "TiN barrier",
+      "type": "deposit",
+      "material": "TiN",
+      "parameters": {
+        "target": 0.003,
+        "mode": "conformal"
+      },
+      "tool": "ALD"
+    },
+    {
+      "name": "W word-line fill",
+      "type": "deposit",
+      "material": "W",
+      "parameters": {
+        "target": 0.015,
+        "mode": "conformal"
+      },
+      "tool": "CVD W"
+    },
+    {
+      "name": "W etch-back",
+      "type": "etch",
+      "parameters": {
+        "target": 0.04,
+        "directional_fraction": 0.0
+      },
+      "rates": {
+        "W": 1
+      },
+      "tool": "Dry etcher"
+    },
+    {
+      "name": "Slit liner oxide",
+      "type": "deposit",
+      "material": "SiO2",
+      "parameters": {
+        "target": 0.03,
+        "mode": "conformal"
+      },
+      "tool": "ALD"
+    },
+    {
+      "name": "Slit core (source line)",
+      "type": "deposit",
+      "material": "Poly-Si",
+      "parameters": {
+        "target": 0.03,
+        "mode": "conformal"
+      },
+      "tool": "LPCVD"
+    },
+    {
+      "name": "CMP after slit fill",
+      "type": "cmp",
+      "parameters": {
+        "target_z": 0.5
+      }
+    },
+    {
+      "name": "Word-line contact etch",
+      "type": "etch",
+      "parameters": {
+        "target": 0.25,
+        "directional_fraction": 1.0
+      },
+      "rates": {
+        "SiO2": 1,
+        "Al2O3": 1,
+        "TiN": 1
+      },
+      "mask": "sketch:wlc",
+      "tool": "Contact etcher"
+    },
+    {
+      "name": "Contact W fill",
+      "type": "deposit",
+      "material": "W",
+      "parameters": {
+        "target": 0.03,
+        "mode": "conformal"
+      },
+      "tool": "CVD W"
+    },
+    {
+      "name": "Final CMP",
+      "type": "cmp",
+      "parameters": {
+        "target_z": 0.5
+      }
+    }
+  ]
+}
