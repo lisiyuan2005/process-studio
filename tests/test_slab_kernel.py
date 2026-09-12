@@ -782,14 +782,12 @@ def test_a_planar_film_lands_on_every_surface_seen_from_above(kernel, project, s
     assert section.surface_z(0.8) == pytest.approx(0.6)
     assert device.material_at(0.0, 0.0, 0.55).name == "W"
     assert device.material_at(0.0, 0.0, 0.7) is None
-    # Nothing on the sidewall: the film comes from straight above.
-    assert device.material_at(0.21, 0.0, 0.75) is None
-    # Every column got the same thickness.
-    x0, y0, x1, y1 = device._state.bounds
-    assert device.volume("W") == pytest.approx((x1 - x0) * (y1 - y0) * 0.1, rel=1e-3)
+    # The wall faces the sky, so it is coated too: the hole narrows by t.
+    assert device.material_at(0.18, 0.0, 0.75).name == "W"
+    assert device.material_at(0.05, 0.0, 0.75) is None
 
 
-def test_a_planar_film_leaves_a_cavity_under_an_overhang_empty(kernel, project, sketches):
+def test_a_planar_film_leaves_a_recess_under_an_overhang_empty(kernel, project, sketches):
     materials = default_materials()
     state = kernel.initial_state(project, materials=materials)
     device = state.device
@@ -797,9 +795,10 @@ def test_a_planar_film_leaves_a_cavity_under_an_overhang_empty(kernel, project, 
     x0, y0, x1, y1 = device._state.bounds
     from shapely.geometry import box
 
-    # A recess in the right half, roofed over by a full-width layer.
+    # A lower layer ending at x = 0 under a roof that reaches to x = 0.2:
+    # the recess between them opens sideways onto the wafer to the right.
     device._state.add_slab(0.8, 0.9, {oxide: box(x0, y0, 0.0, y1)})
-    device._state.add_slab(0.9, 1.0, {oxide: box(x0, y0, x1, y1)})
+    device._state.add_slab(0.9, 1.0, {oxide: box(x0, y0, 0.2, y1)})
     covered = run(
         kernel,
         state,
@@ -807,10 +806,11 @@ def test_a_planar_film_leaves_a_cavity_under_an_overhang_empty(kernel, project, 
         project, sketches, materials,
     )
     device = covered.device
-    assert device.material_at(0.4, 0.0, 0.85) is None, "the recess is shadowed by its roof"
-    assert device.material_at(0.4, 0.0, 1.02).name == "W"
+    assert device.material_at(0.1, 0.0, 0.85) is None, "under the roof nothing arrives"
+    assert device.material_at(0.02, 0.0, 0.85) is None, "the recess's back wall is shadowed too"
+    assert device.material_at(0.4, 0.0, 0.82).name == "W", "the open wafer is coated"
+    assert device.material_at(0.22, 0.0, 0.95).name == "W", "the roof's riser faces the sky"
     assert device.material_at(-0.4, 0.0, 1.02).name == "W"
-    assert device.volume("W") == pytest.approx((x1 - x0) * (y1 - y0) * 0.05, rel=1e-3)
 
 
 def test_a_material_added_to_the_library_after_a_step_was_stored_is_known(

@@ -43,3 +43,45 @@ describe("cliEntries", () => {
     ]);
   });
 });
+
+import { parseScript, stripProgram, tokenize } from "./CliPanel";
+
+describe("tokenize", () => {
+  it("groups quoted words and keeps escaped quotes", () => {
+    expect(tokenize('steps add deposit --name "TiN liner" --set target=0.02')).toEqual([
+      "steps", "add", "deposit", "--name", "TiN liner", "--set", "target=0.02",
+    ]);
+    expect(tokenize(`lines add 'Across the stairs' 0 0 1 0`)).toEqual([
+      "lines", "add", "Across the stairs", "0", "0", "1", "0",
+    ]);
+    expect(tokenize('view section --named "say \\"hi\\"" -o a.png')).toEqual([
+      "view", "section", "--named", 'say "hi"', "-o", "a.png",
+    ]);
+  });
+});
+
+describe("stripProgram", () => {
+  it("drops the program and the root but keeps global flags", () => {
+    expect(stripProgram(tokenize("process-studio --root /x --json status"))).toEqual(["--json", "status"]);
+    expect(stripProgram(tokenize("/usr/bin/python -m process_studio.cli --root /x run"))).toEqual(["run"]);
+    expect(stripProgram(tokenize('& "C:\\Program Files\\PS\\worker.exe" --root C:\\nand -q run'))).toEqual([
+      "-q", "run",
+    ]);
+    expect(stripProgram(tokenize("steps list"))).toEqual(["steps", "list"]);
+  });
+});
+
+describe("parseScript", () => {
+  it("takes a JSON or YAML flow as a flow file", () => {
+    expect(parseScript('  {"name": "x", "steps": []} ')).toEqual({ kind: "flow", text: '{"name": "x", "steps": []}' });
+    const yaml = "name: 1T1C\nkernel: slab\nsteps:\n  - {name: A, type: cmp}";
+    expect(parseScript(yaml)).toEqual({ kind: "flow", text: yaml });
+  });
+
+  it("takes anything else as command lines, skipping comments and blanks", () => {
+    expect(parseScript("# set up\nsteps add cmp --name Polish\n\nprocess-studio --root /x run\n")).toEqual({
+      kind: "commands",
+      lines: [["steps", "add", "cmp", "--name", "Polish"], ["run"]],
+    });
+  });
+});

@@ -7,6 +7,7 @@ going quiet.
 
 from __future__ import annotations
 
+import io
 import json
 import math
 import shutil
@@ -81,6 +82,42 @@ def _cli_command() -> dict[str, Any]:
     if getattr(sys, "frozen", False):
         return {"command": [sys.executable], "packaged": True}
     return {"command": [sys.executable, "-m", "process_studio.cli"], "packaged": False}
+
+
+def _run_cli(
+    parameters: Mapping[str, Any], output: IO[str], cancel: threading.Event | None
+) -> dict[str, Any]:
+    """Run one command line of the CLI inside the worker, for the desktop's console.
+
+    ``argv`` is the command without the program (``["steps", "list"]``);
+    ``root`` is put in front as ``--root`` so the command works the open
+    workspace; ``stdin`` stands in for a file argument of ``-``. Progress
+    events go out on this request's own stream, so a ``run`` reports to
+    the shell exactly like one started from its Run button, and the
+    request's cancel flag stops it. The result carries the exit code,
+    both output streams and, when the root is a workspace afterwards, the
+    document as it now stands.
+    """
+    argv = parameters.get("argv")
+    if not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv):
+        raise InvalidRequest("run_cli requires argv, a non-empty list of strings.")
+    root = parameters.get("root")
+    stdin = parameters.get("stdin")
+    if stdin is not None and not isinstance(stdin, str):
+        raise InvalidRequest("run_cli stdin must be text.")
+    from ..cli import main as cli_main
+
+    out, err = io.StringIO(), io.StringIO()
+    arguments = [*(["--root", str(root)] if root else []), *argv]
+    code = cli_main(arguments, out=out, err=err, events=output, cancel=cancel, stdin=stdin)
+    result: dict[str, Any] = {"exitCode": code, "stdout": out.getvalue(), "stderr": err.getvalue()}
+    if root:
+        try:
+            repository = open_repository(Path(str(root)))
+            result["document"] = build_document(Path(str(root)), repository, load_project(repository))
+        except (WorkspaceError, InvalidRequest, OSError):
+            pass
+    return result
 
 
 def _describe() -> dict[str, Any]:
@@ -588,6 +625,8 @@ def dispatch(
             extent=(grid["x_min"], grid["x_max"], grid["y_min"], grid["y_max"]),
             keep=keep,
         )
+    if method == "run_cli":
+        return _run_cli(parameters, output, cancel)
     if method == "run_flow":
         root = _root(parameters)
 

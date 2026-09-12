@@ -86,7 +86,7 @@ worker 为每一步计算一个链式摘要，内容包括该步自带的工艺�
 
 ## 精度控制
 
-slab 内核有两种沉积模式：**Conformal** 在每个露出的表面上长同样厚的膜（侧壁、底、顶都是 t，外凸角变圆）；**Planar** 是从正上方落下来的膜，每个 XY 柱在它从上面看得见的最高固体上加 t，侧壁不长膜，所以台阶还是台阶（高低差保持），孔的底升高、深度不变，侧壁里挖进去的凹腔（悬垂下面）什么也落不到；空片上的 Planar 是一整块平板（衬底就是这样做的）。填平台阶用 Planar 再 CMP：每级台阶的地面都升高 t，抛到目标高度后台阶间就是填充材料。slab 工程有两个分辨率：z 步长（保形沉积和各向同性刻蚀沿高度的采样步长，即圆角肩部台阶的高度）和 XY 弧线弦高（平面内圆角折线逼近的最大偏差，决定每层轮廓的顶点数；留空则跟随 z 步长）。两者独立：z 调细只增加板层数，XY 调细只增加每层顶点数。RPC 的 `plan_grid` / `set_grid` 用 `targetSpacingNm` 和可选的 `targetSpacingXyNm`，命令行是 `window --spacing NM --spacing-xy NM`（0 表示跟随 z），流程文件是 `resolution_nm` 和 `resolution_xy_nm`。
+slab 内核有两种沉积模式：**Conformal** 在每个露出的表面上长同样厚的膜（侧壁、底、顶都是 t，外凸角变圆）；**Planar** 是从正上方落下来的膜（溅射、蒸发那种）：只在天空能直接照到的面上长，顶、底和朝上敞开的侧壁都长 t（所以孔会收窄、台阶的立面也有膜），而侧壁里横着挖进去的凹腔（悬垂下面）什么也落不到；台阶还是台阶（高低差保持），孔的底升高、深度不变。实现上就是保形膜按“这一点上方整列是否为空”裁掉被遮住的部分，z 采样和保形沉积相同；空片上的 Planar 是一整块平板（衬底就是这样做的）。填平台阶用 Planar 再 CMP：每级台阶的地面都升高 t，抛到目标高度后台阶间就是填充材料。slab 工程有两个分辨率：z 步长（保形沉积和各向同性刻蚀沿高度的采样步长，即圆角肩部台阶的高度）和 XY 弧线弦高（平面内圆角折线逼近的最大偏差，决定每层轮廓的顶点数；留空则跟随 z 步长）。两者独立：z 调细只增加板层数，XY 调细只增加每层顶点数。RPC 的 `plan_grid` / `set_grid` 用 `targetSpacingNm` 和可选的 `targetSpacingXyNm`，命令行是 `window --spacing NM --spacing-xy NM`（0 表示跟随 z），流程文件是 `resolution_nm` 和 `resolution_xy_nm`。
 
 界面上有两处，含义完全不同：
 
@@ -121,7 +121,7 @@ slab 内核有两种沉积模式：**Conformal** 在每个露出的表面上长�
 
 Recipe 有一个 `group` 字段：Recipe Library 先按工艺类型（Deposition、Etch、CMP、No geometry change）分顶层，再按 `group` 路径分组，斜杠表示子组（`ALD/Oxides`）。在 Recipe 的 Group 框里输入名字即新建组，不需要单独管理组；Inspector 的模板下拉按同样的组分段。Excel 导出多一列 Group，导入时没有这列也能读。
 
-顶栏 **CLI** 打开一个面板，把当前工作目录对应的命令行列出来（`status`、`run`、`run --through N`、当前选中步骤沿当前截面线的 `view section`、`view top`、`view mesh`、`flow dump/apply`），每条带 Copy 按钮，直接粘到终端里跑。程序路径来自 worker 的 `describe`（`cli` 字段）：打包版是 worker 可执行文件本身，源码运行是 worker 所用解释器加 `-m process_studio.cli`；路径带空格会加引号，Windows 路径的程序加 `&` 调用符。命令走的是同一个 worker、同一个工作目录，桌面里改的东西命令行立刻能看到，反过来也一样。
+顶栏 **CLI** 打开一个面板。上半是控制台：把命令粘进去（一行一条，`#` 开头是注释，行首带不带 `process-studio`、worker 路径、`python -m process_studio.cli`、`--root` 都行，会剥掉）或者整个流程文件（JSON 以 `{` 开头，YAML 看 `name:`/`steps:` 这类键），Run 或 Ctrl+Enter 执行。命令在 worker 进程里跑（RPC `run_cli`：`argv`、可选 `stdin`，返回退出码、两路输出和之后的 document），走的是同一个 CLI 代码，`--root` 由界面填成当前工作目录。流程文件走 `flow apply -`（`-` 表示从 stdin 读），勾着「Run the flow after applying」就接着 `run`。**联动**：执行前先保存界面上未存的改动；每条命令返回的 document 直接替换界面上的（步骤、材料、状态立刻更新，视图缓存清空）；`run` 的进度事件走的是这个请求自己的事件流，所以步骤卡的运行/完成标记、日志、Stop 按钮和界面自己点 Run 完全一样。下半把当前状态对应的命令行列出来（`status`、`run`、`run --through N`、当前选中步骤沿当前截面线的 `view section`、`view top`、`view mesh`、`flow dump/apply`），每条带 Copy 按钮，直接粘到终端里跑。程序路径来自 worker 的 `describe`（`cli` 字段）：打包版是 worker 可执行文件本身，源码运行是 worker 所用解释器加 `-m process_studio.cli`；路径带空格会加引号，Windows 路径的程序加 `&` 调用符。命令走的是同一个 worker、同一个工作目录，桌面里改的东西命令行立刻能看到，反过来也一样。
 
 工具是一个库（`tools` 表，document 里的 `tools`）：每个工具有名字、`group` 路径和备注，顶栏 **Tools** 打开编辑器增删改组。Step 和 Recipe 的 Tool 字段是分组下拉，最后一项「Other (type a name)…」可以手填；填的名字不在库里也照样保存为文本，删除库里的工具不改动已引用它的步骤。命令行 `tools list|add NAME --group G|rm NAME`。
 

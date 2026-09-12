@@ -171,6 +171,15 @@ export interface WorkspaceDocument {
   stepStatuses: Record<string, Record<string, StepStatus>>;
 }
 
+/** One command line run inside the worker, as the CLI would have run it. */
+export interface CliResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  /** The workspace as it stands after the command, when it still is one. */
+  document?: WorkspaceDocument;
+}
+
 export interface RunResult {
   branchId: string;
   executedStepIds: string[];

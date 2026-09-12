@@ -616,3 +616,11 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .cli-row small { color: #65727f; font-size: 9px; }
 .cli-row code { display: block; padding: 7px 10px; border: 1px solid #d5dde4; border-radius: 6px; background: #f3f6f8; color: #223040; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10px; line-height: 1.45; white-space: pre-wrap; word-break: break-all; user-select: all; }
 .cli-row .secondary-button { min-width: 84px; height: 31px; padding: 0 10px; }
+.cli-console { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px 12px; border: 1px solid #d5dde4; border-radius: 8px; background: #f8fafb; }
+.cli-console-head { display: flex; align-items: center; gap: 12px; }
+.cli-console-head .section-label { margin-right: auto; }
+.cli-check { display: flex; align-items: center; gap: 5px; color: #65727f; font-size: 9.5px; }
+.cli-console .secondary-button, .cli-console .cli-run { height: 28px; min-width: 70px; padding: 0 10px; font-size: 10px; }
+.cli-script { min-height: 92px; padding: 8px 10px; border: 1px solid #d5dde4; border-radius: 6px; background: #ffffff; color: #223040; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10px; line-height: 1.45; resize: vertical; }
+.cli-script::placeholder { color: #9aa7b3; }
+.cli-output { max-height: 220px; min-height: 64px; margin: 0; padding: 8px 10px; overflow: auto; border-radius: 6px; background: #0f151b; color: #c8d3dc; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }

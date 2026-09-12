@@ -24,8 +24,17 @@ PROCESS_TYPES = ("deposit", "etch", "cmp", "no_geometry")
 
 
 def read_flow(path: Path) -> dict[str, Any]:
-    suffix = path.suffix.lower()
-    text = path.read_text(encoding="utf-8")
+    return parse_flow(path.read_text(encoding="utf-8"), path.suffix.lower(), path.name)
+
+
+def parse_flow(text: str, suffix: str, name: str = "the flow") -> dict[str, Any]:
+    """A flow document from its text; ``suffix`` says which syntax, "" guesses.
+
+    Text with no suffix (pasted into the desktop's console, or piped in as
+    ``flow apply -``) is JSON when it opens with a brace and YAML otherwise.
+    """
+    if not suffix:
+        suffix = ".json" if text.lstrip().startswith("{") else ".yaml"
     if suffix in (".yaml", ".yml"):
         try:
             import yaml
@@ -41,9 +50,9 @@ def read_flow(path: Path) -> dict[str, Any]:
     elif suffix == ".json":
         loaded = json.loads(text)
     else:
-        raise InvalidRequest(f"{path.name}: a flow file is .json, .yaml, .yml or .toml.")
+        raise InvalidRequest(f"{name}: a flow file is .json, .yaml, .yml or .toml.")
     if not isinstance(loaded, Mapping):
-        raise InvalidRequest(f"{path.name}: the flow file must be an object at the top level.")
+        raise InvalidRequest(f"{name}: the flow file must be an object at the top level.")
     return dict(loaded)
 
 

@@ -262,3 +262,15 @@ def test_the_3d_nand_example_flow_applies(tmp_path: Path):
     assert "SiN removal (hot H3PO4)" in names and names[-1] == "Final CMP"
     assert {sketch["id"] for sketch in as_json("sketch", "list", root=root)} >= {"holes", "slits", "wlc", "stair1"}
     assert {m["name"] for m in as_json("materials", "list", root=root)} >= {"Poly-Si", "SiN-trap", "SiN", "W"}
+
+
+def test_a_flow_can_be_applied_from_stdin(workspace: Path):
+    out, err = io.StringIO(), io.StringIO()
+    flow = json.dumps({"name": "Pasted", "kernel": "slab", "steps": [{"name": "Polish", "type": "cmp", "parameters": {"target_z": 0.0}}]})
+    code = main(["--root", str(workspace), "flow", "apply", "-"], out=out, err=err, stdin=flow)
+    assert code == EXIT_OK, err.getvalue()
+    assert "Polish" in out.getvalue()
+    # argparse's own messages reach the hosted streams, not the process's.
+    code = main(["--root", str(workspace), "steps", "bogus"], out=out, err=err)
+    assert code == EXIT_USAGE
+    assert "invalid choice: 'bogus'" in err.getvalue()

@@ -12,6 +12,7 @@ import io
 import json
 import os
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Callable, IO, Mapping, Sequence
 
@@ -101,12 +102,22 @@ class Session:
         quiet: bool = False,
         out: IO[str] | None = None,
         err: IO[str] | None = None,
+        events: IO[str] | None = None,
+        cancel: threading.Event | None = None,
+        stdin: str | None = None,
     ) -> None:
         self._root = root
         self.json_output = json_output
         self.quiet = quiet
         self.out = out or sys.stdout
         self.err = err or sys.stderr
+        #: Where the worker's progress events go. The terminal prints them
+        #: on stderr; the desktop's console hands its own event stream in, so
+        #: a run started there reports to the shell like one it started itself.
+        self.events = events
+        self.cancel = cancel
+        #: Text standing in for a file argument of ``-`` (a pasted flow file).
+        self.stdin = stdin
 
     @property
     def root(self) -> Path:
@@ -117,7 +128,8 @@ class Session:
     # -- the worker ---------------------------------------------------------
 
     def call(self, method: str, **params: Any) -> Any:
-        return dispatch({"method": method, "params": params}, EventPrinter(self.err, self.quiet))
+        sink = self.events if self.events is not None else EventPrinter(self.err, self.quiet)
+        return dispatch({"method": method, "params": params}, sink, cancel=self.cancel)
 
     def document(self) -> dict[str, Any]:
         return self.call("open_workspace", root=str(self.root))

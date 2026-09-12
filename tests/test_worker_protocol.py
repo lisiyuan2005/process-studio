@@ -973,3 +973,24 @@ def test_recipes_have_groups_and_tools_have_a_library(workspace, tmp_path):
     call("create_workspace", root=str(fresh), name="Fresh")
     imported = call("import_recipes_xlsx", root=str(fresh), source=str(workbook))["document"]
     assert {recipe["name"]: recipe["group"] for recipe in imported["recipes"]}["Si Directional Trench Etch"] == "ALD/Oxides"
+
+
+def test_run_cli_runs_a_command_inside_the_worker(tmp_path):
+    root = tmp_path / "console"
+    made = call("run_cli", argv=["new", str(root), "--kernel", "slab"])
+    assert made["exitCode"] == 0 and "document" not in made
+    flow = json.dumps({"name": "Pasted", "kernel": "slab", "steps": [{"name": "Polish", "type": "cmp", "parameters": {"target_z": 0.0}}]})
+    applied = call("run_cli", root=str(root), argv=["flow", "apply", "-"], stdin=flow)
+    assert applied["exitCode"] == 0, applied["stderr"]
+    assert [step["name"] for step in applied["document"]["branches"][0]["steps"]] == ["Polish"]
+    ran, events = call_with_events("run_cli", root=str(root), argv=["run"])
+    assert ran["exitCode"] == 0 and "Ran 1 step(s)" in ran["stdout"]
+    # The run's progress went out on the request's own stream, like a run_flow.
+    assert any(event.get("kind") == "progress" and event.get("stepId") for event in events)
+    assert list(ran["document"]["stepStatuses"].values())[0] == {
+        ran["document"]["branches"][0]["steps"][0]["id"]: "clean"
+    }
+    failed = call("run_cli", root=str(root), argv=["steps", "bogus"])
+    assert failed["exitCode"] == 2 and "invalid choice" in failed["stderr"]
+    with pytest.raises(InvalidRequest):
+        call("run_cli", root=str(root), argv=[])

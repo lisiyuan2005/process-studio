@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type { DesktopBridge, RunOptions, ViewRequest } from "./bridge";
 import type {
+  CliResult,
   GdsImportResult,
   GridPlan,
   MaskKeep,
@@ -107,6 +108,10 @@ export class TauriBridge implements DesktopBridge {
 
   cancel(requestId: string): Promise<void> {
     return invoke<void>("worker_cancel", { requestId });
+  }
+
+  runCli(root: string, argv: string[], stdin?: string, requestId?: string): Promise<CliResult> {
+    return call<CliResult>("run_cli", { root, argv, stdin: stdin ?? null }, requestId);
   }
 
   getSurfaces(root: string, request: ViewRequest): Promise<SurfaceDocument> {

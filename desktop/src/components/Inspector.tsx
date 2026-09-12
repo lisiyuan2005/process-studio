@@ -293,7 +293,9 @@ export function Inspector({
     setSaveName(step?.name ?? "");
     setLibraryRecipeId("");
     setParameterToAdd("");
-  }, [step?.id]);
+    // The name changes under the same id when a CLI command or a pasted
+    // flow rewrites the step; the field must show what is stored.
+  }, [step?.id, step?.name]);
 
   const matchingRecipes = useMemo(
     () => recipes.filter((recipe) => recipe.processType === step?.processType),

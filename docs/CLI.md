@@ -9,7 +9,7 @@ pip install -e .            # 在仓库根目录；装完就有 process-studio �
 pip install -e ".[yaml]"    # 流程文件要用 YAML 的话
 ```
 
-打包好的桌面版也带着它：worker 二进制不带参数时是 RPC 服务，带参数时就是这个命令行。桌面顶栏的 **CLI** 按钮会把当前工作目录的常用命令连同程序的完整路径列出来，点 Copy 粘到终端就能跑。
+打包好的桌面版也带着它：worker 二进制不带参数时是 RPC 服务，带参数时就是这个命令行。桌面顶栏的 **CLI** 按钮打开一个控制台：把命令（一行一条）或整个流程文件粘进去点 Run，就在桌面打开的工作目录里执行，界面跟着更新；下面还把当前状态对应的常用命令连同程序的完整路径列出来，点 Copy 粘到终端就能跑。
 
 ```bash
 # macOS
@@ -50,7 +50,7 @@ cd ~/devices/dram
 | `tools list\|add NAME [--group G] [--notes N]\|rm NAME` | 工具库；分组用斜杠分子组，如 `Etch/Dry` |
 | `sketch list\|show ID\|export ID FILE\|import ID FILE` | Quick Sketch |
 | `lines list\|add NAME X0 Y0 X1 Y1\|rm NAME` | 保存的 AA–BB 截面线；`view section --named NAME` 沿其中一条切 |
-| `flow dump [FILE]` / `flow apply FILE` | 整条流程写成一个文件 / 按文件设置工作目录 |
+| `flow dump [FILE]` / `flow apply FILE` | 整条流程写成一个文件 / 按文件设置工作目录；`FILE` 写 `-` 从 stdin 读（JSON 以 `{` 开头，否则按 YAML） |
 | `log [-n N]` | worker 记录的运行日志 |
 | `rpc METHOD [JSON\|@file]` | 直接调 RPC 方法，给脚本用 |
 
@@ -84,7 +84,7 @@ done
 
 ## 流程文件
 
-`flow dump flow.yaml` 把工程写成下面这样；`flow apply flow.yaml` 反过来。`apply` 时步骤按位置保留身份：只改了第 4 步参数的文件，重新运行时前 3 步直接复用，和在桌面里改一样。`--root DIR` 指向还不存在的目录时会先按文件里的 `kernel` 建好工作目录。
+`flow dump flow.yaml` 把工程写成下面这样；`flow apply flow.yaml` 反过来（`cat flow.json | process-studio flow apply -` 也行）。`apply` 时步骤按位置保留身份：只改了第 4 步参数的文件，重新运行时前 3 步直接复用，和在桌面里改一样。`--root DIR` 指向还不存在的目录时会先按文件里的 `kernel` 建好工作目录。
 
 ```yaml
 name: 1T1C

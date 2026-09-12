@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import json
 import sys
+import threading
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import IO, Any, Mapping, Sequence
 
 from ..models import new_id
 from ..worker.errors import Cancelled, InvalidRequest, WorkerError, WorkspaceError
@@ -21,6 +23,7 @@ from .flowfile import (
     apply_flow,
     flow_from_document,
     parse_mask,
+    parse_flow,
     read_flow,
     write_flow,
 )
@@ -718,8 +721,17 @@ def cmd_flow_dump(session: Session, args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _flow_argument(session: Session, args: argparse.Namespace) -> dict[str, Any]:
+    """The flow file named on the command line, or the text given as ``-``."""
+    if args.file == "-":
+        if session.stdin is None:
+            session.stdin = sys.stdin.read()
+        return parse_flow(session.stdin, "", "the flow on stdin")
+    return read_flow(Path(args.file))
+
+
 def cmd_flow_apply(session: Session, args: argparse.Namespace) -> int:
-    flow = read_flow(Path(args.file))
+    flow = _flow_argument(session, args)
     saved = apply_flow(session, flow)
     session.emit(Session.steps(saved), lambda: summarize_project(saved) + [""] + table(STEP_HEADER, step_rows(saved)))
     return EXIT_OK
@@ -968,10 +980,33 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    out: IO[str] | None = None,
+    err: IO[str] | None = None,
+    events: IO[str] | None = None,
+    cancel: threading.Event | None = None,
+    stdin: str | None = None,
+) -> int:
+    """Run one command; returns its exit code.
+
+    The keyword arguments let another program host the CLI: the desktop's
+    console runs commands inside the worker with its output captured, its
+    progress events on the worker's own event stream, its cancel flag and
+    the pasted text standing in for stdin.
+    """
     parser = build_parser()
-    args = parser.parse_args(argv)
-    session = Session(None, json_output=args.json, quiet=args.quiet)
+    try:
+        with contextlib.redirect_stdout(out or sys.stdout), contextlib.redirect_stderr(err or sys.stderr):
+            args = parser.parse_args(argv)
+    except SystemExit as exit_code:
+        # argparse has printed its message; a hosted call must not exit the host.
+        return int(exit_code.code or 0) if isinstance(exit_code.code, int) else EXIT_USAGE
+    session = Session(
+        None, json_output=args.json, quiet=args.quiet, out=out, err=err,
+        events=events, cancel=cancel, stdin=stdin,
+    )
     try:
         if getattr(args, "needs_root", True):
             try:
@@ -981,7 +1016,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 # workspace creates it, so the file can stand up a project.
                 if getattr(args, "creates", False) and args.root:
                     root = Path(args.root).expanduser().resolve()
-                    kernel = args.kernel or read_flow(Path(args.file)).get("kernel")
+                    kernel = args.kernel or _flow_argument(session, args).get("kernel")
                     session.call("create_workspace", root=str(root), name=root.name, kernel=kernel)
                     session.note(f"Created workspace {root}")
                     session._root = root

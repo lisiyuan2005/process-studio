@@ -1,4 +1,5 @@
 import type {
+  CliResult,
   GdsImportResult,
   GridPlan,
   MaskKeep,
@@ -49,6 +50,12 @@ export interface DesktopBridge {
   runFlow(root: string, options: RunOptions, requestId?: string): Promise<RunResult>;
   /** Stop a run: a queued one is refused at once, a running one at its next step. */
   cancel(requestId: string): Promise<void>;
+  /**
+   * Run one CLI command (without the program) against `root`, inside the
+   * worker. `stdin` stands in for a file argument of `-`; `requestId` lets
+   * `cancel` stop a `run` started this way.
+   */
+  runCli(root: string, argv: string[], stdin?: string, requestId?: string): Promise<CliResult>;
   getSurfaces(root: string, request: ViewRequest): Promise<SurfaceDocument>;
   getSection(
     root: string,

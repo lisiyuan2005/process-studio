@@ -1,5 +1,6 @@
 import type { DesktopBridge, RunOptions, ViewRequest } from "./bridge";
 import type {
+  CliResult,
   GdsImportResult,
   MaskPreview,
   ProcessStep,
@@ -131,6 +132,10 @@ export class BrowserBridge implements DesktopBridge {
 
   async cancel(): Promise<void> {
     // Nothing runs in the preview, so there is nothing to stop.
+  }
+
+  async runCli(): Promise<CliResult> {
+    throw new Error(NO_KERNEL);
   }
 
   async getSurfaces(_root: string, _request: ViewRequest): Promise<SurfaceDocument> {

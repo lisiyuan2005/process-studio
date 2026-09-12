@@ -63,6 +63,7 @@ import {
   upsertRecipe,
 } from "./domain/project";
 import type {
+  CliResult,
   ParameterValue,
   QuickSketch,
   SectionAxis,
@@ -158,6 +159,13 @@ export default function App() {
   // The selected step as the worker-event listener sees it; the listener is
   // attached once and must not close over a stale value.
   const selectedStepRef = useRef("");
+  // The document and busy flag as they are now, for the console: it runs
+  // several commands from one click, and each must see what the previous
+  // one left, not what the click closed over.
+  const documentRef = useRef<WorkspaceDocument | null>(null);
+  documentRef.current = document;
+  const busyRef = useRef(false);
+  busyRef.current = busy;
   // Bumped when a step the view is showing finishes inside a run, so the
   // view is fetched again although nothing else about the request changed.
   const [viewNonce, setViewNonce] = useState(0);
@@ -583,6 +591,49 @@ export default function App() {
     } finally {
       if (runningStepId.current) forgetViews(runningStepId.current);
       runRequestId.current = undefined;
+      setBusy(false);
+    }
+  };
+
+  // One CLI command against the open workspace, run inside the worker. The
+  // document it hands back replaces what is on screen, so a `steps add` or
+  // a pasted flow shows up at once, and a `run` reports through the same
+  // progress events as the Run button (statuses, running marks, views).
+  const runCli = async (argv: string[], stdin?: string): Promise<CliResult> => {
+    const current = documentRef.current;
+    if (!current) throw new Error("No workspace is open.");
+    if (busyRef.current) throw new Error("The worker is busy; wait for the current run to finish.");
+    setBusy(true);
+    busyRef.current = true;
+    runningStepId.current = undefined;
+    const requestId = `cli-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    runRequestId.current = requestId;
+    try {
+      // The command works what is stored, so pending edits go first.
+      const saved = await bridge.saveDocument(current);
+      skipNextAutosave.current = true;
+      documentRef.current = saved;
+      setDocumentState(saved);
+      setSaveState("saved");
+      const result = await bridge.runCli(saved.root, argv, stdin, requestId);
+      if (result.document) {
+        viewCache.current.clear();
+        skipNextAutosave.current = true;
+        documentRef.current = result.document;
+        setDocumentState(result.document);
+        setSaveState("saved");
+        const after = getSteps(result.document);
+        if (!after.some((step) => step.id === selectedStepRef.current)) {
+          setSelectedStepId(after[after.length - 1]?.id ?? "");
+        }
+        setViewNonce((nonce) => nonce + 1);
+      }
+      return result;
+    } finally {
+      if (runningStepId.current) forgetViews(runningStepId.current);
+      runningStepId.current = undefined;
+      runRequestId.current = undefined;
+      busyRef.current = false;
       setBusy(false);
     }
   };
@@ -1159,6 +1210,9 @@ export default function App() {
           steps={steps}
           selectedStepId={selectedStepId}
           sectionLine={sectionLine}
+          busy={busy}
+          onRun={runCli}
+          onStop={stopRun}
           onClose={() => setShowCli(false)}
         />
       )}

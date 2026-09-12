@@ -116,7 +116,7 @@ class Device:
         state = self._state.copy()
         if mode == "planar":
             before = state.volume(mat)
-            z0, z1 = deposit_planar(state, mat, t)
+            z0, z1 = deposit_planar(state, mat, t, self.conformal_resolution, self.xy_resolution)
             volume = state.volume(mat) - before
         else:
             z0, z1, volume = deposit_conformal(

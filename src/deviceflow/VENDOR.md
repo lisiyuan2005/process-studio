@@ -59,10 +59,10 @@ under the MIT license in `LICENSE`.
   so a filled and polished stack fed GEOS 300k coordinates of coincident
   lines and ran out of memory; the same arrangement from 7k unique edges
   takes 19 MB.
-- `process/planar.py`: planar deposition lands the film from straight
-  above instead of laying one blanket slab on the top plane. Every XY
-  column gets the thickness on the highest solid it shows to the top, so
-  a step stays a step, a hole keeps its depth while its floor rises, and a
-  recess under an overhang stays empty; the blanket slab remains for an
-  empty device (the substrate). The film pieces go through the same
-  `apply_film` merge as a conformal film.
+- `process/planar.py`, `process/conformal.py`: planar deposition is the
+  film that arrives from straight above instead of one blanket slab on
+  the top plane: the conformal film with `from_above`, which cuts each z
+  sample to the columns with no solid anywhere above it. Tops, floors and
+  walls that face the sky are coated, a recess under an overhang stays
+  empty, a step stays a step and a hole keeps its depth while its floor
+  rises. The blanket slab remains for an empty device (the substrate).

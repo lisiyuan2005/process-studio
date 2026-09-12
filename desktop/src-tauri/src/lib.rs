@@ -21,6 +21,7 @@ const WORKER_METHODS: &[&str] = &[
     "save_sketch",
     "preview_mask",
     "run_flow",
+    "run_cli",
     "get_surfaces",
     "get_section",
     "get_top_view",
