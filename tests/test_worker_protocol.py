@@ -994,3 +994,20 @@ def test_run_cli_runs_a_command_inside_the_worker(tmp_path):
     assert failed["exitCode"] == 2 and "invalid choice" in failed["stderr"]
     with pytest.raises(InvalidRequest):
         call("run_cli", root=str(root), argv=[])
+
+
+def test_the_top_view_reports_height_levels_when_asked(workspace):
+    root = str(workspace)
+    document = call("open_workspace", root=root)
+    branch = document["branches"][0]
+    call("run_flow", root=root, branchId=branch["id"])
+    plain = call("get_top_view", root=root, branchId=branch["id"], stepId=branch["steps"][-1]["id"])
+    assert plain["shading"] == "material"
+    shaded = call(
+        "get_top_view", root=root, branchId=branch["id"], stepId=branch["steps"][-1]["id"], shading="height"
+    )
+    assert shaded["shading"] == "height"
+    assert shaded["levels"] and all({"z", "color"} <= set(level) for level in shaded["levels"])
+    assert [level["z"] for level in shaded["levels"]] == sorted(level["z"] for level in shaded["levels"])
+    with pytest.raises(InvalidRequest):
+        call("get_top_view", root=root, branchId=branch["id"], stepId=branch["steps"][-1]["id"], shading="rainbow")

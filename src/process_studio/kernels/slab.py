@@ -35,6 +35,7 @@ from deviceflow.mask import Mask
 from deviceflow.state_io import decode_state, encode_state
 
 from ..layout.quick_sketch import QuickSketch, SketchShape
+from ..visualization import height_levels
 from ..models import MaterialDefinition, ProcessStep, ProcessType, ProjectDefinition, Recipe
 from .base import KernelInfo
 
@@ -657,6 +658,41 @@ def _top_view_shapes(top_view):
     return [(rings, name) for rings, _color, name in top_view._shapes()]
 
 
+def _rings(geometry) -> list[list[tuple[float, float]]]:
+    """Exterior then holes of every polygon, the way ``_raster`` fills them."""
+    from shapely.geometry.polygon import orient
+
+    shapes = []
+    parts = geometry.geoms if hasattr(geometry, "geoms") else [geometry]
+    for polygon in parts:
+        if polygon.is_empty or polygon.geom_type != "Polygon":
+            continue
+        polygon = orient(polygon)
+        shapes.append(
+            [list(polygon.exterior.coords[:-1])] + [list(r.coords[:-1]) for r in polygon.interiors]
+        )
+    return shapes
+
+
+def _height_shapes(top_view, z_offset: float):
+    """The top view split by surface height: (shapes, colours, legend levels).
+
+    Every visible piece carries the height of the slab it belongs to, so
+    the levels are exact: one per distinct plane the sky can see.
+    """
+    by_height: dict[float, list] = {}
+    for _name, z_top, region in top_view._pieces:
+        by_height.setdefault(round(float(z_top), 9), []).append(region)
+    levels = height_levels([z + z_offset for z in by_height])
+    shapes, colors = [], {}
+    for index, level in enumerate(levels):
+        name = f"z={level['z']:.6g}"
+        colors[name] = level["color"]
+        union = shapely.unary_union(by_height[round(level["z"] - z_offset, 9)])
+        shapes.extend((rings, name) for rings in _rings(union))
+    return shapes, colors, levels
+
+
 class SlabKernel:
     """Exact slab geometry, from the DeviceFlow 0.2.0 core."""
 
@@ -953,19 +989,23 @@ class SlabKernel:
         colors: Mapping[str, str],
         *,
         project: ProjectDefinition,
+        shading: str = "material",
     ) -> dict[str, Any]:
         device = state.device
         x_min, y_min, x_max, y_max = device.bounds
         extent = (x_min, x_max, y_min, y_max)
-        rgb = _raster(
-            _top_view_shapes(device.top_view()),
-            colors,
-            extent,
-            _pixels_per_um(extent, 1),
-        )
+        top_view = device.top_view()
+        levels: list[dict[str, Any]] = []
+        if shading == "height":
+            shapes, colors, levels = _height_shapes(top_view, state.z_offset)
+        else:
+            shapes = _top_view_shapes(top_view)
+        rgb = _raster(shapes, colors, extent, _pixels_per_um(extent, 1))
         return {
             "image": _png(rgb),
             "exact": True,
+            "shading": "height" if shading == "height" else "material",
+            "levels": levels,
             "width": int(rgb.shape[1]),
             "height": int(rgb.shape[0]),
             "extent": {

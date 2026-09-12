@@ -43,7 +43,7 @@ cd ~/devices/dram
 | `run [--through STEP] [--force]` | 运行；结果还有效的步骤直接复用 |
 | `window [--x A B] [--y A B] [--z A B] [--spacing NM] [--spacing-xy NM]` | 看或改工程窗口和精度（改动会丢弃全部结果）；slab 工程 `--spacing` 是 z 步长，`--spacing-xy` 是 XY 弧线弦高，0 表示跟随 z |
 | `view section --step STEP [--axis x\|y --at UM \| --line X0 Y0 X1 Y1] -o cut.png` | 截面 PNG |
-| `view top --step STEP -o top.png` | 俯视图 PNG |
+| `view top --step STEP [--color-by material\|height] -o top.png` | 俯视图 PNG；`--color-by height` 按表面高度着色，`--json` 里的 `levels` 是每级高度和颜色 |
 | `view mesh --step STEP -o step.glb` | 3D 表面，.glb / .gltf / .obj / .stl / .ply |
 | `materials list\|add NAME [--category --color --opacity]\|rm NAME` | 材料库 |
 | `recipes list\|export FILE.xlsx\|import FILE.xlsx` | Recipe 库，按类型和分组列出 |

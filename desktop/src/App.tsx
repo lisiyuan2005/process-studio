@@ -64,6 +64,7 @@ import {
 } from "./domain/project";
 import type {
   CliResult,
+  TopShading,
   ParameterValue,
   QuickSketch,
   SectionAxis,
@@ -129,6 +130,8 @@ export default function App() {
   const [sketchBackdrop, setSketchBackdrop] = useState<TopViewDocument>();
   const [mode, setMode] = useState<ViewMode>("surfaces");
   const [interpolation, setInterpolation] = useState(1);
+  // Top view coloured by the topmost material, or by surface height.
+  const [topShading, setTopShading] = useState<TopShading>("material");
   const [sectionAxis, setSectionAxis] = useState<SectionAxis>("y");
   // Which of the project's saved AA–BB lines the section follows.
   const [activeLineId, setActiveLineId] = useState<string | null>(null);
@@ -492,7 +495,7 @@ export default function App() {
           if (next.index !== sectionIndex) setSectionIndex(next.index);
         }
       } else {
-        const key = `top:${target}`;
+        const key = `top:${target}:${topShading}`;
         const hit = cached<TopViewDocument>(key);
         if (hit) {
           setTopView(hit);
@@ -500,7 +503,7 @@ export default function App() {
           return;
         }
         setViewLoading(true);
-        const next = await bridge.getTopView(root, request);
+        const next = await bridge.getTopView(root, { ...request, shading: topShading });
         if (token !== viewToken.current) return;
         setTopView(remember(key, next));
       }
@@ -523,6 +526,7 @@ export default function App() {
     selectedStatus,
     mode,
     interpolation,
+    topShading,
     sectionAxis,
     sectionIndex,
     sectionLine,
@@ -1025,6 +1029,8 @@ export default function App() {
           maximumInterpolation={capabilities?.rendering.maximumInterpolation ?? 4}
           interpolation={interpolation}
           onInterpolationChange={setInterpolation}
+          topShading={topShading}
+          onTopShadingChange={setTopShading}
           sectionAxis={sectionAxis}
           onSectionAxisChange={(axis) => {
             setSectionAxis(axis);

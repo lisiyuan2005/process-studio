@@ -132,5 +132,6 @@ class LevelSetKernel:
         colors: Mapping[str, str],
         *,
         project: ProjectDefinition,
+        shading: str = "material",
     ) -> dict[str, Any]:
-        return top_view_image(state, colors)
+        return top_view_image(state, colors, shading=shading)

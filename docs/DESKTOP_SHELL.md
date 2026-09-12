@@ -92,6 +92,7 @@ slab 内核有两种沉积模式：**Conformal** 在每个露出的表面上长�
 
 - **Project window**（同一个对话框）：x、y、z 范围，单位 µm。晶圆表面固定在 z = 0，所以 z 范围必须跨过 0；每轴最大 200 µm，超过多半是把 nm 当 µm 填了。改窗口和改网格一样丢弃全部已存结果；slab 工程的衬底厚度就是窗口的深度 |zMin|。`plan_grid` 和 `set_grid` 都接受 `bounds`，level set 工程会在新窗口上重新搜索能整除三个跨度的格子。
 - **Simulation grid / Geometry resolution**（顶栏间距按钮）：改的是真实计算精度。level set 工程改的是网格；slab 工程改的是保形沉积的行走步长，对话框相应地不显示节点数和内存，因为该内核没有场。填目标间距（nm）或选预设，worker 用 `grid_for_target_spacing` 搜索能整除三个方向跨度的最近格子，因此三向间距永远相等，不需要手填 nx/ny/nz。对话框实时显示提议的格子形状、节点数、状态体积和运行所需内存，超过 `MAXIMUM_NODES`（2000 万）会拒绝。应用后会丢弃全部已存结果。
+- **Colour by**（俯视图底栏）：俯视图按每列最上层材料的颜色画（默认），或按表面高度画：天空能看见的每个平面一种颜色（viridis 顺序色板，低的深蓝、高的黄），底栏图例列出各级高度（µm）。slab 内核的高度级是精确的（每个可见的板面一级）；level set 内核取每列最上层节点的高度，超过 12 级时分成 12 段。RPC `get_top_view` 的 `shading: "material"|"height"`，返回里带 `shading` 和 `levels: [{z, color}]`；命令行 `view top --color-by height`。
 - **Sampling**（视口底栏）：只影响显示。它对 level-set 场做线性插值后再提取零等值面或标签，不改变内核算出的结果。俯视图不提供该选项，因为它取的是每列最上层的标签，插值会凭空造出覆盖。
 
 刻蚀步骤的求解器阶数和分块大小都是按需参数，分别写入该 Step 的 `solver_order` 与 `tile_shape`。分块只影响内存占用，不影响结果。

@@ -59,3 +59,46 @@ def downsampled_material_voxels(
         name: np.transpose(sampled == index, (2, 1, 0))
         for index, name in enumerate(names)
     }, stride
+
+
+# A sequential palette (viridis anchors) for surfaces coloured by height:
+# low is dark blue, high is yellow, so a taller feature reads as brighter.
+_HEIGHT_ANCHORS = ((0.27, 0.00, 0.33), (0.23, 0.32, 0.55), (0.13, 0.57, 0.55), (0.37, 0.79, 0.38), (0.99, 0.91, 0.15))
+
+
+def height_color(fraction: float) -> str:
+    """The palette colour at ``fraction`` of the way from the lowest to the highest surface."""
+    f = min(1.0, max(0.0, float(fraction))) * (len(_HEIGHT_ANCHORS) - 1)
+    index = min(int(f), len(_HEIGHT_ANCHORS) - 2)
+    weight = f - index
+    a, b = _HEIGHT_ANCHORS[index], _HEIGHT_ANCHORS[index + 1]
+    rgb = [round(255 * (a[i] + (b[i] - a[i]) * weight)) for i in range(3)]
+    return "#" + "".join(f"{channel:02x}" for channel in rgb)
+
+
+def height_levels(heights: list[float]) -> list[dict]:
+    """Distinct surface heights, ascending, each with its palette colour.
+
+    A single level gets the top of the palette; many levels are spread
+    evenly over it by rank, so neighbouring steps stay distinguishable
+    however uneven their spacing.
+    """
+    distinct = sorted({round(float(z), 9) for z in heights})
+    if not distinct:
+        return []
+    count = len(distinct)
+    return [
+        {"z": z, "color": height_color(1.0 if count == 1 else index / (count - 1))}
+        for index, z in enumerate(distinct)
+    ]
+
+
+def surface_heights(state: MaterialState) -> np.ndarray:
+    """The height of the topmost occupied node per column; NaN where nothing is."""
+    labels, _ = state.labels()
+    z = state.grid.z
+    heights = np.full((state.grid.ny, state.grid.nx), np.nan, dtype=float)
+    for z_index in range(state.grid.nz):
+        occupied = labels[z_index] >= 0
+        heights[occupied] = z[z_index]
+    return heights

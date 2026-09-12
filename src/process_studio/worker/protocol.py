@@ -672,7 +672,12 @@ def dispatch(
         )
     if method == "get_top_view":
         state, repository, project, kernel = _view_state(parameters)
-        return kernel.top_view(state, _material_colors(repository), project=project)
+        shading = str(parameters.get("shading") or "material")
+        if shading not in ("material", "height"):
+            raise InvalidRequest("get_top_view shading must be 'material' or 'height'.")
+        return kernel.top_view(
+            state, _material_colors(repository), project=project, shading=shading
+        )
     if method == "export_mesh":
         state, repository, project, kernel = _view_state(parameters)
         destination = parameters.get("destination")

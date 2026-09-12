@@ -17,7 +17,7 @@ from PIL import Image
 from scipy.ndimage import map_coordinates, zoom
 
 from ..kernel.material_state import MaterialState
-from ..visualization import top_view_labels
+from ..visualization import height_levels, surface_heights, top_view_labels
 from .errors import InvalidRequest
 
 try:  # scikit-image is the optional [render] extra
@@ -332,19 +332,41 @@ def sketch_preview_image(
     }
 
 
-def top_view_image(state: MaterialState, colors: Mapping[str, str]) -> dict[str, Any]:
+def top_view_image(
+    state: MaterialState, colors: Mapping[str, str], *, shading: str = "material"
+) -> dict[str, Any]:
     """Render the native-resolution top view.
 
     The top view reports the topmost occupied label per column, so it is not
     interpolated: an upsampled picture here would invent coverage the kernel
-    never computed.
+    never computed. With ``shading="height"`` each column shows the height
+    of its topmost occupied node instead, at most twelve bands wide.
     """
-    labels = top_view_labels(state)
-    names = list(state.priority)
+    levels: list[dict[str, Any]] = []
+    if shading == "height":
+        heights = surface_heights(state)
+        present = heights[np.isfinite(heights)]
+        distinct = np.unique(present)
+        if distinct.size > 12:
+            edges = np.linspace(distinct.min(), distinct.max(), 13)
+            band = np.clip(np.digitize(heights, edges[1:-1]), 0, 11)
+            band_heights = [float(edges[i]) for i in range(12)]
+        else:
+            band = np.searchsorted(distinct, heights)
+            band_heights = [float(z) for z in distinct]
+        levels = height_levels(band_heights)
+        labels = np.where(np.isfinite(heights), band, -1).astype(np.int16)
+        names = [f"z={level['z']:.6g}" for level in levels]
+        colors = {name: level["color"] for name, level in zip(names, levels)}
+    else:
+        labels = top_view_labels(state)
+        names = list(state.priority)
     rgb = _colorize(labels, names, colors)[::-1]
     grid = state.grid
     return {
         "image": _png(rgb),
+        "shading": "height" if shading == "height" else "material",
+        "levels": levels,
         "width": int(rgb.shape[1]),
         "height": int(rgb.shape[0]),
         "extent": {

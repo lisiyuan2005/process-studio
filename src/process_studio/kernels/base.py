@@ -147,5 +147,11 @@ class Kernel(Protocol):
         colors: Mapping[str, str],
         *,
         project: ProjectDefinition,
+        shading: str = "material",
     ) -> dict[str, Any]:
-        """The view from above, as a PNG plus the frame it was drawn in."""
+        """The view from above, as a PNG plus the frame it was drawn in.
+
+        ``shading`` is "material" (the topmost material's colour) or
+        "height" (one palette colour per distinct surface height, listed
+        under ``levels`` for a legend).
+        """

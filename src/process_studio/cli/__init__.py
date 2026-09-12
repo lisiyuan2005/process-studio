@@ -458,7 +458,10 @@ def cmd_view_top(session: Session, args: argparse.Namespace) -> int:
     document = session.document()
     branch = Session.branch(document)
     step_id = step_reference(session, document, args.step)
-    payload = session.call("get_top_view", root=str(session.root), branchId=branch["id"], stepId=step_id)
+    payload = session.call(
+        "get_top_view", root=str(session.root), branchId=branch["id"], stepId=step_id,
+        shading=args.color_by,
+    )
     destination = Path(args.output)
     _write_png(payload, destination)
     session.emit(
@@ -885,6 +888,10 @@ def build_parser() -> argparse.ArgumentParser:
     section.set_defaults(handler=cmd_view_section)
     top = view_commands.add_parser("top", help="the top view as PNG")
     _view_step(top)
+    top.add_argument(
+        "--color-by", choices=("material", "height"), default="material",
+        help="colour each point by its topmost material, or by its surface height",
+    )
     top.set_defaults(handler=cmd_view_top)
     mesh = view_commands.add_parser("mesh", help="the 3D surfaces as .glb, .gltf, .obj, .stl or .ply")
     _view_step(mesh)

@@ -28,6 +28,7 @@ import type {
   SectionLine,
   SurfaceDocument,
   SurfacePayload,
+  TopShading,
   TopViewDocument,
 } from "../types";
 
@@ -67,6 +68,8 @@ interface ViewportProps {
   surfaces?: SurfaceDocument;
   section?: SectionDocument;
   topView?: TopViewDocument;
+  topShading: TopShading;
+  onTopShadingChange: (shading: TopShading) => void;
 }
 
 function decodeFloats(value: string): Float32Array {
@@ -660,6 +663,8 @@ export function Viewport({
   surfaces,
   section,
   topView,
+  topShading,
+  onTopShadingChange,
 }: ViewportProps) {
   // Drawing the AA–BB line: two clicks on the top view, A then B.
   const [drawing, setDrawing] = useState(false);
@@ -1082,6 +1087,18 @@ export function Viewport({
             )}
           </>
         )}
+        {mode === "top" && (
+          <label>
+            Colour by
+            <select
+              value={topShading}
+              onChange={(event) => onTopShadingChange(event.target.value as TopShading)}
+            >
+              <option value="material">Topmost material</option>
+              <option value="height">Surface height</option>
+            </select>
+          </label>
+        )}
         {mode !== "top" && (
           <label>
             Sampling
@@ -1099,7 +1116,14 @@ export function Viewport({
         )}
         <div className="footer-spacer" />
         <div className="legend">
-          {materials
+          {mode === "top" && topView?.shading === "height"
+            ? (topView.levels ?? []).map((level) => (
+                <span key={level.z} title={`Surface at z = ${level.z} µm`}>
+                  <i style={{ background: level.color }} />
+                  {level.z.toFixed(3)} µm
+                </span>
+              ))
+            : materials
             .filter((material) => shownMaterials.includes(material.name))
             .map((material) =>
               mode === "surfaces" ? (

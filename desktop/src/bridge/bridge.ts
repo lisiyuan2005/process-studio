@@ -10,6 +10,7 @@ import type {
   SectionDocument,
   SectionLine,
   SurfaceDocument,
+  TopShading,
   TopViewDocument,
   WindowBounds,
   WorkerCapabilities,
@@ -28,6 +29,8 @@ export interface ViewRequest {
   /** Empty means the bare wafer, before the first step. */
   stepId: string;
   interpolation?: number;
+  /** Top view only: colour by topmost material (default) or by surface height. */
+  shading?: TopShading;
 }
 
 export interface DesktopBridge {
