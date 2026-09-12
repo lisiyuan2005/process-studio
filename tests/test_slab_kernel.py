@@ -951,3 +951,44 @@ def test_the_simplified_conformal_film_coats_undersides_and_pinches_off(kernel, 
     assert filled.device.material_at(0.0, 0.0, 0.79).name == "W"
     assert filled.device.material_at(0.0, 0.0, 1.0).name == "W"
     assert filled.device.top == pytest.approx(1.05)
+
+
+def test_the_simplified_isotropic_etch_creeps_the_same_layer_with_square_ends(kernel, project, sketches):
+    materials = default_materials()
+    deposit = lambda name, t: step(  # noqa: E731
+        ProcessType.DEPOSIT, parameters={"target": t, "mode": "planar"}, output_material=name
+    )
+    results = {}
+    for fidelity in ("detailed", "simplified"):
+        project.fidelity = fidelity
+        state = kernel.initial_state(project, materials=materials)
+        for name, t in (("SiO2", 0.05), ("SiN", 0.04), ("SiO2", 0.05)):
+            state = run(kernel, state, deposit(name, t), project, sketches, materials)
+        state = run(
+            kernel, state,
+            step(
+                ProcessType.ETCH, mask_source="quick_sketch",
+                parameters={"target": 0.2, "directional_fraction": 1.0, "sketch_id": "default"},
+                material_responses={name: MaterialResponse(name, 0.1) for name in ("SiO2", "SiN", "Si")},
+            ),
+            project, sketches, materials,
+        )
+        state = run(
+            kernel, state,
+            step(
+                ProcessType.ETCH,
+                parameters={"target": 0.1, "directional_fraction": 0.0},
+                material_responses={"SiN": MaterialResponse("SiN", 0.1)},
+            ),
+            project, sketches, materials,
+        )
+        results[fidelity] = state.device
+    for fidelity, device in results.items():
+        # The nitride recedes 0.1 from the hole wall (r 0.22) between the oxides, which stay.
+        assert device.material_at(0.3, 0.0, 0.87) is None, fidelity
+        assert device.material_at(0.33, 0.0, 0.87).name == "SiN", fidelity
+        assert device.material_at(0.3, 0.0, 0.82).name == "SiO2", fidelity
+        assert device.material_at(0.3, 0.0, 0.92).name == "SiO2", fidelity
+    # The square front ends flat: the whole recess height is open at r = 0.31.
+    for z in (0.855, 0.87, 0.885):
+        assert results["simplified"].material_at(0.31, 0.0, z) is None

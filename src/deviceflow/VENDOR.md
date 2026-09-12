@@ -79,3 +79,8 @@ under the MIT license in `LICENSE`.
   original ball dilation and the planar film is that dilation cut to the
   columns with no solid above (`deposit_conformal(from_above=True)`),
   which grows lips on both sides of a recess's mouth.
+- `process/isotropic_etch.py`, `device.py`: `wet_etch(..., square=True)`
+  grows the void by a box instead of a ball: the reach is the full depth
+  at every height within it, and the front is sampled once between the
+  planes and the planes ± depth instead of at the resolution. The
+  barrier stepping is unchanged.

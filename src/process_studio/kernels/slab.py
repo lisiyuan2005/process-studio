@@ -18,6 +18,7 @@ wafer surface at 0 and the same deposit at the same height.
 from __future__ import annotations
 
 import base64
+import functools
 import io
 import math
 import threading
@@ -543,8 +544,15 @@ def _etch(
             f"isotropically (0); this step asks for {fraction:g}. Use a level-set "
             "project for a mixed profile."
         )
-    etch = device.etch if fraction == 1.0 else device.wet_etch
-    profile = "vertical" if fraction == 1.0 else "isotropic"
+    if fraction == 1.0:
+        etch = device.etch
+        profile = "vertical"
+    else:
+        # The simplified front is a box instead of a ball: square corners in
+        # z, one sample per plane, so a wet etch costs a few offsets per step.
+        square = project.fidelity == "simplified"
+        etch = functools.partial(device.wet_etch, square=square)
+        profile = "isotropic (square)" if square else "isotropic"
     if parameters.get("target") is not None:
         depth = float(parameters["target"])
         if depth <= 0.0:

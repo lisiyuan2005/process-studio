@@ -76,10 +76,19 @@ def etch_isotropic(
     resolution: float,
     opening: MultiPolygon | None = None,
     xy_resolution: float | None = None,
+    *,
+    square: bool = False,
 ) -> dict[Material, float]:
     """Etch each target by its depth from every exposed surface; returns the
     removed volume per target. ``xy_resolution`` is the XY arc sagitta,
-    defaulting to ``resolution`` (see :func:`deposit_conformal`)."""
+    defaulting to ``resolution`` (see :func:`deposit_conformal``).
+
+    ``square`` is the simplified front: the void grows by the depth
+    sideways and vertically alike (a box instead of a ball), so the etched
+    outline has square corners in z and is constant between the planes of
+    the stack and those planes shifted by the depth. One sample per such
+    interval is then exact, which makes a step cost a few offsets instead
+    of one per resolution step."""
     depths = {m: float(d) for m, d in depths.items() if float(d) > 0}
     if not depths:
         raise ProcessError("wet etch needs at least one material with a positive depth")
@@ -105,7 +114,7 @@ def etch_isotropic(
     for _ in range(n_steps):
         if not front:
             break  # nothing was exposed last step, so nothing more can be reached
-        front = _step(state, per_step, resolution, front, xy)
+        front = _step(state, per_step, resolution, front, xy, square=square)
     _yield_to_barriers(state, depths)
     state.harmonize()
     state.consolidate()
@@ -232,7 +241,13 @@ def _live_void(state: ProcessState, covered) -> Front:
 
 
 def _step(
-    state: ProcessState, depths: dict[Material, float], resolution: float, front: Front, xy: float
+    state: ProcessState,
+    depths: dict[Material, float],
+    resolution: float,
+    front: Front,
+    xy: float,
+    *,
+    square: bool = False,
 ) -> Front:
     """Advance the front by the (small) per-material depths from ``front``,
     the void to dilate; returns the void this step created, which is all
@@ -248,7 +263,11 @@ def _step(
     if hi <= lo:
         return []
     planes = sorted({lo, hi} | {znorm(z) for z0, z1, _v in front for z in (z0, z1) if lo <= z <= hi})
-    samples = _sample_intervals(planes, lo, hi, d_max, min(resolution, d_max / 4))
+    # The square front is constant between the planes and the planes ± d:
+    # one sample per interval; the round one curves there and is sampled.
+    samples = _sample_intervals(
+        planes, lo, hi, d_max, math.inf if square else min(resolution, d_max / 4)
+    )
     segs = {m: _quad_segs(d, xy) for m, d in depths.items()}
     merge_tol = resolution / 4
 
@@ -262,7 +281,10 @@ def _step(
                 if z1 <= zm - d or z0 >= zm + d:
                     continue
                 dz = 0.0 if z0 <= zm < z1 else (z0 - zm if zm < z0 else zm - z1)
-                r = math.sqrt(max(d * d - dz * dz, 0.0))
+                if square:
+                    r = d if dz < d else 0.0
+                else:
+                    r = math.sqrt(max(d * d - dz * dz, 0.0))
                 parts.append(v.buffer(r, quad_segs=segs[m], join_style="round") if r > 0 else v)
             if not parts:
                 previous[m] = None

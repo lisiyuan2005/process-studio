@@ -202,6 +202,7 @@ class Device:
         selectivity=None,
         reference=None,
         overetch=None,
+        square: bool = False,
     ) -> None:
         """Isotropic (wet) etch: every exposed surface of the listed materials
         recedes by the etch depth in all directions (undercut included).
@@ -223,12 +224,15 @@ class Device:
         state = self._state.copy()  # transactional: commit only after success
         removed = etch_isotropic(
             state, depths, self.conformal_resolution, None if blanket else opening._geom,
-            self.xy_resolution,
+            self.xy_resolution, square=square,
         )
         removed = {m: removed.get(m, 0.0) for m in rate_map}
         self._state = state
         self._meshes = None
-        step = {"op": "wet_etch", "profile": "isotropic", "mask_area": round(opening.area, 9)}
+        step = {
+            "op": "wet_etch", "profile": "isotropic", "square": bool(square),
+            "mask_area": round(opening.area, 9),
+        }
         step.update(self._etch_record(removed, rate_map, budget, ref, target, depth, rates, selectivity, overetch))
         self._history.append(step)
         self._end(t_start)
