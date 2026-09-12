@@ -15,6 +15,12 @@ export interface MenuItem {
   danger?: boolean;
   /** A thin rule above this item. */
   separated?: boolean;
+  /** The keyboard shortcut, shown at the right. */
+  shortcut?: string;
+  /** A tick before the label, for a choice that is currently on. */
+  checked?: boolean;
+  /** A small heading above this item (with the rule when `separated`). */
+  heading?: string;
 }
 
 /**
@@ -78,18 +84,24 @@ export function ContextMenu({
       {items.map((item, index) => (
         <div key={index} className={item.separated ? "context-menu-group" : undefined}>
           {item.separated && <div className="context-menu-divider" />}
+          {item.heading && <div className="context-menu-heading">{item.heading}</div>}
           <button
             type="button"
             role="menuitem"
-            className={item.danger ? "danger" : ""}
+            className={`${item.danger ? "danger" : ""} ${item.checked ? "checked" : ""}`}
             disabled={item.disabled}
             onClick={() => {
               onClose();
               item.action();
             }}
           >
-            {item.icon}
-            <span>{item.label}</span>
+            {item.checked !== undefined ? (
+              <span className="context-menu-check">{item.checked ? "✓" : ""}</span>
+            ) : (
+              item.icon
+            )}
+            <span className="context-menu-label">{item.label}</span>
+            {item.shortcut && <kbd>{item.shortcut}</kbd>}
           </button>
         </div>
       ))}

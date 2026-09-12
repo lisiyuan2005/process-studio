@@ -143,6 +143,38 @@ export class BrowserBridge implements DesktopBridge {
     throw new Error("The update check needs the desktop application.");
   }
 
+  async installUpdate(): Promise<void> {
+    throw new Error("Installing an update needs the desktop application.");
+  }
+
+  async quitForUpdate(): Promise<void> {
+    window.close();
+  }
+
+  async exportFlow(): Promise<string | null> {
+    throw new Error(NO_KERNEL);
+  }
+
+  async importFlow(): Promise<WorkspaceDocument | null> {
+    throw new Error(NO_KERNEL);
+  }
+
+  async exportLibrary(): Promise<string | null> {
+    throw new Error(NO_KERNEL);
+  }
+
+  async importLibrary(): Promise<WorkspaceDocument | null> {
+    throw new Error(NO_KERNEL);
+  }
+
+  async saveWorkspaceAs(): Promise<WorkspaceDocument | null> {
+    throw new Error(NO_KERNEL);
+  }
+
+  async revealPath(): Promise<void> {
+    throw new Error(NO_KERNEL);
+  }
+
   async openUrl(url: string): Promise<void> {
     window.open(url, "_blank", "noopener");
   }

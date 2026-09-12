@@ -27,7 +27,8 @@ from ..simulation_settings import MAXIMUM_NODES, estimate_grid, grid_for_target_
 from .errors import InvalidRequest, WorkerError, WorkspaceError
 from .export import write_image, write_mesh
 from .render import MAXIMUM_INTERPOLATION, MESHES_AVAILABLE, sketch_preview_image
-from .update import check_update, open_url
+from .files import copy_workspace, export_flow, export_library, import_flow, import_library, reveal_path
+from .update import check_update, install_update, open_url
 from .runner import (
     apply_grid,
     apply_resolution,
@@ -120,6 +121,20 @@ def _run_cli(
         except (WorkspaceError, InvalidRequest, OSError):
             pass
     return result
+
+
+def _destination(parameters: Mapping[str, Any]) -> Path:
+    destination = parameters.get("destination")
+    if not isinstance(destination, str) or not destination:
+        raise InvalidRequest("This method requires a destination path.")
+    return Path(destination)
+
+
+def _source(parameters: Mapping[str, Any]) -> Path:
+    source = parameters.get("source")
+    if not isinstance(source, str) or not source:
+        raise InvalidRequest("This method requires a source path.")
+    return Path(source)
 
 
 def _describe() -> dict[str, Any]:
@@ -633,6 +648,31 @@ def dispatch(
         return _run_cli(parameters, output, cancel)
     if method == "check_update":
         return check_update()
+    if method == "install_update":
+        return install_update(
+            parameters.get("url"),
+            lambda message: _write(
+                output,
+                {"kind": "event", "id": request.get("id"), "event": {"kind": "log", "message": message}},
+            ),
+        )
+    if method == "export_flow":
+        return export_flow(
+            _root(parameters), _destination(parameters), str(parameters.get("format") or "xlsx"),
+            parameters.get("projectId"),
+        )
+    if method == "import_flow":
+        return import_flow(_root(parameters), _source(parameters), output)
+    if method == "export_library":
+        return export_library(_root(parameters), str(parameters.get("kind") or ""), _destination(parameters))
+    if method == "import_library":
+        return import_library(
+            _root(parameters), str(parameters.get("kind") or ""), _source(parameters), parameters.get("projectId")
+        )
+    if method == "copy_workspace":
+        return copy_workspace(_root(parameters), _destination(parameters))
+    if method == "reveal_path":
+        return reveal_path(parameters.get("path"))
     if method == "open_url":
         return open_url(parameters.get("url"))
     if method == "run_flow":

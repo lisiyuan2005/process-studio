@@ -23,7 +23,14 @@ const WORKER_METHODS: &[&str] = &[
     "run_flow",
     "run_cli",
     "check_update",
+    "install_update",
     "open_url",
+    "export_flow",
+    "import_flow",
+    "export_library",
+    "import_library",
+    "copy_workspace",
+    "reveal_path",
     "get_surfaces",
     "get_section",
     "get_top_view",
@@ -430,12 +437,20 @@ fn worker_cancel(app: AppHandle, request_id: String) -> Result<(), String> {
     }
 }
 
+/// Leave so an update can replace the application: the updater the worker
+/// started waits for this process and the worker to be gone, then copies
+/// the new files over and starts the application again.
+#[tauri::command]
+fn quit_for_update(app: AppHandle) {
+    app.exit(0);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(WorkerHost::default())
-        .invoke_handler(tauri::generate_handler![worker_invoke, worker_cancel])
+        .invoke_handler(tauri::generate_handler![worker_invoke, worker_cancel, quit_for_update])
         .run(tauri::generate_context!())
         .expect("error while running Process Studio");
 }

@@ -1053,3 +1053,33 @@ def test_a_digest_does_not_tell_a_whole_float_from_an_int():
 
     assert digest(1) == digest(1.0)
     assert digest(1) != digest(0)
+
+
+def test_the_file_menu_methods_export_import_and_copy(tmp_path):
+    root = str(tmp_path / "files")
+    document = call("create_workspace", root=root, name="Files", kernel="slab")
+    for fmt in ("xlsx", "csv", "json", "yaml"):
+        exported = call("export_flow", root=root, destination=str(tmp_path / f"flow.{fmt}"), format=fmt)
+        assert Path(exported["path"]).is_file() and exported["steps"] == len(document["branches"][0]["steps"])
+    header = (tmp_path / "flow.csv").read_text(encoding="utf-8-sig").splitlines()[0]
+    assert header.startswith("#,Step,Type,Tool,Material")
+    for kind in ("materials", "tools", "recipes"):
+        out = call("export_library", root=root, kind=kind, destination=str(tmp_path / f"{kind}.xlsx"))
+        assert out["count"] > 0
+    # A material row with a known name replaces it; an unknown one is added.
+    (tmp_path / "more.csv").write_text("Material,Category,Color,Opacity\nSi,Semiconductor,#123456,1\nNewStuff,Metal,#abcdef,0.5\n")
+    imported = call("import_library", root=root, kind="materials", source=str(tmp_path / "more.csv"))
+    names = {m["name"]: m for m in imported["document"]["materials"]}
+    assert imported["imported"] == 2 and names["Si"]["color"] == "#123456" and names["NewStuff"]["opacity"] == 0.5
+    # Save as copies everything, snapshots included, and the copy is a workspace of its own.
+    first = document["branches"][0]["steps"][0]["id"]
+    call("run_flow", root=root, branchId=document["branches"][0]["id"], throughStepId=first)
+    copied = call("copy_workspace", root=root, destination=str(tmp_path / "copy"))
+    assert copied["document"]["stepStatuses"][document["branches"][0]["id"]][first] == "clean"
+    assert call("get_section", root=copied["root"], branchId=document["branches"][0]["id"], stepId=first, axis="y")["image"]
+    applied = call("import_flow", root=copied["root"], source=str(tmp_path / "flow.json"))
+    assert len(applied["document"]["branches"][0]["steps"]) == len(document["branches"][0]["steps"])
+    with pytest.raises(InvalidRequest):
+        call("copy_workspace", root=root, destination=root)
+    with pytest.raises(InvalidRequest):
+        call("export_library", root=root, kind="sketches", destination=str(tmp_path / "x.xlsx"))

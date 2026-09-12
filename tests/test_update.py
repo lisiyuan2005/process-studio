@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from process_studio import __version__
@@ -58,3 +60,46 @@ def test_only_the_repository_pages_can_be_opened(monkeypatch):
     monkeypatch.setattr(update.webbrowser, "open", lambda url: False)
     with pytest.raises(WorkerError):
         update.open_url("https://github.com/lisiyuan2005/process-studio/")
+
+
+def test_the_release_archive_is_unpacked_beside_the_application(tmp_path, monkeypatch):
+    import zipfile
+
+    monkeypatch.setattr(update.sys, "platform", "win32")
+    archive = tmp_path / "release.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("ProcessStudio.exe", b"app")
+        bundle.writestr("resources/worker/process-studio-worker.exe", b"worker")
+    staged = update.stage_update(archive, tmp_path / "unpacked")
+    assert (staged / "ProcessStudio.exe").read_bytes() == b"app"
+    assert (staged / "resources" / "worker" / "process-studio-worker.exe").is_file()
+    bad = tmp_path / "bad.zip"
+    with zipfile.ZipFile(bad, "w") as bundle:
+        bundle.writestr("../escape.exe", b"x")
+    with pytest.raises(WorkerError, match="unsafe"):
+        update.stage_update(bad, tmp_path / "unpacked2")
+
+
+def test_the_updater_script_waits_copies_and_restarts(tmp_path, monkeypatch):
+    app = tmp_path / "ProcessStudio"
+    app.mkdir()
+    staged = tmp_path / "work" / "unpacked"
+    staged.mkdir(parents=True)
+    monkeypatch.setattr(update.sys, "platform", "win32")
+    command, log = update.write_updater(app, staged, [11, 22])
+    script = (tmp_path / "process-studio-update.cmd").read_text()
+    assert command[0] == "cmd.exe" and log.parent == tmp_path
+    assert "PID eq 11" in script and "PID eq 22" in script and "robocopy" in script
+    monkeypatch.setattr(update.sys, "platform", "darwin")
+    bundle = tmp_path / "Process Studio.app"
+    command, _ = update.write_updater(bundle, staged, [33])
+    script = (tmp_path / ".process-studio-update.sh").read_text()
+    assert command[0] == "/bin/bash" and "kill -0 33" in script and "ditto" in script and "open '" in script
+
+
+def test_installing_needs_a_packaged_application_and_the_repository_url():
+    with pytest.raises(WorkerError, match="source checkout"):
+        update.install_update("https://github.com/lisiyuan2005/process-studio/releases/download/v1/x.zip")
+    with pytest.raises(InvalidRequest):
+        update.download("https://example.com/x.zip", Path("/nonexistent/x.zip"))
+    assert update.application_root() is None

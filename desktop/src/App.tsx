@@ -28,11 +28,18 @@ import { PanelResizer } from "./components/PanelResizer";
 import { ProjectHome } from "./components/ProjectHome";
 import { RecipeEditor } from "./components/RecipeEditor";
 import { SketchEditor } from "./components/SketchEditor";
-import { StepList } from "./components/StepList";
+import { MenuBar, type Menu } from "./components/MenuBar";
+import { StepList, type SelectModifiers } from "./components/StepList";
 import { Viewport, type ViewMode } from "./components/Viewport";
 import {
   addStep,
   duplicateStep,
+  duplicateSteps,
+  insertSteps,
+  moveSteps,
+  orderedSelection,
+  removeSteps,
+  setStepsEnabled,
   getActiveBranch,
   newId,
   getSteps,
@@ -66,6 +73,9 @@ import {
 import type {
   CliResult,
   Fidelity,
+  FlowExportFormat,
+  LibraryKind,
+  ProcessStep,
   TopShading,
   ParameterValue,
   QuickSketch,
@@ -127,6 +137,20 @@ export default function App() {
   const [showTools, setShowTools] = useState(false);
   const [showGrid, setShowGrid] = useState(false);
   const [showCli, setShowCli] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  // A short message with an optional action, for menu commands that answer something.
+  const [notice, setNotice] = useState<{ title: string; text: string; action?: { label: string; run: () => void } } | null>(null);
+  // Every selected step (the focused `selectedStepId` included) and the
+  // anchor a Shift-click extends from, the way a file list selects.
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const anchorId = useRef("");
+  // Steps copied with Ctrl+C, pasted after the focused step with Ctrl+V.
+  const stepClipboard = useRef<ProcessStep[]>([]);
+  const [clipboardSize, setClipboardSize] = useState(0);
+  // Undo and redo of document edits: the documents as they were.
+  const undoStack = useRef<WorkspaceDocument[]>([]);
+  const redoStack = useRef<WorkspaceDocument[]>([]);
+  const [historySize, setHistorySize] = useState({ undo: 0, redo: 0 });
   // The sketch being drawn: an existing one by id, or a fresh one for this step.
   const [sketchEditor, setSketchEditor] = useState<{ sketch: QuickSketch; isNew: boolean } | null>(null);
   const [sketchBackdrop, setSketchBackdrop] = useState<TopViewDocument>();
@@ -219,10 +243,31 @@ export default function App() {
     if (selectedStepRef.current === stepId) setViewNonce((nonce) => nonce + 1);
   };
 
-  const setDocument = (next: WorkspaceDocument, persist = true) => {
+  const setDocument = (next: WorkspaceDocument, persist = true, remember = true) => {
     if (!persist) skipNextAutosave.current = true;
+    if (persist && remember && document && document.root === next.root) {
+      undoStack.current = [...undoStack.current.slice(-29), document];
+      redoStack.current = [];
+      setHistorySize({ undo: undoStack.current.length, redo: 0 });
+    }
     setDocumentState(next);
     if (persist) setSaveState("unsaved");
+  };
+
+  const undo = () => {
+    const previous = undoStack.current.pop();
+    if (!previous || !document) return;
+    redoStack.current.push(document);
+    setHistorySize({ undo: undoStack.current.length, redo: redoStack.current.length });
+    setDocument(previous, true, false);
+  };
+
+  const redo = () => {
+    const next = redoStack.current.pop();
+    if (!next || !document) return;
+    undoStack.current.push(document);
+    setHistorySize({ undo: undoStack.current.length, redo: redoStack.current.length });
+    setDocument(next, true, false);
   };
 
   useEffect(() => {
@@ -237,6 +282,9 @@ export default function App() {
     let unsubscribe: (() => void) | undefined;
     bridge
       .subscribeToWorkerEvents((event) => {
+        if (event.kind === "log" && /^(Downloading|Unpacking|Handing over)/.test(event.message)) {
+          setInstallProgress(event.message);
+        }
         if (event.kind === "progress" && event.stepId) {
           // A run stores each step as it finishes, so the finished ones can
           // be looked at while the rest are still computing: mark them as
@@ -315,6 +363,22 @@ export default function App() {
     setSectionIndex(null);
     sectionPosition.current = null;
     setHiddenMaterials([]);
+  };
+
+  // The worker downloads and unpacks the release and starts the updater;
+  // its progress comes back as log events. Once it has handed over, the
+  // application leaves so the updater can replace it.
+  const [installProgress, setInstallProgress] = useState<string>();
+  const installUpdate = async (url: string) => {
+    setInstallProgress("Starting");
+    try {
+      await bridge.installUpdate(url);
+      setInstallProgress("Restarting");
+      await bridge.quitForUpdate();
+    } catch (reason) {
+      setInstallProgress(undefined);
+      throw reason;
+    }
   };
 
   const handleCreate = async (name: string, kernel: string) => {
@@ -427,6 +491,216 @@ export default function App() {
       setSelectedStepId(getSteps(next)[Math.max(0, index - 1)]?.id ?? "");
     }
   };
+
+  // -- selection of several steps -------------------------------------------
+  const selectStep = (stepId: string, modifiers: SelectModifiers) => {
+    if (!document) return;
+    const ids = steps.map((step) => step.id);
+    if (modifiers.shift && anchorId.current && ids.includes(anchorId.current)) {
+      const a = ids.indexOf(anchorId.current);
+      const b = ids.indexOf(stepId);
+      setSelectedIds(ids.slice(Math.min(a, b), Math.max(a, b) + 1));
+    } else if (modifiers.ctrl) {
+      setSelectedIds((current) =>
+        current.includes(stepId) ? current.filter((id) => id !== stepId) : orderedSelection(document, [...current, stepId]),
+      );
+      anchorId.current = stepId;
+    } else {
+      setSelectedIds([stepId]);
+      anchorId.current = stepId;
+    }
+    setSelectedStepId(stepId);
+  };
+  const clearSelection = () => setSelectedIds(selectedStepId ? [selectedStepId] : []);
+  const selectAll = () => {
+    setSelectedIds(steps.map((step) => step.id));
+    if (!selectedStepId && steps[0]) setSelectedStepId(steps[0].id);
+  };
+  // The selection follows the flow: steps that left it drop out, and a
+  // focus set from elsewhere (the inspector, a run) collapses it.
+  useEffect(() => {
+    setSelectedIds((current) => {
+      const kept = document ? orderedSelection(document, current) : [];
+      if (selectedStepId && !kept.includes(selectedStepId)) return [selectedStepId];
+      return kept.length === current.length && kept.every((id, i) => id === current[i]) ? current : kept;
+    });
+  }, [document, selectedStepId]);
+  const batchIds = selectedIds.length > 1 ? selectedIds : selectedStepId ? [selectedStepId] : [];
+
+  const duplicateSelected = () => {
+    if (!document || batchIds.length === 0) return;
+    const result = duplicateSteps(document, batchIds);
+    setDocument(result.document);
+    setSelectedIds(result.steps.map((step) => step.id));
+    setSelectedStepId(result.steps.at(-1)?.id ?? "");
+  };
+  const removeSelected = () => {
+    if (!document || batchIds.length === 0) return;
+    const names = batchIds.map((id) => steps.find((step) => step.id === id)?.name ?? id);
+    const what = names.length === 1 ? names[0] : `${names.length} steps`;
+    if (!window.confirm(`Delete ${what} and their stored results?`)) return;
+    const first = steps.findIndex((step) => step.id === batchIds[0]);
+    const next = removeSteps(document, batchIds);
+    setDocument(next);
+    const remaining = getSteps(next);
+    const focus = remaining[Math.min(Math.max(0, first - 1), remaining.length - 1)]?.id ?? "";
+    setSelectedStepId(focus);
+    setSelectedIds(focus ? [focus] : []);
+  };
+  const moveSelected = (direction: -1 | 1) => {
+    if (!document || batchIds.length === 0) return;
+    setDocument(moveSteps(document, batchIds, direction));
+  };
+  const enableSelected = (enabled: boolean) => {
+    if (!document || batchIds.length === 0) return;
+    setDocument(setStepsEnabled(document, batchIds, enabled));
+  };
+  const copySelected = () => {
+    if (batchIds.length === 0) return;
+    const copied = batchIds.map((id) => steps.find((step) => step.id === id)!).filter(Boolean);
+    stepClipboard.current = copied;
+    setClipboardSize(copied.length);
+    // The same steps as JSON on the system clipboard: they can be pasted
+    // into another workspace, or read by a script.
+    void navigator.clipboard?.writeText(JSON.stringify(copied, null, 2)).catch(() => undefined);
+    setEvents((current) => [...current, { kind: "log", message: `Copied ${copied.length} step(s).` }]);
+  };
+  const pasteSteps = () => {
+    if (!document || stepClipboard.current.length === 0) return;
+    const result = insertSteps(document, stepClipboard.current, selectedStepId || undefined);
+    setDocument(result.document);
+    setSelectedIds(result.steps.map((step) => step.id));
+    setSelectedStepId(result.steps.at(-1)?.id ?? "");
+  };
+
+  // -- the File menu -------------------------------------------------------------
+  const report = (message: string, show = false) => {
+    setEvents((current) => [...current, { kind: "log", message }]);
+    if (show) setShowLog(true);
+  };
+  const saveNow = async () => {
+    if (!document) return;
+    setSaveState("saving");
+    try {
+      const saved = await bridge.saveDocument(document);
+      skipNextAutosave.current = true;
+      setDocumentState(saved);
+      setSaveState("saved");
+    } catch (reason) {
+      setSaveState("error");
+      report(`Save failed: ${errorMessage(reason)}`, true);
+    }
+  };
+  const withWorkspace = async (label: string, work: (root: string) => Promise<WorkspaceDocument | string | null | void>) => {
+    if (!document || busy) return;
+    setBusy(true);
+    try {
+      const saved = await bridge.saveDocument(document);
+      skipNextAutosave.current = true;
+      setDocumentState(saved);
+      setSaveState("saved");
+      const result = await work(saved.root);
+      if (result && typeof result === "object") {
+        viewCache.current.clear();
+        openDocument(result);
+        report(`${label} done.`);
+      } else if (typeof result === "string") {
+        report(`${label}: ${result}`);
+      }
+    } catch (reason) {
+      report(`${label} failed: ${errorMessage(reason)}`, true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const saveAs = () => withWorkspace("Save as", (root) => bridge.saveWorkspaceAs(root, document!.project.name));
+  const exportFlowAs = (format: FlowExportFormat) =>
+    withWorkspace(`Export flow (${format})`, (root) => bridge.exportFlow(root, format, document!.project.name));
+  const importFlowFile = () => withWorkspace("Apply flow file", (root) => bridge.importFlow(root));
+  const exportLibraryAs = (kind: LibraryKind) =>
+    withWorkspace(`Export ${kind}`, (root) => bridge.exportLibrary(root, kind, document!.project.name));
+  const importLibraryFrom = (kind: LibraryKind) => withWorkspace(`Import ${kind}`, (root) => bridge.importLibrary(root, kind));
+  const revealFolder = () => {
+    if (!document) return;
+    void bridge.revealPath(document.root).catch((reason) => report(`Could not open the folder: ${errorMessage(reason)}`, true));
+  };
+  const closeProject = () => {
+    if (!document) return;
+    void (async () => {
+      if (saveState === "unsaved") await saveNow();
+      setDocumentState(null);
+    })();
+  };
+  const forceRerun = () => {
+    if (!document || busy) return;
+    if (!window.confirm("Discard every stored result and run the whole flow again?")) return;
+    void runFlow(undefined, true);
+  };
+  const checkUpdateFromMenu = () => {
+    void bridge
+      .checkUpdate()
+      .then((info) =>
+        setNotice(
+          info.isNewer
+            ? {
+                title: `Version ${info.latestVersion} is available`,
+                text: `This is ${info.currentVersion}. Go back to the home page to install it, or read the release notes.`,
+                action: { label: "Release notes", run: () => void bridge.openUrl(info.releaseUrl) },
+              }
+            : { title: "Up to date", text: `${info.currentVersion} is the newest release.` },
+        ),
+      )
+      .catch((reason) => setNotice({ title: "Could not check for updates", text: errorMessage(reason) }));
+  };
+
+  // -- keyboard shortcuts -----------------------------------------------------------
+  useEffect(() => {
+    if (!document) return;
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const typing =
+        !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable);
+      const mod = event.ctrlKey || event.metaKey;
+      const key = event.key.toLowerCase();
+      if (mod && key === "s") {
+        event.preventDefault();
+        void saveNow();
+      } else if (event.key === "F5") {
+        event.preventDefault();
+        if (!busy) void runFlow(event.shiftKey ? selectedStepId || undefined : undefined);
+      } else if (typing) {
+        return;
+      } else if (mod && key === "z" && !event.shiftKey) {
+        event.preventDefault();
+        undo();
+      } else if ((mod && key === "y") || (mod && event.shiftKey && key === "z")) {
+        event.preventDefault();
+        redo();
+      } else if (mod && key === "a") {
+        event.preventDefault();
+        selectAll();
+      } else if (mod && key === "c") {
+        copySelected();
+      } else if (mod && key === "v") {
+        pasteSteps();
+      } else if (mod && key === "d") {
+        event.preventDefault();
+        duplicateSelected();
+      } else if (event.key === "Delete" || event.key === "Backspace") {
+        if (batchIds.length && !busy) {
+          event.preventDefault();
+          removeSelected();
+        }
+      } else if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+        event.preventDefault();
+        moveSelected(event.key === "ArrowUp" ? -1 : 1);
+      } else if (event.key === "Escape" && selectedIds.length > 1) {
+        clearSelection();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   const refreshViews = useCallback(async () => {
     // Views are read beside a run: the worker answers them on a lane of its
@@ -542,7 +816,7 @@ export default function App() {
     selectedStepRef.current = selectedStepId;
   }, [selectedStepId]);
 
-  const runFlow = async (throughStepId?: string) => {
+  const runFlow = async (throughStepId?: string, force = false) => {
     if (!document || !branch || busy) return;
     setBusy(true);
     runningStepId.current = undefined;
@@ -560,7 +834,7 @@ export default function App() {
       setSaveState("saved");
       const result = await bridge.runFlow(
         saved.root,
-        { branchId: branch.id, throughStepId },
+        { branchId: branch.id, throughStepId, force },
         requestId,
       );
       skipNextAutosave.current = true;
@@ -839,6 +1113,8 @@ export default function App() {
         onForgetRecent={(rootPath) => setRecent(forgetWorkspace(rootPath))}
         version={capabilities?.workerVersion}
         onCheckUpdate={() => bridge.checkUpdate()}
+        onInstallUpdate={installUpdate}
+        installProgress={installProgress}
         onOpenUrl={(url) => bridge.openUrl(url)}
       />
     );
@@ -847,6 +1123,114 @@ export default function App() {
   const progress = events
     .filter((event) => event.kind === "progress" && event.total)
     .at(-1);
+
+  const fidelity = document.project.fidelity ?? "detailed";
+  const selectionCount = batchIds.length;
+  const menus: Menu[] = [
+    {
+      label: "File",
+      items: [
+        { label: "New project…", action: () => setDocumentState(null), shortcut: "Ctrl+N" },
+        { label: "Open project…", action: () => void handleOpen(), shortcut: "Ctrl+O" },
+        ...recent
+          .filter((item) => item.root !== document.root)
+          .slice(0, 5)
+          .map((item, index) => ({
+            label: item.name,
+            heading: index === 0 ? "Recent" : undefined,
+            action: () => void handleOpenRecent(item.root),
+          })),
+        { label: "Save", action: () => void saveNow(), shortcut: "Ctrl+S", separated: true, disabled: saveState === "saving" },
+        { label: "Save as…", action: () => void saveAs(), disabled: busy },
+        { label: "Flow file (JSON, YAML)…", heading: "Import", action: () => void importFlowFile(), separated: true, disabled: busy },
+        { label: "GDSII layout…", action: () => void handleImportGds(), disabled: busy },
+        { label: "Materials…", action: () => void importLibraryFrom("materials"), disabled: busy },
+        { label: "Recipes…", action: () => void importLibraryFrom("recipes"), disabled: busy },
+        { label: "Tools…", action: () => void importLibraryFrom("tools"), disabled: busy },
+        { label: "Flow as Excel…", heading: "Export", action: () => void exportFlowAs("xlsx"), separated: true, disabled: busy },
+        { label: "Flow as CSV…", action: () => void exportFlowAs("csv"), disabled: busy },
+        { label: "Flow file (JSON)…", action: () => void exportFlowAs("json"), disabled: busy },
+        { label: "Flow file (YAML)…", action: () => void exportFlowAs("yaml"), disabled: busy },
+        { label: "Materials…", action: () => void exportLibraryAs("materials"), disabled: busy },
+        { label: "Recipes…", action: () => void exportLibraryAs("recipes"), disabled: busy },
+        { label: "Tools…", action: () => void exportLibraryAs("tools"), disabled: busy },
+        { label: "3D surfaces…", action: () => void exportMesh(), disabled: busy },
+        { label: "Show workspace folder", action: revealFolder, separated: true },
+        { label: "Close project", action: closeProject },
+      ],
+    },
+    {
+      label: "Edit",
+      items: [
+        { label: "Undo", action: undo, shortcut: "Ctrl+Z", disabled: historySize.undo === 0 },
+        { label: "Redo", action: redo, shortcut: "Ctrl+Y", disabled: historySize.redo === 0 },
+        ...(["deposit", "etch", "cmp", "no_geometry"] as const).map((type, index) => ({
+          label: { deposit: "Deposition", etch: "Etch", cmp: "CMP", no_geometry: "No geometry change" }[type],
+          heading: index === 0 ? "Add step after the selected one" : undefined,
+          separated: index === 0,
+          action: () => {
+            const { document: next, step } = addStep(document, type, selectedStepId);
+            setDocument(next);
+            setSelectedStepId(step.id);
+          },
+        })),
+        { label: `Duplicate${selectionCount > 1 ? ` ${selectionCount} steps` : ""}`, action: duplicateSelected, shortcut: "Ctrl+D", separated: true, disabled: selectionCount === 0 },
+        { label: `Copy${selectionCount > 1 ? ` ${selectionCount} steps` : ""}`, action: copySelected, shortcut: "Ctrl+C", disabled: selectionCount === 0 },
+        { label: `Paste after the selected step${clipboardSize ? ` (${clipboardSize})` : ""}`, action: pasteSteps, shortcut: "Ctrl+V", disabled: clipboardSize === 0 },
+        { label: `Delete${selectionCount > 1 ? ` ${selectionCount} steps` : ""}…`, action: removeSelected, shortcut: "Del", disabled: selectionCount === 0 || busy, danger: true },
+        { label: "Select all steps", action: selectAll, shortcut: "Ctrl+A", separated: true },
+        { label: "Move up", action: () => moveSelected(-1), shortcut: "Alt+↑", disabled: selectionCount === 0 },
+        { label: "Move down", action: () => moveSelected(1), shortcut: "Alt+↓", disabled: selectionCount === 0 },
+        { label: "Skip in the run", action: () => enableSelected(false), disabled: selectionCount === 0 },
+        { label: "Include in the run", action: () => enableSelected(true), disabled: selectionCount === 0 },
+      ],
+    },
+    {
+      label: "View",
+      items: [
+        { label: "3D surfaces", action: () => setMode("surfaces"), checked: mode === "surfaces" },
+        { label: "Section", action: () => setMode("section"), checked: mode === "section" },
+        { label: "Top view", action: () => setMode("top"), checked: mode === "top" },
+        { label: "Colour the top view by material", action: () => setTopShading("material"), checked: topShading === "material", separated: true },
+        { label: "Colour the top view by height", action: () => setTopShading("height"), checked: topShading === "height" },
+        { label: "Worker log", action: () => setShowLog((value) => !value), checked: showLog, separated: true },
+      ],
+    },
+    {
+      label: "Run",
+      items: [
+        { label: "Run the flow", action: () => void runFlow(), shortcut: "F5", disabled: busy },
+        { label: "Run to the selected step", action: () => void runFlow(selectedStepId || undefined), shortcut: "Shift+F5", disabled: busy || !selectedStepId },
+        { label: "Stop", action: stopRun, disabled: !(busy && runRequestId.current) },
+        { label: "Discard results and run everything again…", action: forceRerun, disabled: busy, separated: true },
+        ...(projectKernel?.id === "slab"
+          ? [
+              { label: "Detailed films (rounded)", heading: "Film model", action: () => void setFidelity("detailed"), checked: fidelity === "detailed", separated: true, disabled: busy },
+              { label: "Simplified films (square, fast)", action: () => void setFidelity("simplified"), checked: fidelity === "simplified", disabled: busy },
+            ]
+          : []),
+        { label: projectKernel && projectKernel.spacingRole !== "grid" ? "Geometry resolution…" : "Simulation grid…", action: () => setShowGrid(true), separated: true },
+        { label: "Command console…", action: () => setShowCli(true) },
+      ],
+    },
+    {
+      label: "Libraries",
+      items: [
+        { label: "Materials…", action: () => setShowMaterials(true) },
+        { label: "Recipes…", action: () => setShowRecipes(true) },
+        { label: "Tools…", action: () => setShowTools(true) },
+      ],
+    },
+    {
+      label: "Help",
+      items: [
+        { label: "Documentation", action: () => void bridge.openUrl("https://github.com/lisiyuan2005/process-studio/") },
+        { label: "Keyboard shortcuts", action: () => setShowShortcuts(true) },
+        { label: "Check for updates", action: checkUpdateFromMenu, separated: true },
+        { label: `About Process Studio ${capabilities?.workerVersion ?? ""}`, action: () => setNotice({ title: `Process Studio ${capabilities?.workerVersion ?? ""}`, text: `Kernel build: ${capabilities?.buildVariant ?? "full"}. Workspace: ${document.root}` }) },
+      ],
+    },
+  ];
 
   // A stale step still shows what the last run stored, labelled as out of date.
   const viewNotice =
@@ -881,6 +1265,7 @@ export default function App() {
           <span className="brand-glyph">PS</span>
           <span>Process Studio</span>
         </div>
+        <MenuBar menus={menus} />
         <div className="project-crumb">
           <span className="divider-dot">/</span>
           <strong>{document.project.name}</strong>
@@ -945,36 +1330,11 @@ export default function App() {
               title={`${projectKernel.summary} Fixed when the project was created.`}
             >
               <Cpu size={13} />
-              {projectKernel.name}
+              {projectKernel.id === "slab" ? "Slab" : projectKernel.id === "levelset" ? "Level set" : projectKernel.name}
             </span>
           )}
-          <button type="button" title="Import a GDSII layout" onClick={handleImportGds}>
-            <MapIcon size={13} />
-            GDS
-          </button>
         </div>
         <div className="topbar-spacer" />
-        <button type="button" className="log-button" onClick={() => setShowMaterials(true)}>
-          <Palette size={15} />
-          Materials
-        </button>
-        <button type="button" className="log-button" onClick={() => setShowRecipes(true)}>
-          <FileSpreadsheet size={15} />
-          Recipes
-        </button>
-        <button type="button" className="log-button" onClick={() => setShowTools(true)}>
-          <Wrench size={14} />
-          Tools
-        </button>
-        <button
-          type="button"
-          className="log-button"
-          title="The command lines that do what the desktop does, ready to paste"
-          onClick={() => setShowCli(true)}
-        >
-          <TerminalSquare size={14} />
-          CLI
-        </button>
         <div className={`save-indicator save-${saveState}`}>
           {saveState === "saving" ? (
             <LoaderCircle className="spin" size={13} />
@@ -1048,8 +1408,17 @@ export default function App() {
           statuses={statuses}
           accentFor={(step) => stepAccentColor(document, step)}
           selectedStepId={selectedStepId}
+          selectedIds={selectedIds}
           busy={busy}
-          onSelect={setSelectedStepId}
+          canPaste={clipboardSize > 0}
+          onSelect={selectStep}
+          onClearSelection={clearSelection}
+          onDuplicateSelected={duplicateSelected}
+          onRemoveSelected={removeSelected}
+          onMoveSelected={moveSelected}
+          onEnableSelected={enableSelected}
+          onCopySelected={copySelected}
+          onPaste={pasteSteps}
           onAdd={(processType) => {
             const { document: next, step } = addStep(document, processType, selectedStepId);
             setDocument(next);
@@ -1260,6 +1629,72 @@ export default function App() {
           onSave={(sketch) => void saveSketch(sketch)}
           onClose={() => setSketchEditor(null)}
         />
+      )}
+
+      {notice && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={notice.title}>
+          <div className="modal-card notice-card">
+            <header className="modal-header">
+              <div>
+                <h2>{notice.title}</h2>
+              </div>
+              <button type="button" className="icon-button" aria-label="Close" onClick={() => setNotice(null)}>
+                <X size={16} />
+              </button>
+            </header>
+            <p className="notice-text">{notice.text}</p>
+            <div className="modal-actions">
+              {notice.action && (
+                <button type="button" className="secondary-button" onClick={() => { notice.action?.run(); setNotice(null); }}>
+                  {notice.action.label}
+                </button>
+              )}
+              <button type="button" className="secondary-button" onClick={() => setNotice(null)}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showShortcuts && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+          <div className="modal-card notice-card">
+            <header className="modal-header">
+              <div>
+                <span className="eyebrow">HELP</span>
+                <h2>Keyboard shortcuts</h2>
+              </div>
+              <button type="button" className="icon-button" aria-label="Close" onClick={() => setShowShortcuts(false)}>
+                <X size={16} />
+              </button>
+            </header>
+            <table className="shortcut-table">
+              <tbody>
+                {[
+                  ["Ctrl+S", "Save the workspace"],
+                  ["Ctrl+O", "Open a project"],
+                  ["F5", "Run the flow"],
+                  ["Shift+F5", "Run to the selected step"],
+                  ["Click / Ctrl+click / Shift+click", "Select a step / add or remove one / extend the selection"],
+                  ["Ctrl+A", "Select every step"],
+                  ["Ctrl+C / Ctrl+V", "Copy the selected steps / paste them after the selected step"],
+                  ["Ctrl+D", "Duplicate the selected steps"],
+                  ["Delete", "Delete the selected steps"],
+                  ["Alt+↑ / Alt+↓", "Move the selected steps"],
+                  ["Ctrl+Z / Ctrl+Y", "Undo / redo an edit"],
+                  ["Esc", "Keep only the focused step selected"],
+                  ["Ctrl+Enter", "Run the pasted commands in the command console"],
+                ].map(([keys, what]) => (
+                  <tr key={keys}>
+                    <td><kbd>{keys}</kbd></td>
+                    <td>{what}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
       )}
 
       {showCli && (

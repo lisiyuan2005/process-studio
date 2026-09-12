@@ -179,6 +179,9 @@ export interface WorkspaceDocument {
   stepStatuses: Record<string, Record<string, StepStatus>>;
 }
 
+export type LibraryKind = "materials" | "tools" | "recipes";
+export type FlowExportFormat = "xlsx" | "csv" | "json" | "yaml";
+
 /** The newest published release, compared with this build. */
 export interface UpdateInfo {
   currentVersion: string;

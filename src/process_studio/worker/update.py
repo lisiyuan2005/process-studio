@@ -110,3 +110,176 @@ def open_url(url: Any) -> dict[str, Any]:
     if not opened:
         raise WorkerError("No browser could be opened; copy the address instead.")
     return {"opened": True}
+
+
+# -- installing an update ------------------------------------------------------
+#
+# The application cannot overwrite itself while it runs, and on Windows the
+# worker's own executable is locked too. So the worker downloads the release
+# zip, unpacks it beside the application, writes a small updater script and
+# starts it detached; the shell then quits, the script waits for both
+# processes to be gone, copies the unpacked files over the application and
+# starts it again. In a source checkout there is nothing to install over.
+
+import os
+import shutil
+import subprocess
+import tempfile
+import zipfile
+from pathlib import Path
+from typing import Callable
+
+
+def application_root() -> Path | None:
+    """The directory (Windows) or .app bundle (macOS) a packaged worker belongs to."""
+    if not getattr(sys, "frozen", False):
+        return None
+    executable = Path(sys.executable).resolve()
+    if sys.platform.startswith("win"):
+        # <app>/resources/worker/process-studio-worker.exe
+        return executable.parents[2]
+    if sys.platform == "darwin":
+        # <name>.app/Contents/Resources/worker/process-studio-worker
+        for parent in executable.parents:
+            if parent.suffix == ".app":
+                return parent
+    return None
+
+
+def download(url: str, destination: Path, report: Callable[[int, int], None] | None = None) -> None:
+    """Fetch ``url`` to ``destination``, reporting (received, total) bytes as it goes."""
+    if not url.startswith(ALLOWED_URL_PREFIXES):
+        raise InvalidRequest("Only the application's own release files are downloaded.")
+    request = urllib.request.Request(url, headers={"User-Agent": f"process-studio/{__version__}"})
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response, destination.open("wb") as out:
+            total = int(response.headers.get("Content-Length") or 0)
+            received = 0
+            while True:
+                chunk = response.read(1 << 20)
+                if not chunk:
+                    break
+                out.write(chunk)
+                received += len(chunk)
+                if report:
+                    report(received, total)
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        raise WorkerError(f"The download failed: {error}") from error
+
+
+def stage_update(archive: Path, staging: Path) -> Path:
+    """Unpack the release zip; returns the directory that replaces the application."""
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True)
+    with zipfile.ZipFile(archive) as bundle:
+        root = staging.resolve()
+        for member in bundle.namelist():
+            # No member may escape the staging directory.
+            target = (staging / member).resolve()
+            if target != root and root not in target.parents:
+                raise WorkerError(f"The archive holds an unsafe path: {member}")
+        bundle.extractall(staging)
+    if sys.platform == "darwin":
+        apps = [p for p in staging.iterdir() if p.suffix == ".app"]
+        if len(apps) != 1:
+            raise WorkerError("The macOS archive does not hold exactly one application bundle.")
+        # A zip carries no executable bits reliably; restore them where they matter.
+        for path in apps[0].rglob("*"):
+            if path.is_file() and ("MacOS" in path.parts or "worker" in path.parts):
+                path.chmod(path.stat().st_mode | 0o111)
+        return apps[0]
+    if not any(staging.glob("*.exe")):
+        raise WorkerError("The Windows archive holds no application executable.")
+    return staging
+
+
+def write_updater(app: Path, staged: Path, wait_for: list[int]) -> tuple[list[str], Path]:
+    """The script that swaps the application once it has quit; returns its command and log.
+
+    On Windows it is a batch file, which needs no policy to run: it polls
+    the task list until both processes are gone, mirrors the unpacked
+    files over the application with robocopy and starts it again. On macOS
+    a shell script does the same with ditto and open.
+    """
+    log = app.parent / "process-studio-update.log"
+    if sys.platform.startswith("win"):
+        script = app.parent / "process-studio-update.cmd"
+        exe = next(app.glob("*.exe"), app / "ProcessStudio.exe")
+        waits = "\n".join(
+            f':wait{index}\ntasklist /FI "PID eq {pid}" 2>NUL | find "{pid}" >NUL && (timeout /t 1 /nobreak >NUL & goto wait{index})'
+            for index, pid in enumerate(wait_for)
+        )
+        script.write_text(
+            "\n".join([
+                "@echo off",
+                f'echo %DATE% %TIME% updating "{app}" >> "{log}"',
+                waits,
+                "timeout /t 1 /nobreak >NUL",
+                f'robocopy "{staged}" "{app}" /E /R:5 /W:2 /NFL /NDL /NJH /NJS >> "{log}"',
+                f'rmdir /S /Q "{staged.parent}"',
+                f'start "" "{exe}"',
+                'del "%~f0"',
+            ]),
+            encoding="utf-8",
+        )
+        return ["cmd.exe", "/C", str(script)], log
+    script = app.parent / ".process-studio-update.sh"
+    waits = "\n".join(f"while kill -0 {pid} 2>/dev/null; do sleep 0.5; done" for pid in wait_for)
+    script.write_text(
+        "\n".join([
+            "#!/bin/bash",
+            f"exec >> '{log}' 2>&1",
+            waits,
+            "sleep 1",
+            f"rm -rf '{app}'",
+            f"ditto '{staged}' '{app}'",
+            f"rm -rf '{staged.parent}'",
+            f"open '{app}'",
+            f"rm -f '{script}'",
+        ]),
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return ["/bin/bash", str(script)], log
+
+
+def install_update(url: Any, report: Callable[[str], None] | None = None) -> dict[str, Any]:
+    """Download the release for this build, unpack it and hand over to the updater.
+
+    Returns once the updater is running; the caller then quits the
+    application, and the updater replaces it and starts it again.
+    """
+    if not isinstance(url, str) or not url:
+        raise InvalidRequest("install_update requires the download url of the release asset.")
+    app = application_root()
+    if app is None:
+        raise WorkerError(
+            "This is a source checkout, not a packaged application; update it with git and pip."
+        )
+    say = report or (lambda _message: None)
+    work = Path(tempfile.mkdtemp(prefix="process-studio-update-", dir=str(app.parent)))
+    archive = work / "release.zip"
+
+    def progress(received: int, total: int) -> None:
+        if total:
+            say(f"Downloading {received / 1_048_576:.0f} of {total / 1_048_576:.0f} MB")
+        else:
+            say(f"Downloading {received / 1_048_576:.0f} MB")
+
+    say("Downloading the update")
+    download(url, archive, progress)
+    say("Unpacking")
+    staged = stage_update(archive, work / "unpacked")
+    archive.unlink(missing_ok=True)
+    command, log = write_updater(app, staged, [os.getpid(), os.getppid()])
+    say("Handing over to the updater; the application restarts by itself")
+    quiet: dict[str, Any] = {
+        "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
+    }
+    if sys.platform.startswith("win"):
+        quiet["creationflags"] = 0x00000008 | 0x00000200  # detached, its own process group
+    else:
+        quiet["start_new_session"] = True
+    subprocess.Popen(command, **quiet)
+    return {"staged": str(staged), "log": str(log), "restart": True}

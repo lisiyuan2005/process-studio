@@ -441,3 +441,115 @@ export function groupRecipes(recipes: Recipe[]): RecipeGroup {
   }
   return root;
 }
+
+// -- several steps at once -----------------------------------------------------
+
+/** The given ids in flow order, dropping any that are not on the branch. */
+export function orderedSelection(document: WorkspaceDocument, ids: Iterable<string>): string[] {
+  const wanted = new Set(ids);
+  return getSteps(document)
+    .filter((step) => wanted.has(step.id))
+    .map((step) => step.id);
+}
+
+/** A fresh copy of a step: same settings, a new id, nothing run yet. */
+export function cloneStep(source: ProcessStep, name = source.name): ProcessStep {
+  return {
+    ...source,
+    id: newId("step"),
+    name,
+    parameters: { ...source.parameters },
+    materialResponses: copyResponses(source.materialResponses),
+  };
+}
+
+/**
+ * Insert steps after `afterStepId` (at the end when it is not on the
+ * branch); they get new ids, so a pasted or duplicated block never shares
+ * identity with its source. Returns the inserted copies.
+ */
+export function insertSteps(
+  document: WorkspaceDocument,
+  sources: ProcessStep[],
+  afterStepId: string | undefined,
+  rename: (name: string) => string = (name) => name,
+): { document: WorkspaceDocument; steps: ProcessStep[] } {
+  if (sources.length === 0) return { document, steps: [] };
+  const copies = sources.map((source) => cloneStep(source, rename(source.name)));
+  const steps = [...getSteps(document)];
+  const index = afterStepId ? steps.findIndex((step) => step.id === afterStepId) : -1;
+  const at = index >= 0 ? index + 1 : steps.length;
+  steps.splice(at, 0, ...copies);
+  const branch = getActiveBranch(document);
+  const statuses = { ...(document.stepStatuses[branch.id] ?? {}) };
+  for (const copy of copies) statuses[copy.id] = "dirty";
+  const updated = {
+    ...withSteps(document, steps),
+    stepStatuses: { ...document.stepStatuses, [branch.id]: statuses },
+  };
+  return { document: invalidateFrom(updated, copies[0].id), steps: copies };
+}
+
+/** Copies of the selected steps, placed right after the last of them. */
+export function duplicateSteps(
+  document: WorkspaceDocument,
+  ids: Iterable<string>,
+): { document: WorkspaceDocument; steps: ProcessStep[] } {
+  const ordered = orderedSelection(document, ids);
+  const steps = getSteps(document);
+  const sources = ordered.map((id) => steps.find((step) => step.id === id)!);
+  return insertSteps(document, sources, ordered.at(-1), (name) => `${name} copy`);
+}
+
+export function removeSteps(document: WorkspaceDocument, ids: Iterable<string>): WorkspaceDocument {
+  const ordered = orderedSelection(document, ids);
+  if (ordered.length === 0) return document;
+  const invalidated = invalidateFrom(document, ordered[0]);
+  const gone = new Set(ordered);
+  return withSteps(
+    invalidated,
+    getSteps(document).filter((step) => !gone.has(step.id)),
+  );
+}
+
+/**
+ * Move every selected step one place up (-1) or down (+1), keeping their
+ * order. A selected step at the edge, or one blocked by another selected
+ * step, stays; the block moves as far as it can.
+ */
+export function moveSteps(
+  document: WorkspaceDocument,
+  ids: Iterable<string>,
+  direction: -1 | 1,
+): WorkspaceDocument {
+  const selected = new Set(orderedSelection(document, ids));
+  if (selected.size === 0) return document;
+  const steps = [...getSteps(document)];
+  const indices = steps.map((step, index) => index).filter((index) => selected.has(steps[index].id));
+  if (direction === 1) indices.reverse();
+  let earliest: string | undefined;
+  for (const index of indices) {
+    const target = index + direction;
+    if (target < 0 || target >= steps.length || selected.has(steps[target].id)) continue;
+    [steps[index], steps[target]] = [steps[target], steps[index]];
+    const first = Math.min(index, target);
+    if (!earliest || steps.findIndex((step) => step.id === earliest) > first) earliest = steps[first].id;
+  }
+  if (!earliest) return document;
+  return invalidateFrom(withSteps(document, steps), earliest);
+}
+
+export function setStepsEnabled(
+  document: WorkspaceDocument,
+  ids: Iterable<string>,
+  enabled: boolean,
+): WorkspaceDocument {
+  const ordered = orderedSelection(document, ids);
+  if (ordered.length === 0) return document;
+  const wanted = new Set(ordered);
+  const updated = withSteps(
+    document,
+    getSteps(document).map((step) => (wanted.has(step.id) ? { ...step, enabled } : step)),
+  );
+  return invalidateFrom(updated, ordered[0]);
+}

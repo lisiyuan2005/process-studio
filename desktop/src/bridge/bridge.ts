@@ -1,5 +1,7 @@
 import type {
   CliResult,
+  FlowExportFormat,
+  LibraryKind,
   GdsImportResult,
   GridPlan,
   MaskKeep,
@@ -62,6 +64,20 @@ export interface DesktopBridge {
   runCli(root: string, argv: string[], stdin?: string, requestId?: string): Promise<CliResult>;
   /** Ask GitHub for the newest release and how it compares with this build. */
   checkUpdate(): Promise<UpdateInfo>;
+  /** Download the release at `url`, unpack it and start the updater; resolves when the app should quit. */
+  installUpdate(url: string): Promise<void>;
+  /** Leave so the updater can replace the application. */
+  quitForUpdate(): Promise<void>;
+  /** Write the flow as a table or a flow file; the user picks the place. Null when they cancel. */
+  exportFlow(root: string, format: FlowExportFormat, projectName: string): Promise<string | null>;
+  /** Make the workspace match a flow file the user picks. Null when they cancel. */
+  importFlow(root: string): Promise<WorkspaceDocument | null>;
+  exportLibrary(root: string, kind: LibraryKind, projectName: string): Promise<string | null>;
+  importLibrary(root: string, kind: LibraryKind): Promise<WorkspaceDocument | null>;
+  /** Copy the workspace to a directory the user picks and open the copy. Null when they cancel. */
+  saveWorkspaceAs(root: string, projectName: string): Promise<WorkspaceDocument | null>;
+  /** Show a workspace directory in the system file manager. */
+  revealPath(path: string): Promise<void>;
   /** Open one of the repository's own pages (a release, a download) in the browser. */
   openUrl(url: string): Promise<void>;
   getSurfaces(root: string, request: ViewRequest): Promise<SurfaceDocument>;

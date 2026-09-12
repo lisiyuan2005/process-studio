@@ -4,6 +4,8 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import type { DesktopBridge, RunOptions, ViewRequest } from "./bridge";
 import type {
   CliResult,
+  FlowExportFormat,
+  LibraryKind,
   GdsImportResult,
   GridPlan,
   MaskKeep,
@@ -117,6 +119,84 @@ export class TauriBridge implements DesktopBridge {
 
   checkUpdate(): Promise<UpdateInfo> {
     return call<UpdateInfo>("check_update");
+  }
+
+  async installUpdate(url: string): Promise<void> {
+    await call<{ restart: boolean }>("install_update", { url });
+  }
+
+  quitForUpdate(): Promise<void> {
+    return invoke<void>("quit_for_update");
+  }
+
+  async exportFlow(root: string, format: FlowExportFormat, projectName: string): Promise<string | null> {
+    const names: Record<FlowExportFormat, [string, string]> = {
+      xlsx: ["Excel workbook", "xlsx"],
+      csv: ["CSV table", "csv"],
+      json: ["Flow file (JSON)", "json"],
+      yaml: ["Flow file (YAML)", "yaml"],
+    };
+    const [label, extension] = names[format];
+    const destination = await save({
+      title: "Export the process flow",
+      defaultPath: `${safeFileName(projectName)}-flow.${extension}`,
+      filters: [{ name: label, extensions: [extension] }],
+    });
+    if (!destination) return null;
+    const result = await call<{ path: string }>("export_flow", { root, destination, format });
+    return result.path;
+  }
+
+  async importFlow(root: string): Promise<WorkspaceDocument | null> {
+    const source = await open({
+      directory: false,
+      multiple: false,
+      title: "Apply a flow file to this workspace",
+      filters: [{ name: "Flow file", extensions: ["json", "yaml", "yml", "toml"] }],
+    });
+    if (!source || Array.isArray(source)) return null;
+    const result = await call<{ document: WorkspaceDocument }>("import_flow", { root, source });
+    return result.document;
+  }
+
+  async exportLibrary(root: string, kind: LibraryKind, projectName: string): Promise<string | null> {
+    const destination = await save({
+      title: `Export the ${kind} library`,
+      defaultPath: `${safeFileName(projectName)}-${kind}.xlsx`,
+      filters: [
+        { name: "Excel workbook", extensions: ["xlsx"] },
+        ...(kind === "recipes" ? [] : [{ name: "CSV table", extensions: ["csv"] }]),
+      ],
+    });
+    if (!destination) return null;
+    const result = await call<{ path: string }>("export_library", { root, kind, destination });
+    return result.path;
+  }
+
+  async importLibrary(root: string, kind: LibraryKind): Promise<WorkspaceDocument | null> {
+    const source = await open({
+      directory: false,
+      multiple: false,
+      title: `Import ${kind} from a workbook`,
+      filters: [{ name: "Workbook or CSV", extensions: kind === "recipes" ? ["xlsx"] : ["xlsx", "csv"] }],
+    });
+    if (!source || Array.isArray(source)) return null;
+    const result = await call<{ document: WorkspaceDocument }>("import_library", { root, kind, source });
+    return result.document;
+  }
+
+  async saveWorkspaceAs(root: string, projectName: string): Promise<WorkspaceDocument | null> {
+    const destination = await save({
+      title: "Save the workspace as a new directory",
+      defaultPath: safeFileName(projectName),
+    });
+    if (!destination) return null;
+    const result = await call<{ document: WorkspaceDocument }>("copy_workspace", { root, destination });
+    return result.document;
+  }
+
+  async revealPath(path: string): Promise<void> {
+    await call<{ path: string }>("reveal_path", { path });
   }
 
   async openUrl(url: string): Promise<void> {
