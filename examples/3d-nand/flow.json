@@ -1,5 +1,5 @@
 {
-  "name": "3D NAND (gate-last, 6 pairs)",
+  "name": "3D NAND (gate-last, 4 pairs)",
   "kernel": "slab",
   "window": {
     "x": [

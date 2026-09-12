@@ -115,7 +115,7 @@ for index, x in enumerate(STAIRS, start=1):
                                  "shapes": [rectangle((x + X1) / 2, 0.0, X1 - x, 0.4)]}
 
 flow = {
-    "name": "3D NAND (gate-last, 6 pairs)",
+    "name": "3D NAND (gate-last, 4 pairs)",
     "kernel": "slab",
     "window": {"x": [X0, X1], "y": [-0.15, 0.15], "z": [-0.3, 0.85]},
     "resolution_nm": 4,
