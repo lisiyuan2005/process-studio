@@ -67,6 +67,8 @@ def equals(a, b, area_eps: float = 1e-18) -> bool:
         return True
     if a.is_empty != b.is_empty:
         return False
+    if shapely.to_wkb(a) == shapely.to_wkb(b):  # the same rings: no predicate needed
+        return True
     if a.equals(b):
         return True
     return a.symmetric_difference(b).area <= area_eps

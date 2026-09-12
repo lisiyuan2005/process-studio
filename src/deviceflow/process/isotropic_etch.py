@@ -111,12 +111,13 @@ def etch_isotropic(
         n_steps = max(MIN_STEPS, math.ceil(d_max / step - 1e-9))
     front = _live_void(state, _covered(state, opening))
     per_step = {m: d / n_steps for m, d in depths.items()}
+    mark = state.regions_mark()
     for _ in range(n_steps):
         if not front:
             break  # nothing was exposed last step, so nothing more can be reached
         front = _step(state, per_step, resolution, front, xy, square=square)
     _yield_to_barriers(state, depths)
-    state.harmonize()
+    state.harmonize(state.changed_since(mark))
     state.consolidate()
     state.validate()
     return {m: before[m] - state.volume(m) for m in depths}
@@ -292,8 +293,15 @@ def _step(
             reach = shapely.unary_union(parts)
             prev = previous[m]
             reach = P.as_multipolygon(reach)
-            if prev is not None and not reach.is_empty and _nearly_same(prev, reach, merge_tol):
-                reach = prev  # consecutive samples within tolerance share one ring (no slivers)
+            if prev is not None and not reach.is_empty:
+                # Consecutive samples within tolerance share one ring (no
+                # slivers). The box front is exact per interval: only an
+                # identical reach is shared, and that is settled cheaply.
+                if square:
+                    if P.equals(prev, reach):
+                        reach = prev
+                elif _nearly_same(prev, reach, merge_tol):
+                    reach = prev
             previous[m] = reach if not reach.is_empty else None
             if not reach.is_empty:
                 removed[m].append((za, zb, reach))

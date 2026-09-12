@@ -288,8 +288,13 @@ def apply_film(state: ProcessState, material: Material, new_regions) -> list:
 def _merge_into(state: ProcessState, slab, material: Material, new: MultiPolygon) -> None:
     existing = slab.regions.get(material)
     region = new if existing is None else state.clean(shapely.unary_union([existing, new]))
-    # never overwrite other materials: the dilation was already reduced by the solid
-    others = [g for m, g in slab.regions.items() if m is not material]
+    # never overwrite other materials: the dilation was already reduced by
+    # the solid, so the film at most touches them, and the overlay is only
+    # built when a predicate says it does more than touch.
+    others = [
+        g for m, g in slab.regions.items()
+        if m is not material and new.intersects(g) and not new.touches(g)
+    ]
     if others:
         region = state.clean(region.difference(shapely.unary_union(others)))
     if region.is_empty:

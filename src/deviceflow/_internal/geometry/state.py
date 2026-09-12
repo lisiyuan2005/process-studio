@@ -169,6 +169,10 @@ class ProcessState:
         for i in range(len(items)):
             for j in range(i + 1, len(items)):
                 (ma, ga), (mb, gb) = items[i], items[j]
+                # Neighbouring materials meet along their boundary; the
+                # predicates settle that without building the intersection.
+                if not ga.intersects(gb) or ga.touches(gb):
+                    continue
                 overlap = ga.intersection(gb).area
                 if overlap > eps:
                     raise GeometryError(
@@ -222,10 +226,19 @@ class ProcessState:
         edge of every region is then an edge of the shared linework, so the
         mesh builder never has to create a node. Geometry moves by at most a
         grid step (1e-6 um by default); volumes stay exactly consistent.
+
+        ``changed`` names the slabs a step touched. The arrangement and the
+        reassembly cover every slab regardless (they are cheap, and the new
+        rings may put nodes on old edges), but the passes that open pinches
+        and seams only look at those slabs and their neighbours: the rest
+        were left pinch- and seam-free by the previous call. Regions coming
+        out of one arrangement are disjoint by construction, so nothing is
+        checked for overlap here; ``validate`` still does.
         """
         regions = [(s, m, r) for s in self._slabs for m, r in s.regions.items()]
         if not regions:
             return
+        changed_ids = None if changed is None else {id(s) for s in changed}
         # After repeated deposition most slabs carry a region that some other
         # slab carries too, so the same boundary would enter the linework many
         # times over. Feeding each distinct one once builds the same union
@@ -291,14 +304,23 @@ class ProcessState:
                 del slab.regions[material]
                 continue
             slab.regions[material] = rebuilt
-        for slab in self._slabs:
-            self._check_disjoint(slab.regions)
-        opened = self._remove_pinches()
-        opened = self._remove_seams() or opened
+        opened = self._remove_pinches(changed_ids)
+        opened += self._remove_seams(changed_ids)
         if opened and depth < 4:
-            self.harmonize(depth=depth + 1)
+            self.harmonize(opened, depth=depth + 1)
 
-    def _remove_pinches(self) -> bool:
+    def regions_mark(self) -> dict[int, tuple]:
+        """What every slab holds right now, for ``changed_since``."""
+        return {id(s): tuple((m, id(r)) for m, r in s.regions.items()) for s in self._slabs}
+
+    def changed_since(self, mark: dict[int, tuple]) -> list["Slab"]:
+        """The slabs whose regions were replaced, or that did not exist, at ``mark``."""
+        return [
+            s for s in self._slabs
+            if mark.get(id(s)) != tuple((m, id(r)) for m, r in s.regions.items())
+        ]
+
+    def _remove_pinches(self, changed_ids: set[int] | None = None) -> list["Slab"]:
         """Open point contacts inside a region by a one-grid-step notch.
 
         Two parts (or two holes, or a hole and the exterior) of one material
@@ -306,11 +328,13 @@ class ProcessState:
         vertical line through that point. When the material is continuous
         above and below, no vertex duplication can repair it, so the contact
         is opened at the grid scale instead: a 2-grid square around the point
-        is removed from the region. Returns True if anything changed.
+        is removed from the region. Returns the slabs it changed.
         """
-        changed = False
+        changed: list[Slab] = []
         g = self.grid
         for slab in self._slabs:
+            if changed_ids is not None and id(slab) not in changed_ids:
+                continue
             for material, region in list(slab.regions.items()):
                 seen: dict[tuple, int] = {}
                 pinches = []
@@ -329,10 +353,10 @@ class ProcessState:
                     del slab.regions[material]
                 else:
                     slab.regions[material] = new
-                changed = True
+                changed.append(slab)
         return changed
 
-    def _remove_seams(self) -> bool:
+    def _remove_seams(self, changed_ids: set[int] | None = None) -> list["Slab"]:
         """Open the cap-to-cap seams that no manifold mesh can represent.
 
         At a plane where one material's region below and region above touch
@@ -342,14 +366,27 @@ class ProcessState:
         which vertex duplication cannot fix. Such coincidences come from two
         independent offset edges rounding onto the same grid line, so they
         are resolved at the same scale: the upper region is set back from the
-        seam by one grid step. Returns True if anything changed.
+        seam by one grid step. Returns the slabs it changed.
         """
-        changed = False
+        changed: list[Slab] = []
         for below, above in zip(self._slabs[:-1], self._slabs[1:]):
+            if changed_ids is not None and id(below) not in changed_ids and id(above) not in changed_ids:
+                continue
             for material in list(above.regions):
                 rb = below.regions.get(material)
                 ra = above.regions[material]
-                if rb is None:
+                if rb is None or rb is ra:
+                    continue
+                # A seam needs an edge both boundaries run along; the
+                # sampling slabs of one film mostly carry the same region,
+                # and a wall meets a cap along a point at most. Only pairs
+                # whose boundaries share a line pay for the two overlays.
+                if shapely.to_wkb(rb) == shapely.to_wkb(ra):
+                    continue
+                shared = rb.boundary.intersection(ra.boundary)
+                if not any(
+                    g.geom_type == "LineString" and g.length > 0 for g in shapely.get_parts(shared)
+                ):
                     continue
                 up_cap = rb.difference(ra)
                 down_cap = ra.difference(rb)
@@ -365,7 +402,7 @@ class ProcessState:
                     del above.regions[material]
                 else:
                     above.regions[material] = new
-                changed = True
+                changed.append(above)
         return changed
 
     def consolidate(self) -> None:

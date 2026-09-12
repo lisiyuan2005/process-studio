@@ -84,3 +84,17 @@ under the MIT license in `LICENSE`.
   at every height within it, and the front is sampled once between the
   planes and the planes ± depth instead of at the resolution. The
   barrier stepping is unchanged.
+- `_internal/geometry/state.py`, `_internal/geometry/polygons.py`,
+  `process/conformal.py`, `process/isotropic_etch.py`: `harmonize` still
+  rebuilds every region from the shared arrangement, but opens pinches
+  and seams only in the slabs a step changed (and their neighbours), no
+  longer checks regions of one arrangement for overlap, and skips the
+  seam overlays for a slab pair whose regions are identical or whose
+  boundaries share no line. `_check_disjoint` asks the predicates before
+  building an intersection, `polygons.equals` recognises identical rings
+  by their bytes, a film is cut back from other materials only where a
+  predicate says it does more than touch them, and the isotropic etch
+  harmonizes the slabs it changed (`regions_mark`/`changed_since`) and,
+  with the box front, shares only identical reaches between samples. The
+  slowest films of the 3D NAND example went from 6.8 s to 3.2 s and from
+  6.6 s to 2.2 s, the nitride removal from 5.6 s to 3.6 s.
