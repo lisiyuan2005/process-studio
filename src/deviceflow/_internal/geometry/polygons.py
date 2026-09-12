@@ -61,6 +61,8 @@ def clean(geom, grid: float, area_eps: float | None = None) -> MultiPolygon:
 
 def equals(a, b, area_eps: float = 1e-18) -> bool:
     """Geometric equality independent of vertex representation."""
+    if a is b:
+        return True
     if a.is_empty and b.is_empty:
         return True
     if a.is_empty != b.is_empty:

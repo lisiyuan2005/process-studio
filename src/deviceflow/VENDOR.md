@@ -40,4 +40,9 @@ under the MIT license in `LICENSE`.
   barriers do not move, so the result is the same and each step costs a
   thin shell instead of every cavity. A replacement-gate flow went from a
   hundred-odd steps, each re-noding the whole stack, to a handful of
-  sub-second ones.
+  sub-second ones. Slabs split by a step's sample planes are merged back
+  after the step, so the slab count stays bounded.
+- `_internal/geometry/state.py`: `harmonize` gives a face that two regions
+  of one slab both cover (two boundaries rounded onto each other) to the
+  first of them, instead of rebuilding overlapping regions and failing its
+  own disjointness check. `polygons.equals` short-circuits on identity.

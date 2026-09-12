@@ -116,10 +116,12 @@ def etch_isotropic(
 def _barrier_thickness(state: ProcessState, depths: dict[Material, float]) -> float:
     """The thinnest layer the front must not jump over, in z.
 
-    Consecutive slabs with the same non-target footprint are one layer. A
-    layer counts when void or a target lies against that footprint above
-    or below it; a layer wrapped in non-target on both sides separates
-    nothing the etch could reach.
+    Consecutive slabs whose non-target footprints mostly overlap are one
+    layer: the sampling slabs of a flat oxide have the same footprint, and
+    the slabs of a film's rounded corner shift by a fraction of the film's
+    width from one to the next. A layer counts when void or a target lies
+    against its footprint above or below it; a layer wrapped in non-target
+    on both sides separates nothing the etch could reach.
     """
     slabs = state.slabs
     if not slabs:
@@ -139,9 +141,9 @@ def _barrier_thickness(state: ProcessState, depths: dict[Material, float]) -> fl
             index += 1
             continue
         end = index
-        while end + 1 < len(slabs) and P.equals(footprints[end + 1], footprints[index]):
+        while end + 1 < len(slabs) and _mostly_overlap(footprints[end], footprints[end + 1]):
             end += 1
-        footprint = footprints[index]
+        footprint = P.as_multipolygon(shapely.unary_union(footprints[index : end + 1]))
         below = open_at[index - 1] if index > 0 else P.EMPTY  # the floor is inert
         above = open_at[end + 1] if end + 1 < len(slabs) else window  # void above the top
         borders_open = (
@@ -151,6 +153,14 @@ def _barrier_thickness(state: ProcessState, depths: dict[Material, float]) -> fl
             thinnest = min(thinnest, znorm(slabs[end].z1 - slabs[index].z0))
         index = end + 1
     return thinnest
+
+
+def _mostly_overlap(a: MultiPolygon, b: MultiPolygon) -> bool:
+    if a.is_empty or b.is_empty:
+        return False
+    if a is b or a.equals(b):
+        return True
+    return a.intersection(b).area >= 0.5 * max(a.area, b.area)
 
 
 def _yield_to_barriers(state: ProcessState, depths: dict[Material, float]) -> None:
@@ -286,5 +296,8 @@ def _step(
                 if not gone.is_empty:
                     created.append((slab.z0, slab.z1, gone))
     # No harmonise here: the next step reads each slab on its own, and one
-    # harmonise at the end of the etch settles every slab together.
+    # harmonise at the end of the etch settles every slab together. The
+    # sample planes did split slabs, though, and most halves came out the
+    # same: merge them back, or the slabs multiply with every step.
+    state.consolidate()
     return created

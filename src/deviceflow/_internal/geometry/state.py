@@ -257,14 +257,30 @@ class ProcessState:
         # lives only for this call, and the shared result is immutable, as
         # shapely geometry always is.
         rebuilt_by_shape: dict[bytes, MultiPolygon | None] = {}
+        inside_by_shape: dict[bytes, np.ndarray] = {}
+        # A face two regions of one slab both cover (two boundaries rounded
+        # onto each other) goes to the first of them: the regions of a slab
+        # must stay disjoint, and such a face is a sliver either way.
+        claimed_in_slab: dict[int, np.ndarray] = {}
         for (slab, material, region), shape in zip(regions, shape_of_region):
-            if shape in rebuilt_by_shape:
-                rebuilt = rebuilt_by_shape[shape]
-            else:
+            inside = inside_by_shape.get(shape)
+            if inside is None:
                 shapely.prepare(region)
                 inside = np.nonzero(shapely.contains(region, reps))[0]
+                inside_by_shape[shape] = inside
+            claimed = claimed_in_slab.setdefault(id(slab), np.zeros(len(faces), dtype=bool))
+            contested = claimed[inside]
+            if contested.any():
+                inside = inside[~contested]
+                claimed[inside] = True
                 rebuilt = _assemble(faces, edges_of_face, inside, region) if len(inside) else None
-                rebuilt_by_shape[shape] = rebuilt
+            else:
+                claimed[inside] = True
+                if shape in rebuilt_by_shape:
+                    rebuilt = rebuilt_by_shape[shape]
+                else:
+                    rebuilt = _assemble(faces, edges_of_face, inside, region) if len(inside) else None
+                    rebuilt_by_shape[shape] = rebuilt
             if rebuilt is None:
                 # thinner than the grid everywhere: it vanishes
                 del slab.regions[material]
