@@ -3,12 +3,12 @@
   "kernel": "slab",
   "window": {
     "x": [
-      -0.35,
-      0.55
+      -0.25,
+      0.45
     ],
     "y": [
-      -0.35,
-      0.35
+      -0.15,
+      0.15
     ],
     "z": [
       -0.3,
@@ -35,23 +35,23 @@
     {
       "name": "Through holes and slit",
       "start": [
-        -0.35,
-        0.17
+        -0.25,
+        0.0
       ],
       "end": [
-        0.55,
-        0.17
+        0.45,
+        0.0
       ]
     },
     {
       "name": "Along the slit",
       "start": [
         -0.04,
-        -0.35
+        -0.15
       ],
       "end": [
         -0.04,
-        0.35
+        0.15
       ]
     },
     {
@@ -61,7 +61,7 @@
         0.0
       ],
       "end": [
-        0.55,
+        0.45,
         0.0
       ]
     }
@@ -75,18 +75,7 @@
           "operation": "merge",
           "parameters": {
             "center": [
-              -0.24,
-              -0.17
-            ],
-            "radius": 0.055
-          }
-        },
-        {
-          "kind": "circle",
-          "operation": "merge",
-          "parameters": {
-            "center": [
-              -0.24,
+              -0.17,
               0.0
             ],
             "radius": 0.055
@@ -97,41 +86,8 @@
           "operation": "merge",
           "parameters": {
             "center": [
-              -0.24,
-              0.17
-            ],
-            "radius": 0.055
-          }
-        },
-        {
-          "kind": "circle",
-          "operation": "merge",
-          "parameters": {
-            "center": [
-              0.16,
-              -0.17
-            ],
-            "radius": 0.055
-          }
-        },
-        {
-          "kind": "circle",
-          "operation": "merge",
-          "parameters": {
-            "center": [
-              0.16,
+              0.12,
               0.0
-            ],
-            "radius": 0.055
-          }
-        },
-        {
-          "kind": "circle",
-          "operation": "merge",
-          "parameters": {
-            "center": [
-              0.16,
-              0.17
             ],
             "radius": 0.055
           }
@@ -151,7 +107,7 @@
             ],
             "size": [
               0.12,
-              0.8
+              0.4
             ]
           }
         },
@@ -160,12 +116,12 @@
           "operation": "merge",
           "parameters": {
             "center": [
-              0.55,
+              0.45,
               0.0
             ],
             "size": [
               0.12,
-              0.8
+              0.4
             ]
           }
         }
@@ -179,29 +135,18 @@
           "operation": "merge",
           "parameters": {
             "center": [
+              0.27,
+              0.0
+            ],
+            "radius": 0.02
+          }
+        },
+        {
+          "kind": "circle",
+          "operation": "merge",
+          "parameters": {
+            "center": [
               0.32999999999999996,
-              0.0
-            ],
-            "radius": 0.02
-          }
-        },
-        {
-          "kind": "circle",
-          "operation": "merge",
-          "parameters": {
-            "center": [
-              0.39,
-              0.0
-            ],
-            "radius": 0.02
-          }
-        },
-        {
-          "kind": "circle",
-          "operation": "merge",
-          "parameters": {
-            "center": [
-              0.44999999999999996,
               0.0
             ],
             "radius": 0.02
@@ -217,12 +162,12 @@
           "operation": "merge",
           "parameters": {
             "center": [
-              0.42500000000000004,
+              0.345,
               0.0
             ],
             "size": [
-              0.25000000000000006,
-              0.8
+              0.21000000000000002,
+              0.4
             ]
           }
         }
@@ -236,31 +181,12 @@
           "operation": "merge",
           "parameters": {
             "center": [
-              0.455,
+              0.375,
               0.0
             ],
             "size": [
-              0.19000000000000006,
-              0.8
-            ]
-          }
-        }
-      ]
-    },
-    "stair3": {
-      "name": "Staircase mask 3",
-      "shapes": [
-        {
-          "kind": "rectangle",
-          "operation": "merge",
-          "parameters": {
-            "center": [
-              0.485,
-              0.0
-            ],
-            "size": [
-              0.13000000000000006,
-              0.8
+              0.15000000000000002,
+              0.4
             ]
           }
         }
@@ -369,46 +295,6 @@
       "tool": "PECVD"
     },
     {
-      "name": "ON pair 5: SiO2",
-      "type": "deposit",
-      "material": "SiO2",
-      "parameters": {
-        "target": 0.025,
-        "mode": "planar"
-      },
-      "tool": "PECVD"
-    },
-    {
-      "name": "ON pair 5: SiN (sacrificial)",
-      "type": "deposit",
-      "material": "SiN",
-      "parameters": {
-        "target": 0.03,
-        "mode": "planar"
-      },
-      "tool": "PECVD"
-    },
-    {
-      "name": "ON pair 6: SiO2",
-      "type": "deposit",
-      "material": "SiO2",
-      "parameters": {
-        "target": 0.025,
-        "mode": "planar"
-      },
-      "tool": "PECVD"
-    },
-    {
-      "name": "ON pair 6: SiN (sacrificial)",
-      "type": "deposit",
-      "material": "SiN",
-      "parameters": {
-        "target": 0.03,
-        "mode": "planar"
-      },
-      "tool": "PECVD"
-    },
-    {
       "name": "Cap oxide",
       "type": "deposit",
       "material": "SiO2",
@@ -422,7 +308,7 @@
       "name": "Channel hole etch",
       "type": "etch",
       "parameters": {
-        "target": 0.41,
+        "target": 0.3,
         "directional_fraction": 1.0
       },
       "rates": {
@@ -486,7 +372,7 @@
       "name": "CMP to cap",
       "type": "cmp",
       "parameters": {
-        "target_z": 0.5
+        "target_z": 0.39
       }
     },
     {
@@ -518,20 +404,6 @@
       "tool": "Trim etcher"
     },
     {
-      "name": "Staircase trim-etch 3",
-      "type": "etch",
-      "parameters": {
-        "target": 0.055,
-        "directional_fraction": 1.0
-      },
-      "rates": {
-        "SiO2": 1,
-        "SiN": 1
-      },
-      "mask": "sketch:stair3",
-      "tool": "Trim etcher"
-    },
-    {
       "name": "Staircase oxide fill",
       "type": "deposit",
       "material": "SiO2",
@@ -545,14 +417,14 @@
       "name": "CMP after fill",
       "type": "cmp",
       "parameters": {
-        "target_z": 0.5
+        "target_z": 0.39
       }
     },
     {
       "name": "Slit etch",
       "type": "etch",
       "parameters": {
-        "target": 0.41,
+        "target": 0.3,
         "directional_fraction": 1.0
       },
       "rates": {
@@ -566,7 +438,7 @@
       "name": "SiN removal (hot H3PO4)",
       "type": "etch",
       "parameters": {
-        "target": 0.27,
+        "target": 0.19,
         "directional_fraction": 0.0
       },
       "rates": {
@@ -640,7 +512,7 @@
       "name": "CMP after slit fill",
       "type": "cmp",
       "parameters": {
-        "target_z": 0.5
+        "target_z": 0.39
       }
     },
     {
@@ -672,7 +544,7 @@
       "name": "Final CMP",
       "type": "cmp",
       "parameters": {
-        "target_z": 0.5
+        "target_z": 0.39
       }
     }
   ]

@@ -256,7 +256,7 @@ def test_the_3d_nand_example_flow_applies(tmp_path: Path):
     assert info["project"]["kernel"] == "slab"
     assert info["project"]["resolutionUm"] == pytest.approx(0.004)
     steps = as_json("steps", "list", root=root)
-    assert len(steps) == 39
+    assert len(steps) == 34
     assert [step["processType"] for step in steps[:2]] == ["deposit", "deposit"]
     names = [step["name"] for step in steps]
     assert "SiN removal (hot H3PO4)" in names and names[-1] == "Final CMP"
