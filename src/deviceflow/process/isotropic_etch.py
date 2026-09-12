@@ -12,9 +12,11 @@ floor are not surfaces: outside the window the wafer continues, and below
 the floor sits the inert substrate, so neither is void and neither starts
 an etch.
 
-The front is advanced in steps: each step dilates the current void by a
-small radius and removes what that reaches of each target; the void then
-grows and the next step starts from the new surface. A step is smaller
+The front is advanced in steps: the first dilates the live void by a
+small radius and removes what that reaches of each target; every later
+step dilates only the void the previous step created, since everything
+within a step of the older void is already gone and the barriers do not
+move, so the front only ever starts from the surface it just exposed. A step is smaller
 than half the thinnest barrier layer, so the dilation cannot jump over
 one, and a target uncovered during the etch is etched for the remaining
 time. Each step re-samples the curved front, so the profile error grows
@@ -98,9 +100,12 @@ def etch_isotropic(
     else:
         step = min(d_max / MIN_STEPS, barrier / 2)
         n_steps = max(MIN_STEPS, math.ceil(d_max / step - 1e-9))
-    covered = _covered(state, opening)
+    front = _live_void(state, _covered(state, opening))
+    per_step = {m: d / n_steps for m, d in depths.items()}
     for _ in range(n_steps):
-        _step(state, {m: d / n_steps for m, d in depths.items()}, resolution, covered, xy)
+        if not front:
+            break  # nothing was exposed last step, so nothing more can be reached
+        front = _step(state, per_step, resolution, front, xy)
     _yield_to_barriers(state, depths)
     state.harmonize()
     state.consolidate()
@@ -189,14 +194,14 @@ def _covered(state: ProcessState, opening) -> list[tuple[float, float, MultiPoly
     return out
 
 
-def _step(
-    state: ProcessState, depths: dict[Material, float], resolution: float, covered, xy: float
-) -> None:
-    """Advance the front by the (small) per-material depths from the current
-    live void (everything empty that the mask does not cover)."""
-    if state.floor is None or all(state.volume(m) == 0.0 for m in depths):
-        return
-    floor, top = state.floor, state.top
+Front = list[tuple[float, float, MultiPolygon]]  # (z0, z1, region) pieces of void
+
+
+def _live_void(state: ProcessState, covered) -> Front:
+    """The void the etch starts from: everything empty that the mask does
+    not cover, slab by slab, plus the half-space above the top."""
+    if state.floor is None:
+        return []
     window = box(*state.bounds)
 
     def uncover(z0: float, z1: float, region: MultiPolygon) -> MultiPolygon:
@@ -205,19 +210,35 @@ def _step(
             return region
         return state.clean(region.difference(shapely.unary_union(hidden)))
 
-    # live void slabs: (z0, z1, region); the half-space above the top is void too
-    voids: list[tuple[float, float, MultiPolygon]] = []
+    voids: Front = []
     for s in state.slabs:
         v = uncover(s.z0, s.z1, state.clean(window.difference(s.occupied())))
         if not v.is_empty:
             voids.append((s.z0, s.z1, v))
-    above = uncover(top, math.inf, state.clean(window))
+    above = uncover(state.top, math.inf, state.clean(window))
     if not above.is_empty:
-        voids.append((top, math.inf, above))
+        voids.append((state.top, math.inf, above))
+    return voids
 
+
+def _step(
+    state: ProcessState, depths: dict[Material, float], resolution: float, front: Front, xy: float
+) -> Front:
+    """Advance the front by the (small) per-material depths from ``front``,
+    the void to dilate; returns the void this step created, which is all
+    the next step needs to dilate."""
+    if state.floor is None or all(state.volume(m) == 0.0 for m in depths):
+        return []
+    floor, top = state.floor, state.top
     d_max = max(depths.values())
-    planes = sorted({floor, top} | {s.z0 for s in state.slabs} | {s.z1 for s in state.slabs})
-    samples = _sample_intervals(planes, floor, top, d_max, min(resolution, d_max / 4))
+    # Only heights within reach of the front can change, and the reach only
+    # curves near the front pieces' own top and bottom planes.
+    lo = max(floor, min(z0 for z0, _z1, _v in front) - d_max)
+    hi = min(top, max(min(z1, top) for _z0, z1, _v in front) + d_max)
+    if hi <= lo:
+        return []
+    planes = sorted({lo, hi} | {znorm(z) for z0, z1, _v in front for z in (z0, z1) if lo <= z <= hi})
+    samples = _sample_intervals(planes, lo, hi, d_max, min(resolution, d_max / 4))
     segs = {m: _quad_segs(d, xy) for m, d in depths.items()}
     merge_tol = resolution / 4
 
@@ -227,7 +248,7 @@ def _step(
         zm = (za + zb) / 2
         for m, d in depths.items():
             parts = []
-            for z0, z1, v in voids:
+            for z0, z1, v in front:
                 if z1 <= zm - d or z0 >= zm + d:
                     continue
                 dz = 0.0 if z0 <= zm < z1 else (z0 - zm if zm < z0 else zm - z1)
@@ -245,7 +266,7 @@ def _step(
             if not reach.is_empty:
                 removed[m].append((za, zb, reach))
 
-    changed = []
+    created: Front = []
     for m, pieces in removed.items():
         for za, zb, reach in pieces:
             state.split_at(za)
@@ -257,10 +278,13 @@ def _step(
                 left = state.clean(region.difference(reach))
                 if P.equals(left, region):
                     continue
+                gone = state.clean(region.difference(left)) if not left.is_empty else region
                 if left.is_empty:
                     del slab.regions[m]
                 else:
                     slab.regions[m] = left
-                changed.append(slab)
+                if not gone.is_empty:
+                    created.append((slab.z0, slab.z1, gone))
     # No harmonise here: the next step reads each slab on its own, and one
     # harmonise at the end of the etch settles every slab together.
+    return created

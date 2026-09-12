@@ -34,6 +34,10 @@ under the MIT license in `LICENSE`.
   layer* (a run of slabs with one non-target footprint that borders void or
   a target) instead of the thinnest slab, and the slabs are harmonised once
   after the last step instead of after every step; a sliver of a target
-  left inside a barrier is cut back before validation. A replacement-gate
-  flow went from a hundred-odd steps, each re-noding the whole stack, to a
-  handful.
+  left inside a barrier is cut back before validation. Each step after the
+  first dilates only the void the previous step created, not the whole
+  void: everything within a step of the older void is already gone and the
+  barriers do not move, so the result is the same and each step costs a
+  thin shell instead of every cavity. A replacement-gate flow went from a
+  hundred-odd steps, each re-noding the whole stack, to a handful of
+  sub-second ones.
