@@ -46,3 +46,8 @@ under the MIT license in `LICENSE`.
   of one slab both cover (two boundaries rounded onto each other) to the
   first of them, instead of rebuilding overlapping regions and failing its
   own disjointness check. `polygons.equals` short-circuits on identity.
+- `process/conformal.py`: the z samples of a film are never finer than the
+  conformal resolution (they were a quarter of the film's thickness when
+  that was smaller). A 3 nm liner sampled every 0.75 nm gave every cavity
+  four times the rings, and the rings of every slab are noded together
+  downstream.

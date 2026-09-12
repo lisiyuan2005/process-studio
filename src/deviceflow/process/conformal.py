@@ -83,7 +83,8 @@ def deposit_conformal(
     slabs.extend((s.z0, s.z1, s.occupied()) for s in state.slabs)
     planes = sorted({floor, top} | {s.z0 for s in state.slabs} | {s.z1 for s in state.slabs})
 
-    samples = _sample_intervals(planes, floor, znorm(top + t), t, min(resolution, t / 4))
+    # Never finer than the z step: a film thinner than it is one sample thick.
+    samples = _sample_intervals(planes, floor, znorm(top + t), t, resolution)
     quad_segs = _quad_segs(t, xy)
 
     def solid_at(z: float) -> MultiPolygon:
