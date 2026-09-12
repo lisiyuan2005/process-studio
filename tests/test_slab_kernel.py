@@ -810,6 +810,11 @@ def test_a_planar_film_leaves_a_recess_under_an_overhang_empty(kernel, project, 
     assert device.material_at(0.02, 0.0, 0.85) is None, "the recess's back wall is shadowed too"
     assert device.material_at(0.4, 0.0, 0.82).name == "W", "the open wafer is coated"
     assert device.material_at(0.22, 0.0, 0.95).name == "W", "the roof's riser faces the sky"
+    # No lip hangs down from the roof's lower edge: the mouth of the recess
+    # (0.1 high) is narrowed only by the floor film, and stays open.
+    assert device.material_at(0.22, 0.0, 0.88) is None
+    assert device.material_at(0.22, 0.0, 0.82).name == "W"
+    assert device.material_at(0.3, 0.0, 0.87) is None
     assert device.material_at(-0.4, 0.0, 1.02).name == "W"
 
 

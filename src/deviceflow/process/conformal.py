@@ -62,8 +62,11 @@ def deposit_conformal(
 
     With ``from_above`` the film only forms where the material can arrive
     from straight up: a point gets film if no solid lies anywhere above it
-    in its XY column. Walls, floors and tops that face the sky are coated
-    as in a conformal film; a recess under an overhang stays empty.
+    in its XY column, and only solids at or below the point seed it, so
+    nothing hangs down from an overhang's lower edge. Walls, floors and
+    tops that face the sky are coated as in a conformal film; a recess
+    under an overhang stays empty and its mouth is narrowed only by the
+    floor rising, so it closes only when it is lower than the thickness.
     """
     t = float(thickness)
     if not t > 0:
@@ -150,6 +153,12 @@ def deposit_conformal(
         for index in range(first, last):
             z0, z1, occ = slabs[index]
             if occ.is_empty:
+                continue
+            # Nothing grows downward from a solid: the lower edge of an
+            # overhang gets no lip, so the mouth of a recess under it is
+            # narrowed only by the floor rising, and the film on the riser
+            # above it ends flat at the overhang's underside.
+            if from_above and z0 > zm:
                 continue
             if z0 <= zm < z1:
                 dz = 0.0
