@@ -22,7 +22,7 @@ from ..defaults import (
 )
 from ..kernels import default_kernel, get_kernel
 from ..layout.quick_sketch import QuickSketch, SketchShape
-from ..models import FlowBranch, ProcessStep, ProjectDefinition, Recipe
+from ..models import result_key, result_keys, FlowBranch, ProcessStep, ProjectDefinition, Recipe
 from ..storage import ProjectRepository
 from .errors import InvalidRequest, WorkspaceError
 from .serialize import grid_dict

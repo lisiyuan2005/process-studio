@@ -70,3 +70,12 @@ under the MIT license in `LICENSE`.
   keeps its depth while its floor rises. Nothing is rounded in z, so one
   sample between consecutive planes (and planes + `t`) is exact. The
   blanket slab remains for an empty device (the substrate).
+- `process/square.py`, `process/planar.py`, `process/conformal.py`,
+  `device.py`: two film models. `Device.deposit(..., square=True)` builds
+  the simplified, square-cornered film of `process/square.py` (wall films
+  flat-ended at the wall's edges, exposed faces moved by `t` with square
+  corners, one sample between consecutive planes and planes ± `t`), for
+  conformal and planar alike; without it the conformal film is the
+  original ball dilation and the planar film is that dilation cut to the
+  columns with no solid above (`deposit_conformal(from_above=True)`),
+  which grows lips on both sides of a recess's mouth.

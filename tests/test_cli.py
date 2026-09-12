@@ -274,3 +274,17 @@ def test_a_flow_can_be_applied_from_stdin(workspace: Path):
     code = main(["--root", str(workspace), "steps", "bogus"], out=out, err=err)
     assert code == EXIT_USAGE
     assert "invalid choice: 'bogus'" in err.getvalue()
+
+
+def test_the_fidelity_is_a_project_setting_and_travels_in_flow_files(workspace: Path, tmp_path: Path):
+    assert as_json("fidelity", root=workspace) == {"fidelity": "detailed"}
+    shown = as_json("fidelity", "simplified", root=workspace)
+    assert shown["fidelity"] == "simplified"
+    code, out, _ = run("info", root=workspace)
+    assert code == EXIT_OK and "Fidelity   simplified" in out
+    flow = as_json("flow", "dump", root=workspace)
+    assert flow["fidelity"] == "simplified"
+    flow["fidelity"] = "detailed"
+    (tmp_path / "flow.json").write_text(json.dumps(flow))
+    as_json("flow", "apply", str(tmp_path / "flow.json"), root=workspace)
+    assert as_json("fidelity", root=workspace) == {"fidelity": "detailed"}

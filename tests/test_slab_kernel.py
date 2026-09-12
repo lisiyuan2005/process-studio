@@ -754,6 +754,7 @@ def run(kernel, state, process_step, project, sketches, materials):
 
 
 def test_a_planar_film_lands_on_every_surface_seen_from_above(kernel, project, sketches):
+    project.fidelity = "simplified"
     materials = default_materials()
     state = kernel.initial_state(project, materials=materials)
     trenched = run(
@@ -790,7 +791,22 @@ def test_a_planar_film_lands_on_every_surface_seen_from_above(kernel, project, s
     assert device.material_at(0.11, 0.0, 0.85) is None
 
 
+def _undercut(kernel, project, materials):
+    """A lower layer ending at x = 0 under a roof reaching to x = 0.2: the
+    recess between them opens sideways onto the wafer to the right."""
+    from shapely.geometry import box
+
+    state = kernel.initial_state(project, materials=materials)
+    device = state.device
+    oxide = device.material("SiO2")
+    x0, y0, x1, y1 = device._state.bounds
+    device._state.add_slab(0.8, 0.9, {oxide: box(x0, y0, 0.0, y1)})
+    device._state.add_slab(0.9, 1.0, {oxide: box(x0, y0, 0.2, y1)})
+    return state
+
+
 def test_a_planar_film_leaves_a_recess_under_an_overhang_empty(kernel, project, sketches):
+    project.fidelity = "simplified"
     materials = default_materials()
     state = kernel.initial_state(project, materials=materials)
     device = state.device
@@ -879,3 +895,59 @@ def test_the_top_view_can_be_coloured_by_surface_height(kernel, project, sketche
     assert [level["z"] for level in by_height["levels"]] == pytest.approx([-0.3, 0.0])
     assert by_height["levels"][0]["color"] != by_height["levels"][1]["color"]
     assert by_height["image"] != by_material["image"]
+
+
+def test_the_detailed_planar_film_grows_lips_on_both_sides_of_a_mouth(kernel, project, sketches):
+    materials = default_materials()
+    state = _undercut(kernel, project, materials)
+    covered = run(
+        kernel, state,
+        step(ProcessType.DEPOSIT, parameters={"target": 0.05, "mode": "planar"}, output_material="W"),
+        project, sketches, materials,
+    )
+    device = covered.device
+    # The overhang's lower edge curls a lip down (sputter-like)...
+    assert device.material_at(0.21, 0.0, 0.88).name == "W"
+    # ...the recess behind it still gets nothing, and the open wafer is coated.
+    assert device.material_at(0.1, 0.0, 0.85) is None
+    assert device.material_at(0.4, 0.0, 0.82).name == "W"
+    # The mouth is 0.1 high: lip and floor film meet, so it is pinched off.
+    assert device.material_at(0.2, 0.0, 0.85).name == "W"
+
+
+def test_the_simplified_conformal_film_coats_undersides_and_pinches_off(kernel, project, sketches):
+    project.fidelity = "simplified"
+    materials = default_materials()
+    state = _undercut(kernel, project, materials)
+    coated = run(
+        kernel, state,
+        step(ProcessType.DEPOSIT, parameters={"target": 0.02, "mode": "conformal"}, output_material="W"),
+        project, sketches, materials,
+    )
+    device = coated.device
+    assert device.material_at(0.1, 0.0, 0.89).name == "W", "the roof's underside"
+    assert device.material_at(0.1, 0.0, 0.81).name == "W", "the recess floor"
+    assert device.material_at(0.01, 0.0, 0.85).name == "W", "the recess's back wall"
+    assert device.material_at(0.1, 0.0, 0.85) is None, "the recess is 0.1 high and 0.02 films leave it open"
+    # Square corner: the roof's top film reaches out over its riser film.
+    assert device.material_at(0.21, 0.0, 1.01).name == "W"
+    assert device.material_at(0.23, 0.0, 1.01) is None
+    # A hole narrower than twice the thickness pinches off and fills.
+    trenched = run(
+        kernel, kernel.initial_state(project, materials=materials),
+        step(
+            ProcessType.ETCH, mask_source="quick_sketch",
+            parameters={"target": 0.3, "directional_fraction": 1.0, "sketch_id": "default"},
+            material_responses={"Si": MaterialResponse("Si", 0.1)},
+        ),
+        project, sketches, materials,
+    )
+    filled = run(
+        kernel, trenched,
+        step(ProcessType.DEPOSIT, parameters={"target": 0.25, "mode": "conformal"}, output_material="W"),
+        project, sketches, materials,
+    )
+    assert filled.device.material_at(0.0, 0.0, 0.6).name == "W"
+    assert filled.device.material_at(0.0, 0.0, 0.79).name == "W"
+    assert filled.device.material_at(0.0, 0.0, 1.0).name == "W"
+    assert filled.device.top == pytest.approx(1.05)

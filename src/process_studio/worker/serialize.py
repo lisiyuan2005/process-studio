@@ -11,6 +11,7 @@ from typing import Any, Mapping
 from ..kernel.grid import UniformGrid3D
 from ..kernels import default_kernel
 from ..models import (
+    FIDELITIES,
     FlowBranch,
     MaterialDefinition,
     MaterialResponse,
@@ -301,6 +302,7 @@ def project_to_json(project: ProjectDefinition) -> dict[str, Any]:
         "resolutionUm": project.resolution_um,
         "resolutionXyUm": project.resolution_xy_um,
         "sectionLines": [dict(line) for line in project.section_lines],
+        "fidelity": project.fidelity,
     }
 
 
@@ -351,6 +353,9 @@ def project_from_json(payload: Mapping[str, Any]) -> ProjectDefinition:
         raise InvalidRequest("project id cannot be empty")
     resolution = payload.get("resolutionUm")
     resolution_xy = payload.get("resolutionXyUm")
+    fidelity = str(payload.get("fidelity") or "detailed")
+    if fidelity not in FIDELITIES:
+        raise InvalidRequest(f"project fidelity must be one of {FIDELITIES}, got {fidelity!r}.")
     return ProjectDefinition(
         name,
         grid_dict(grid_from_json(grid)),
@@ -361,4 +366,5 @@ def project_from_json(payload: Mapping[str, Any]) -> ProjectDefinition:
         resolution_um=None if resolution in (None, "") else float(resolution),
         resolution_xy_um=None if resolution_xy in (None, "") else float(resolution_xy),
         section_lines=section_lines_from_json(payload.get("sectionLines")),
+        fidelity=fidelity,
     )

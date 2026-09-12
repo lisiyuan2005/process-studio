@@ -23,6 +23,8 @@ from .serialize import (
     recipe_to_json,
 )
 from .workspace import (
+    result_key,
+    result_keys,
     DigestCache,
     branch_digests,
     load_project,
@@ -114,8 +116,9 @@ def step_statuses(
     statuses: dict[str, str] = {}
     invalidated = False
     for step, digest in zip(branch.steps, digests):
-        stored_result = step.id in with_snapshot
-        clean = not invalidated and stored_result and stored.get(step.id) == digest
+        key = result_key(step.id, project.fidelity)
+        stored_result = key in with_snapshot
+        clean = not invalidated and stored_result and stored.get(key) == digest
         statuses[step.id] = "clean" if clean else "stale" if stored_result else "dirty"
         if not clean:
             # A changed step invalidates everything built on top of it.
@@ -173,9 +176,10 @@ def run_flow(
             raise Cancelled(
                 f"Stopped before {step.name}; {len(executed)} step(s) ran and are kept."
             )
-        if reusable and stored.get(step.id) == digest:
+        key = result_key(step.id, project.fidelity)
+        if reusable and stored.get(key) == digest:
             try:
-                state = _load_state(kernel, repository.snapshot_path(branch.id, step.id))
+                state = _load_state(kernel, repository.snapshot_path(branch.id, key))
                 cached.append(step.id)
                 emit(
                     {
@@ -213,13 +217,13 @@ def run_flow(
         repository.save_snapshot(
             project.id,
             branch.id,
-            step.id,
+            key,
             state,
             suffix=kernel.info.snapshot_suffix,
         )
         # The state just computed is what the views will ask for next.
         STATE_CACHE.put(
-            repository.snapshot_path(branch.id, step.id), state, kernel.state_bytes(state)
+            repository.snapshot_path(branch.id, key), state, kernel.state_bytes(state)
         )
         repository.log(
             project.id,
@@ -227,7 +231,7 @@ def run_flow(
             step_id=step.id,
             elapsed_ms=(time.perf_counter() - started_step) * 1000.0,
         )
-        cache.store(branch.id, step.id, digest)
+        cache.store(branch.id, key, digest)
         executed.append(step.id)
     elapsed_ms = (time.perf_counter() - started) * 1000.0
     emit(
@@ -236,7 +240,13 @@ def run_flow(
             "message": f"Finished {len(executed)} step(s), {len(cached)} cache hit(s) in {elapsed_ms:.0f} ms",
         }
     )
-    _warm_views_later(kernel, [repository.snapshot_path(branch.id, step_id) for step_id in executed])
+    _warm_views_later(
+        kernel,
+        [
+            repository.snapshot_path(branch.id, result_key(step_id, project.fidelity))
+            for step_id in executed
+        ],
+    )
     return {
         "branchId": branch.id,
         "executedStepIds": executed,
@@ -288,10 +298,10 @@ def state_for_step(
     if all(step.id != step_id for step in branch.steps):
         raise InvalidRequest(f"step {step_id!r} is not part of this branch")
     try:
-        path = repository.snapshot_path(branch.id, step_id)
+        path = repository.snapshot_path(branch.id, result_key(step_id, project.fidelity))
     except KeyError as error:
         raise InvalidRequest(
-            "This step has no stored result yet. Run the flow first."
+            "This step has no stored result yet in the project's current fidelity. Run the flow first."
         ) from error
     return _load_state(kernel, path), repository, project, kernel
 
@@ -317,7 +327,7 @@ def discard_results(repository: ProjectRepository, project: ProjectDefinition) -
     cache = DigestCache(repository)
     for branch in repository.list_branches(project.id):
         loaded = repository.load_branch(branch.id)
-        cache.forget(branch.id, [step.id for step in loaded.steps])
+        cache.forget(branch.id, [key for step in loaded.steps for key in result_keys(step.id)])
 
 
 def apply_grid(

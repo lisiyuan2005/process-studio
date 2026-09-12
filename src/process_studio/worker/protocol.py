@@ -46,6 +46,7 @@ from .serialize import (
     tool_from_json,
 )
 from .workspace import (
+    result_keys,
     DigestCache,
     initialize_workspace,
     load_project,
@@ -242,7 +243,9 @@ def _persist_document(parameters: Mapping[str, Any]) -> dict[str, Any]:
                 if dropped is not None:
                     # Removing a step invalidates it and everything after it.
                     removed = repository.delete_step_and_dependents(branch.id, dropped)
-                    DigestCache(repository).forget(branch.id, removed)
+                    DigestCache(repository).forget(
+                        branch.id, [key for step_id in removed for key in result_keys(step_id)]
+                    )
             repository.save_branch(project.id, branch)
     return build_document(root, repository, load_project(repository, project.id))
 

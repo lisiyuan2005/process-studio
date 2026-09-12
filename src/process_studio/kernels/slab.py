@@ -470,15 +470,19 @@ def _deposit(
     if mode not in {"conformal", "planar"}:
         raise SlabError(f"unknown deposition mode {mode!r}; expected 'conformal' or 'planar'")
     _ensure_material(device, material, materials)
+    square = project.fidelity == "simplified"
+    kind = f"{mode} ({'square' if square else 'detailed'})"
     if mask is None:
-        logger(f"SLAB deposit {material} {thickness:g} um {mode}")
-        device.deposit(material, thickness, mode=mode)
+        logger(f"SLAB deposit {material} {thickness:g} um {kind}")
+        device.deposit(material, thickness, mode=mode, square=square)
         return
-    logger(f"SLAB deposit {material} {thickness:g} um {mode} inside the mask")
-    _masked_deposit(device, material, thickness, mode, mask)
+    logger(f"SLAB deposit {material} {thickness:g} um {kind} inside the mask")
+    _masked_deposit(device, material, thickness, mode, mask, square)
 
 
-def _masked_deposit(device: Device, material: str, thickness: float, mode: str, mask: Mask) -> None:
+def _masked_deposit(
+    device: Device, material: str, thickness: float, mode: str, mask: Mask, square: bool = False
+) -> None:
     """Deposit only where the mask is open: the lift-off result, exactly.
 
     DeviceFlow deposits over the whole window. The film is therefore grown
@@ -494,7 +498,7 @@ def _masked_deposit(device: Device, material: str, thickness: float, mode: str, 
     if stand_in_name not in registry:
         registry.add(stand_in_name, role=real.role)
     stand_in = registry.resolve(stand_in_name)
-    device.deposit(stand_in_name, thickness, mode=mode)
+    device.deposit(stand_in_name, thickness, mode=mode, square=square)
     state = device._state
     opening = state.clean(mask._geom)
     changed = []

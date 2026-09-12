@@ -1011,3 +1011,32 @@ def test_the_top_view_reports_height_levels_when_asked(workspace):
     assert [level["z"] for level in shaded["levels"]] == sorted(level["z"] for level in shaded["levels"])
     with pytest.raises(InvalidRequest):
         call("get_top_view", root=root, branchId=branch["id"], stepId=branch["steps"][-1]["id"], shading="rainbow")
+
+
+def test_results_of_both_fidelities_are_kept_side_by_side(tmp_path):
+    root = str(tmp_path / "slab")
+    document = call("create_workspace", root=root, name="Both", kernel="slab")
+    branch = document["branches"][0]
+    assert document["project"]["fidelity"] == "detailed"
+    first = branch["steps"][0]["id"]
+    ran = call("run_flow", root=root, branchId=branch["id"], throughStepId=first)
+    assert ran["stepStatuses"][first] == "clean"
+    # Switching the film model shows the other mode's (absent) results...
+    document["project"]["fidelity"] = "simplified"
+    switched = call("save_document", root=root, document=document)
+    assert switched["project"]["fidelity"] == "simplified"
+    assert switched["stepStatuses"][branch["id"]][first] == "dirty"
+    with pytest.raises(InvalidRequest, match="current fidelity"):
+        call("get_section", root=root, branchId=branch["id"], stepId=first, axis="y")
+    ran = call("run_flow", root=root, branchId=branch["id"], throughStepId=first)
+    assert ran["executedStepIds"] == [first]
+    # ...and switching back finds the detailed result still there, unrun.
+    document["project"]["fidelity"] = "detailed"
+    back = call("save_document", root=root, document=document)
+    assert back["stepStatuses"][branch["id"]][first] == "clean"
+    assert call("get_section", root=root, branchId=branch["id"], stepId=first, axis="y")["image"]
+    ran = call("run_flow", root=root, branchId=branch["id"], throughStepId=first)
+    assert ran["cachedStepIds"] == [first]
+    with pytest.raises(InvalidRequest, match="fidelity"):
+        document["project"]["fidelity"] = "rough"
+        call("save_document", root=root, document=document)

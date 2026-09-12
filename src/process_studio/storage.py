@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from .kernel.material_state import MaterialState
 from .models import (
+    result_keys,
     FlowBranch,
     MaterialDefinition,
     MaterialResponse,
@@ -52,7 +53,8 @@ class ProjectRepository:
                     kernel TEXT NOT NULL DEFAULT 'levelset',
                     resolution_um REAL,
                     resolution_xy_um REAL,
-                    section_lines_json TEXT
+                    section_lines_json TEXT,
+                    fidelity TEXT NOT NULL DEFAULT 'detailed'
                 );
                 CREATE TABLE IF NOT EXISTS materials (
                     id TEXT PRIMARY KEY,
@@ -128,15 +130,19 @@ class ProjectRepository:
                 connection.execute("ALTER TABLE projects ADD COLUMN resolution_xy_um REAL")
             if "section_lines_json" not in columns:
                 connection.execute("ALTER TABLE projects ADD COLUMN section_lines_json TEXT")
+            if "fidelity" not in columns:
+                connection.execute(
+                    "ALTER TABLE projects ADD COLUMN fidelity TEXT NOT NULL DEFAULT 'detailed'"
+                )
 
     def save_project(self, project: ProjectDefinition) -> None:
         with self.connect() as connection:
             connection.execute(
                 """INSERT INTO projects(
                     id, name, grid_json, gds_path, active_branch_id, kernel, resolution_um,
-                    resolution_xy_um, section_lines_json
+                    resolution_xy_um, section_lines_json, fidelity
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 -- kernel is deliberately absent from the update list: a
                 -- project keeps the kernel it was created with.
                 ON CONFLICT(id) DO UPDATE SET name=excluded.name,
@@ -144,7 +150,8 @@ class ProjectRepository:
                 active_branch_id=excluded.active_branch_id,
                 resolution_um=excluded.resolution_um,
                 resolution_xy_um=excluded.resolution_xy_um,
-                section_lines_json=excluded.section_lines_json""",
+                section_lines_json=excluded.section_lines_json,
+                fidelity=excluded.fidelity""",
                 (
                     project.id,
                     project.name,
@@ -155,6 +162,7 @@ class ProjectRepository:
                     project.resolution_um,
                     project.resolution_xy_um,
                     json.dumps(project.section_lines),
+                    project.fidelity,
                 ),
             )
 
@@ -175,6 +183,7 @@ class ProjectRepository:
             resolution_um=row["resolution_um"],
             resolution_xy_um=row["resolution_xy_um"],
             section_lines=json.loads(row["section_lines_json"]) if row["section_lines_json"] else [],
+            fidelity=row["fidelity"] or "detailed",
         )
 
     def list_projects(self) -> list[ProjectDefinition]:
@@ -445,10 +454,12 @@ class ProjectRepository:
         if step_id not in ids:
             raise KeyError(step_id)
         removed = ids[ids.index(step_id) :]
+        # Results of every fidelity go with the step.
+        stored_keys = [key for step_id_ in removed for key in result_keys(step_id_)]
         snapshot_ids: list[str] = []
         with self.connect() as connection:
-            placeholders = ",".join("?" for _ in removed)
-            params = [branch_id, *removed]
+            placeholders = ",".join("?" for _ in stored_keys)
+            params = [branch_id, *stored_keys]
             snapshot_ids = [
                 row[0]
                 for row in connection.execute(
@@ -464,8 +475,8 @@ class ProjectRepository:
             )
             connection.execute(
                 f"DELETE FROM branch_steps WHERE branch_id=? "
-                f"AND step_id IN ({placeholders})",
-                params,
+                f"AND step_id IN ({','.join('?' for _ in removed)})",
+                [branch_id, *removed],
             )
         for snapshot_id in snapshot_ids:
             self._delete_snapshot_if_unreferenced(snapshot_id)

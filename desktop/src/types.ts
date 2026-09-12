@@ -144,7 +144,15 @@ export interface ProjectSummary {
   /** The slab kernel's XY arc sagitta when it differs from the z step; null follows it. */
   resolutionXyUm: number | null;
   sectionLines: SectionLine[];
+  /**
+   * How the slab kernel shapes films: "detailed" (rounded, sampled at the
+   * resolution) or "simplified" (square corners, much faster). Results of
+   * both are stored side by side.
+   */
+  fidelity?: Fidelity;
 }
+
+export type Fidelity = "detailed" | "simplified";
 
 export interface SketchShape {
   kind: "rectangle" | "circle" | "polygon" | "path";

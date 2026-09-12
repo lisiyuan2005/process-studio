@@ -5,6 +5,7 @@ import {
   Cpu,
   FileSpreadsheet,
   Grid3x3,
+  Layers,
   LoaderCircle,
   Map as MapIcon,
   Palette,
@@ -64,6 +65,7 @@ import {
 } from "./domain/project";
 import type {
   CliResult,
+  Fidelity,
   TopShading,
   ParameterValue,
   QuickSketch,
@@ -740,6 +742,34 @@ export default function App() {
     [document?.root],
   );
 
+  // The film model is a project setting. Both modes' results stay stored,
+  // so switching only changes which of them the views and statuses show:
+  // the document is saved at once (the views read the stored setting) and
+  // the statuses come back with it.
+  const setFidelity = async (fidelity: Fidelity) => {
+    if (!document || busy) return;
+    setBusy(true);
+    try {
+      const saved = await bridge.saveDocument({
+        ...document,
+        project: { ...document.project, fidelity },
+      });
+      viewCache.current.clear();
+      skipNextAutosave.current = true;
+      setDocumentState(saved);
+      setSaveState("saved");
+      setViewNonce((nonce) => nonce + 1);
+    } catch (reason) {
+      setEvents((current) => [
+        ...current,
+        { kind: "log", message: `Could not switch the film model: ${errorMessage(reason)}` },
+      ]);
+      setShowLog(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleApplyGrid = async (targetSpacingNm: number, bounds: WindowBounds, xyNm: number | null) => {
     if (!document || busy) return;
     setBusy(true);
@@ -886,6 +916,26 @@ export default function App() {
             ).toFixed(0)}{" "}
             nm
           </button>
+          {projectKernel?.id === "slab" && (
+            <button
+              type="button"
+              className={`fidelity-button fidelity-${document.project.fidelity ?? "detailed"}`}
+              title={
+                (document.project.fidelity ?? "detailed") === "simplified"
+                  ? "Simplified: square films, one sample per plane, fast. Click for detailed films (rounded, sampled at the resolution). Results of both modes are kept."
+                  : "Detailed: rounded films sampled at the resolution. Click for simplified films (square corners, much faster). Results of both modes are kept."
+              }
+              disabled={busy}
+              onClick={() =>
+                void setFidelity(
+                  (document.project.fidelity ?? "detailed") === "simplified" ? "detailed" : "simplified",
+                )
+              }
+            >
+              <Layers size={13} />
+              {(document.project.fidelity ?? "detailed") === "simplified" ? "Simplified" : "Detailed"}
+            </button>
+          )}
           {projectKernel && (
             <span
               className="kernel-badge"

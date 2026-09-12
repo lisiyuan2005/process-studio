@@ -92,6 +92,7 @@ def flow_from_document(document: Mapping[str, Any]) -> dict[str, Any]:
         flow["resolution_nm"] = project["resolutionUm"] * 1000.0
         if project.get("resolutionXyUm") is not None:
             flow["resolution_xy_nm"] = project["resolutionXyUm"] * 1000.0
+        flow["fidelity"] = project.get("fidelity", "detailed")
     else:
         flow["spacing_nm"] = grid["spacingUm"] * 1000.0
     flow["materials"] = [
@@ -259,6 +260,8 @@ def apply_flow(session: Session, flow: Mapping[str, Any]) -> dict[str, Any]:
 
     if "name" in flow:
         document["project"]["name"] = str(flow["name"])
+    if "fidelity" in flow:
+        document["project"]["fidelity"] = str(flow["fidelity"])
     if isinstance(flow.get("section_lines"), list):
         document["project"]["sectionLines"] = [
             {"id": new_id(), "name": str(item.get("name") or f"Line {index}"), "start": list(item["start"]), "end": list(item["end"])}

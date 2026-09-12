@@ -50,6 +50,8 @@ def deposit_conformal(
     thickness: float,
     resolution: float,
     xy_resolution: float | None = None,
+    *,
+    from_above: bool = False,
 ) -> tuple[float, float, float]:
     """Deposit ``thickness`` conformally; returns (z_low, z_high, volume added).
 
@@ -57,6 +59,13 @@ def deposit_conformal(
     the staircase that sampling leaves; ``xy_resolution`` is the largest
     sagitta an XY arc may have. It defaults to ``resolution``, which ties
     the two; setting it separately keeps rings cheap while z is fine.
+
+    With ``from_above`` the film only forms where material can arrive from
+    straight up: a point gets film if no solid lies anywhere above it in
+    its XY column. Walls, floors and tops that face the sky are coated as
+    in a conformal film, corners included, so an overhang's lower edge
+    curls a lip down and the wall under it caps up; a recess under the
+    overhang stays empty.
     """
     t = float(thickness)
     if not t > 0:
@@ -119,6 +128,17 @@ def deposit_conformal(
     # scanning every slab for every sample.
     starts = [z0 for z0, _, _ in slabs]
     ends = [z1 for _, z1, _ in slabs]
+    # Footprint of everything from a source upward, for the from-above
+    # cut: a sample at z is shadowed by every source whose z0 lies above it.
+    roof: list[MultiPolygon] = []
+    if from_above:
+        cover = P.EMPTY
+        for _, _, occ in reversed(slabs):
+            if not occ.is_empty:
+                cover = P.as_multipolygon(shapely.unary_union([cover, occ]))
+            roof.append(cover)
+        roof.reverse()
+        roof.append(P.EMPTY)
     # A dilation is a pure function of its geometry, radius and segment count,
     # and the same three recur across samples, so each distinct one is
     # computed once per deposition. The radius is not quantised: only exactly
@@ -159,6 +179,10 @@ def deposit_conformal(
                 dilated = state.clean(shapely.snap(dilated, previous, merge_tol))
         previous = dilated
         new = state.clean(dilated.difference(solid_at(zm)))
+        if from_above and not new.is_empty:
+            shadow = roof[bisect.bisect_right(starts, zm)]
+            if not shadow.is_empty:
+                new = state.clean(new.difference(shadow))
         if not new.is_empty:
             new_regions.append((za, zb, new))
 

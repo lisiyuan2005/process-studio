@@ -22,6 +22,7 @@ from .process.cmp import planarize
 from .process.conformal import deposit_conformal
 from .process.isotropic_etch import etch_isotropic
 from .process.planar import deposit_planar
+from .process.square import deposit_square
 from .process.vertical_etch import etch_vertical
 from .reports import GeometryReport, MeshReport
 from .units import format_length, parse_length, parse_rate, parse_time
@@ -103,8 +104,12 @@ class Device:
 
     # -- process operations ----------------------------------------------
 
-    def deposit(self, material, thickness, mode: str) -> None:
-        """Deposit ``thickness`` of ``material``. ``mode`` is "planar" or "conformal"."""
+    def deposit(self, material, thickness, mode: str, *, square: bool = False) -> None:
+        """Deposit ``thickness`` of ``material``. ``mode`` is "planar" or "conformal".
+
+        ``square`` picks the simplified film: square corners, one sample
+        between the planes of the stack, no rounding; see ``process.square``.
+        """
         mat = self._materials.resolve(material)
         t = parse_length(thickness)
         if t <= 0:
@@ -116,8 +121,14 @@ class Device:
         state = self._state.copy()
         if mode == "planar":
             before = state.volume(mat)
-            z0, z1 = deposit_planar(state, mat, t, self.conformal_resolution, self.xy_resolution)
+            z0, z1 = deposit_planar(
+                state, mat, t, self.conformal_resolution, self.xy_resolution, square=square
+            )
             volume = state.volume(mat) - before
+        elif square:
+            z0, z1, volume = deposit_square(
+                state, mat, t, self.xy_resolution or self.conformal_resolution
+            )
         else:
             z0, z1, volume = deposit_conformal(
                 state, mat, t, self.conformal_resolution, self.xy_resolution
@@ -128,6 +139,7 @@ class Device:
             {
                 "op": "deposit",
                 "mode": mode,
+                "square": bool(square),
                 "material": mat.name,
                 "thickness": format_length(t),
                 "z0": z0,

@@ -12,6 +12,28 @@ def new_id() -> str:
     return uuid4().hex
 
 
+#: How the slab kernel shapes films. "detailed" rounds corners with the
+#: film's radius and samples in z at the resolution; "simplified" gives
+#: square corners from one sample per plane and is much faster.
+FIDELITIES = ("detailed", "simplified")
+
+
+def result_key(step_id: str, fidelity: str) -> str:
+    """The key a step's stored result lives under.
+
+    Results of both fidelities are kept side by side: the detailed one
+    under the bare step id (what every workspace already has), the
+    simplified one under a suffixed id. Switching the project's fidelity
+    then shows what was computed in that mode without a rerun.
+    """
+    return step_id if fidelity == "detailed" else f"{step_id}~{fidelity}"
+
+
+def result_keys(step_id: str) -> list[str]:
+    """Every key a step's results may live under, for forgetting them all."""
+    return [result_key(step_id, fidelity) for fidelity in FIDELITIES]
+
+
 class ProcessType(str, Enum):
     DEPOSIT = "deposit"
     ETCH = "etch"
@@ -224,6 +246,11 @@ class ProjectDefinition:
     #: Named AA–BB section lines, each {"id", "name", "start": [x, y], "end": [x, y]}
     #: in micrometres. They are the user's bookmarks into the geometry.
     section_lines: list[dict[str, Any]] = field(default_factory=list)
+    #: How the slab kernel shapes films: "detailed" (rounded, sampled at the
+    #: resolution) or "simplified" (square corners, one sample per plane,
+    #: much faster). Results of both are stored side by side, so switching
+    #: back shows what was computed before without a rerun.
+    fidelity: str = "detailed"
 
 
 def dataclass_dict(value: Any) -> dict[str, Any]:

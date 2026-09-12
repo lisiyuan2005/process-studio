@@ -16,7 +16,7 @@ import threading
 from pathlib import Path
 from typing import IO, Any, Mapping, Sequence
 
-from ..models import new_id
+from ..models import FIDELITIES, new_id
 from ..worker.errors import Cancelled, InvalidRequest, WorkerError, WorkspaceError
 from .flowfile import (
     PROCESS_TYPES,
@@ -151,6 +151,12 @@ def summarize_project(document: Mapping[str, Any]) -> list[str]:
         lines.append(
             f"Grid       {format_number(grid['spacingUm'] * 1000.0)} nm · "
             f"{grid['nx']}×{grid['ny']}×{grid['nz']} nodes"
+        )
+    if project.get("kernel") == "slab":
+        fidelity = project.get("fidelity") or "detailed"
+        lines.append(
+            f"Fidelity   {fidelity} "
+            + ("(rounded films sampled at the resolution)" if fidelity == "detailed" else "(square films, one sample per plane)")
         )
     if project.get("gdsPath"):
         lines.append(f"GDS        {project['gdsPath']}")
@@ -417,6 +423,21 @@ def _named_line(document: Mapping[str, Any], reference: str) -> dict[str, Any]:
     if reference.strip().isdigit() and 1 <= int(reference) <= len(lines):
         return lines[int(reference) - 1]
     raise InvalidRequest(f"no section line named {reference!r}; see `lines list`.")
+
+
+def cmd_fidelity(session: Session, args: argparse.Namespace) -> int:
+    document = session.document()
+    project = document["project"]
+    if args.value is None:
+        session.emit({"fidelity": project.get("fidelity", "detailed")}, [f"Fidelity   {project.get('fidelity', 'detailed')}"])
+        return EXIT_OK
+    project["fidelity"] = args.value
+    saved = session.save(document)
+    session.emit(
+        {"fidelity": saved["project"]["fidelity"], "steps": Session.steps(saved)},
+        lambda: [f"Fidelity   {saved['project']['fidelity']}"] + table(STEP_HEADER, step_rows(saved)),
+    )
+    return EXIT_OK
 
 
 def cmd_view_section(session: Session, args: argparse.Namespace) -> int:
@@ -874,6 +895,16 @@ def build_parser() -> argparse.ArgumentParser:
                         help="slab kernel only: the XY arc sagitta in nm; 0 makes it follow the z step again")
     window.add_argument("--yes", action="store_true", help="do not remark that results are discarded")
     window.set_defaults(handler=cmd_window)
+
+    fidelity = commands.add_parser(
+        "fidelity", help="show or set how the slab kernel shapes films: detailed or simplified"
+    )
+    fidelity.add_argument(
+        "value", nargs="?", choices=FIDELITIES,
+        help="detailed: rounded films sampled at the resolution; simplified: square films, much faster. "
+        "Results of both are kept, so switching back shows what was computed before",
+    )
+    fidelity.set_defaults(handler=cmd_fidelity)
 
     view = commands.add_parser("view", help="write a section, a top view or a mesh to a file")
     view_commands = view.add_subparsers(dest="view_command", metavar="KIND")
