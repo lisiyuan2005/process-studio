@@ -141,8 +141,8 @@ def build_one_material(
     # the arrangement of *all* materials' rings: every face is then uniformly
     # inside/outside every material in every slab, so the neighbour of a
     # face is exact and needs no probing
-    rings = [g.boundary for s in slabs for g in s.regions.values()]
-    master = shapely.unary_union(rings)
+    segments = P.unique_segments(g for s in slabs for g in s.regions.values())
+    master = shapely.unary_union(segments) if segments is not None else P.EMPTY
     faces2d = [
         orient(f, sign=1.0)
         for f in shapely.get_parts(shapely.polygonize(shapely.get_parts(master)))

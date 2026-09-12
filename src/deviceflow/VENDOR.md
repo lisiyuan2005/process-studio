@@ -51,3 +51,11 @@ under the MIT license in `LICENSE`.
   that was smaller). A 3 nm liner sampled every 0.75 nm gave every cavity
   four times the rings, and the rings of every slab are noded together
   downstream.
+- `_internal/geometry/polygons.py`, `_internal/mesh/builder.py`,
+  `_internal/geometry/state.py`: the arrangement of a device's rings is
+  noded from each distinct undirected edge once (`unique_segments`)
+  instead of from every region's boundary. A boundary between two
+  materials is a ring of both and a film's ring repeats slab after slab,
+  so a filled and polished stack fed GEOS 300k coordinates of coincident
+  lines and ran out of memory; the same arrangement from 7k unique edges
+  takes 19 MB.

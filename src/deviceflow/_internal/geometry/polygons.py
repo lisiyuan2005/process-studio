@@ -70,3 +70,36 @@ def equals(a, b, area_eps: float = 1e-18) -> bool:
     if a.equals(b):
         return True
     return a.symmetric_difference(b).area <= area_eps
+
+
+def unique_segments(geometries):
+    """Every distinct edge of the given polygons' rings, once, as an array of segments (None if there are none).
+
+    The rings of a device's slabs coincide heavily: a boundary between two
+    materials is a ring of both, a film's ring is repeated slab after slab,
+    a plane's outline comes back in every slab above it. Noding the rings
+    as they come makes GEOS work through every coincident copy, which for a
+    filled and polished stack means gigabytes; noding each undirected edge
+    once gives the same arrangement from a fraction of the input.
+    """
+    import numpy as np
+
+    chunks = []
+    for geometry in geometries:
+        for polygon in _iter_polygons(geometry):
+            for ring in (polygon.exterior, *polygon.interiors):
+                coords = shapely.get_coordinates(ring)
+                if len(coords) > 1:
+                    chunks.append(np.hstack([coords[:-1], coords[1:]]))
+    if not chunks:
+        return None
+    segments = np.vstack(chunks)
+    flip = (segments[:, 0] > segments[:, 2]) | (
+        (segments[:, 0] == segments[:, 2]) & (segments[:, 1] > segments[:, 3])
+    )
+    segments[flip] = segments[flip][:, [2, 3, 0, 1]]
+    segments = np.unique(segments, axis=0)
+    segments = segments[(segments[:, 0] != segments[:, 2]) | (segments[:, 1] != segments[:, 3])]
+    if not len(segments):
+        return None
+    return shapely.linestrings(segments.reshape(-1, 2, 2))

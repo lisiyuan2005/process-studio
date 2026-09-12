@@ -232,15 +232,20 @@ class ProcessState:
         # from a fraction of the input; the key is the exact coordinates, so
         # only genuinely identical boundaries are folded together.
         seen: set[bytes] = set()
-        boundaries = []
+        distinct = []
         shape_of_region: list[bytes] = []
         for _, _, region in regions:
             shape = shapely.to_wkb(region)
             shape_of_region.append(shape)
             if shape not in seen:
                 seen.add(shape)
-                boundaries.append(region.boundary)
-        master = shapely.unary_union(boundaries)
+                distinct.append(region)
+        # Distinct regions still share most of their edges (a boundary
+        # between two materials is a ring of both); node each edge once.
+        segments = P.unique_segments(distinct)
+        if segments is None:
+            return
+        master = shapely.unary_union(segments)
         for _ in range(6):
             rounded = shapely.set_precision(master, self.grid, mode="valid_output")
             noded = shapely.unary_union(rounded)
