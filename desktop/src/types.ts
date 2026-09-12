@@ -311,4 +311,6 @@ export interface WorkerCapabilities {
     spacingPresetsNm: number[];
   };
   limits: { interpolationIsDisplayOnly: boolean; calibrated: boolean };
+  /** How to run this same worker as the command-line tool: the program and its leading arguments. */
+  cli?: { command: string[]; packaged: boolean };
 }

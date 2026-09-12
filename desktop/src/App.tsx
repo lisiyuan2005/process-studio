@@ -10,6 +10,7 @@ import {
   Palette,
   Play,
   Save,
+  ScrollText,
   Square,
   TerminalSquare,
   Wrench,
@@ -17,6 +18,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { bridge } from "./bridge";
+import { CliPanel } from "./components/CliPanel";
 import { GridEditor } from "./components/GridEditor";
 import { Inspector } from "./components/Inspector";
 import { MaterialEditor } from "./components/MaterialEditor";
@@ -120,6 +122,7 @@ export default function App() {
   const [showRecipes, setShowRecipes] = useState(false);
   const [showTools, setShowTools] = useState(false);
   const [showGrid, setShowGrid] = useState(false);
+  const [showCli, setShowCli] = useState(false);
   // The sketch being drawn: an existing one by id, or a fresh one for this step.
   const [sketchEditor, setSketchEditor] = useState<{ sketch: QuickSketch; isNew: boolean } | null>(null);
   const [sketchBackdrop, setSketchBackdrop] = useState<TopViewDocument>();
@@ -855,6 +858,15 @@ export default function App() {
           <Wrench size={14} />
           Tools
         </button>
+        <button
+          type="button"
+          className="log-button"
+          title="The command lines that do what the desktop does, ready to paste"
+          onClick={() => setShowCli(true)}
+        >
+          <TerminalSquare size={14} />
+          CLI
+        </button>
         <div className={`save-indicator save-${saveState}`}>
           {saveState === "saving" ? (
             <LoaderCircle className="spin" size={13} />
@@ -872,7 +884,7 @@ export default function App() {
                 : "Saved"}
         </div>
         <button type="button" className="log-button" onClick={() => setShowLog((value) => !value)}>
-          <TerminalSquare size={15} />
+          <ScrollText size={15} />
           Log{events.length > 0 && <span>{events.length}</span>}
         </button>
         {busy && runRequestId.current ? (
@@ -1137,6 +1149,17 @@ export default function App() {
           onPreview={(sketch) => bridge.previewMask(document.root, sketch, selectedStep.keep)}
           onSave={(sketch) => void saveSketch(sketch)}
           onClose={() => setSketchEditor(null)}
+        />
+      )}
+
+      {showCli && (
+        <CliPanel
+          cli={capabilities?.cli}
+          root={document.root}
+          steps={steps}
+          selectedStepId={selectedStepId}
+          sectionLine={sectionLine}
+          onClose={() => setShowCli(false)}
         />
       )}
 

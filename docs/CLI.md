@@ -9,7 +9,7 @@ pip install -e .            # 在仓库根目录；装完就有 process-studio �
 pip install -e ".[yaml]"    # 流程文件要用 YAML 的话
 ```
 
-打包好的桌面版也带着它：worker 二进制不带参数时是 RPC 服务，带参数时就是这个命令行。
+打包好的桌面版也带着它：worker 二进制不带参数时是 RPC 服务，带参数时就是这个命令行。桌面顶栏的 **CLI** 按钮会把当前工作目录的常用命令连同程序的完整路径列出来，点 Copy 粘到终端就能跑。
 
 ```bash
 # macOS

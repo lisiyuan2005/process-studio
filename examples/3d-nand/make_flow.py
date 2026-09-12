@@ -29,7 +29,7 @@ X0, X1 = -0.25, 0.45
 SLITS = [-0.04, 0.45]                  # the block sits between two slits; the right one is half outside
 HOLES = [(-0.17, 0.0), (0.12, 0.0)]
 STAIRS = [0.24, 0.30]                  # beyond each x one more pair is removed
-REACH = 0.19                           # SiN removal: from a slit wall to the middle of the block
+REACH = 0.30                           # SiN removal: from a slit wall past the far end of the trimmed pairs
 STACK_TOP = SOURCE + ETCH_STOP + PAIRS * (OXIDE + NITRIDE) + CAP
 
 

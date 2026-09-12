@@ -71,6 +71,18 @@ def _root(parameters: Mapping[str, Any]) -> Path:
     return Path(root)
 
 
+def _cli_command() -> dict[str, Any]:
+    """How to reach this same worker from a shell, for the desktop's CLI panel.
+
+    A packaged worker is its own command-line tool (the binary with
+    arguments); in a source checkout the CLI is the module the console
+    script points at, run by the interpreter the worker runs on.
+    """
+    if getattr(sys, "frozen", False):
+        return {"command": [sys.executable], "packaged": True}
+    return {"command": [sys.executable, "-m", "process_studio.cli"], "packaged": False}
+
+
 def _describe() -> dict[str, Any]:
     """Report what this build can do so the client never hard-codes it."""
     return {
@@ -97,6 +109,7 @@ def _describe() -> dict[str, Any]:
             "interpolationIsDisplayOnly": True,
             "calibrated": False,
         },
+        "cli": _cli_command(),
     }
 
 

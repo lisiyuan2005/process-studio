@@ -163,7 +163,7 @@ def deposit_conformal(
             new_regions.append((za, zb, new))
 
     before = state.volume(material)
-    changed = _apply(state, material, new_regions)
+    changed = apply_film(state, material, new_regions)
     state.harmonize(changed)
     state.consolidate()
     state.validate()
@@ -224,7 +224,14 @@ def _quad_segs(t: float, resolution: float) -> int:
     return int(segs)
 
 
-def _apply(state: ProcessState, material: Material, new_regions) -> list:
+def apply_film(state: ProcessState, material: Material, new_regions) -> list:
+    """Merge ``(z0, z1, region)`` pieces of ``material`` into the stack; returns the slabs touched.
+
+    Pieces must be sorted by ``z0``. One above the stack becomes a new slab
+    (with a void slab under it if there is a gap); one inside it is merged
+    into the slabs it spans, splitting them at its planes; one straddling
+    the top is both.
+    """
     changed = []
     stack_top = state.slabs[-1].z1 if state.slabs else None
     for za, zb, new in new_regions:

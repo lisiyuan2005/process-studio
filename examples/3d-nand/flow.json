@@ -438,7 +438,7 @@
       "name": "SiN removal (hot H3PO4)",
       "type": "etch",
       "parameters": {
-        "target": 0.19,
+        "target": 0.3,
         "directional_fraction": 0.0
       },
       "rates": {

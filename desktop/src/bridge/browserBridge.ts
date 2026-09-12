@@ -39,6 +39,7 @@ export class BrowserBridge implements DesktopBridge {
         operations: ["merge", "subtract", "intersect"],
       },
       rendering: { surfaces: false, maximumInterpolation: 4 },
+      cli: { command: ["process-studio"], packaged: false },
       kernels: [
         {
           id: "levelset",

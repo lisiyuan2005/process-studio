@@ -1,11 +1,6 @@
 import sys
 
-from .protocol import serve
-
-
-def main() -> int:
-    return serve()
-
+from .run_worker import main
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -603,3 +603,16 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .tool-row .tool-picker { flex: 1; }
 .tool-row .secondary-button { height: 30px; padding: 0 9px; white-space: nowrap; }
 .field-error { color: var(--red); }
+
+/* -- CLI panel: the open workspace as command lines ---------------------- */
+.cli-modal { width: 760px; }
+.cli-body { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 10px; padding: 14px 16px 16px; }
+.cli-note { display: flex; gap: 8px; align-items: flex-start; margin: 0; color: #65727f; font-size: 10px; line-height: 1.5; }
+.cli-note svg { flex: 0 0 auto; margin-top: 2px; }
+.cli-footnote { margin: 4px 0 0; color: #65727f; font-size: 10px; line-height: 1.6; }
+.cli-note code, .cli-footnote code { padding: 0 3px; border-radius: 3px; background: #eef2f5; color: #3d4a56; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 9.5px; }
+.cli-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+.cli-row > div { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.cli-row small { color: #65727f; font-size: 9px; }
+.cli-row code { display: block; padding: 7px 10px; border: 1px solid #d5dde4; border-radius: 6px; background: #f3f6f8; color: #223040; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10px; line-height: 1.45; white-space: pre-wrap; word-break: break-all; user-select: all; }
+.cli-row .secondary-button { min-width: 84px; height: 31px; padding: 0 10px; }

@@ -42,6 +42,8 @@ def test_describe_reports_capabilities_without_hard_coding_them():
     assert described["protocolVersion"] == 2
     assert "etch" in described["processTypes"]
     assert described["maskSources"] == ["none", "quick_sketch", "gds"]
+    # The desktop's CLI panel prefixes its commands with this.
+    assert described["cli"]["command"] and described["cli"]["packaged"] is False
     assert described["numerics"]["solverOrders"] == [1, 2]
     assert described["limits"]["calibrated"] is False
 

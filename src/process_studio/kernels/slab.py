@@ -295,9 +295,22 @@ def _factory(grid: float):
     return MaskFactory(grid=grid)
 
 
-def _ensure_material(device: Device, name: str) -> None:
-    if name not in device._materials:
+def _ensure_material(
+    device: Device, name: str, materials: Sequence[MaterialDefinition] = ()
+) -> None:
+    """Define ``name`` in the device from the workspace's material library.
+
+    The role and colour are handed over explicitly: a device restored from a
+    stored step carries the library as it was when that step ran, so a
+    material added to the library since would otherwise be unknown to it.
+    """
+    if name in device._materials:
+        return
+    definition = next((m for m in materials if m.name == name), None)
+    if definition is None:
         device.material(name)
+        return
+    device.material(name, role=_role(definition.category), color=definition.color)
 
 
 # -- masks -----------------------------------------------------------------
@@ -437,6 +450,7 @@ def _deposit(
     logger,
     project: ProjectDefinition,
     mask: Mask | None,
+    materials: Sequence[MaterialDefinition] = (),
 ) -> None:
     material = str(parameters.get("material") or recipe.output_material or "")
     if not material:
@@ -449,11 +463,12 @@ def _deposit(
     if mode in {"directional", "evaporation", "fill", "directional prism"}:
         raise SlabError(
             f"the slab kernel cannot deposit in {mode!r} mode; it offers 'conformal' "
-            "and 'planar'. Use a level-set project for shadowed or filling deposition."
+            "(equal thickness on every surface) and 'planar' (from straight above, "
+            "no sidewall coverage). Use a level-set project for the other modes."
         )
     if mode not in {"conformal", "planar"}:
         raise SlabError(f"unknown deposition mode {mode!r}; expected 'conformal' or 'planar'")
-    _ensure_material(device, material)
+    _ensure_material(device, material, materials)
     if mask is None:
         logger(f"SLAB deposit {material} {thickness:g} um {mode}")
         device.deposit(material, thickness, mode=mode)
@@ -506,16 +521,16 @@ def _etch(
     mask: Mask | None,
     logger,
     project: ProjectDefinition,
+    materials: Sequence[MaterialDefinition] = (),
 ) -> None:
     rates = _etch_rates(recipe, parameters)
     active = {name: rate for name, rate in rates.items() if rate > 0.0}
     if not active:
         raise SlabError("every material in this etch has rate zero; nothing would be removed")
     for name in rates:
-        if name not in device._materials:
-            # An etch may list a material this device never grew; the kernel
-            # only needs to know the name to give it a rate.
-            device.material(name)
+        # An etch may list a material this device never grew; the kernel
+        # only needs to know the name to give it a rate.
+        _ensure_material(device, name, materials)
     fraction = float(parameters.get("directional_fraction", 1.0))
     if fraction not in (0.0, 1.0):
         raise SlabError(
@@ -715,12 +730,12 @@ class SlabKernel:
                 mask = step_mask(
                     device, step, project=project, parameters=parameters, sketches=sketches
                 )
-                _deposit(device, step, recipe, parameters, logger, project, mask)
+                _deposit(device, step, recipe, parameters, logger, project, mask, materials)
             elif recipe.process_type is ProcessType.ETCH:
                 mask = step_mask(
                     device, step, project=project, parameters=parameters, sketches=sketches
                 )
-                _etch(device, step, recipe, parameters, mask, logger, project)
+                _etch(device, step, recipe, parameters, mask, logger, project, materials)
             elif recipe.process_type is ProcessType.CMP:
                 _cmp(device, recipe, parameters, state.z_offset, logger)
         except DeviceFlowError as error:

@@ -115,8 +115,9 @@ class Device:
         # transactional: work on a copy, commit only after validation succeeded
         state = self._state.copy()
         if mode == "planar":
+            before = state.volume(mat)
             z0, z1 = deposit_planar(state, mat, t)
-            volume = state.bounds_area * t
+            volume = state.volume(mat) - before
         else:
             z0, z1, volume = deposit_conformal(
                 state, mat, t, self.conformal_resolution, self.xy_resolution

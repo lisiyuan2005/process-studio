@@ -739,3 +739,108 @@ def test_an_isotropic_etch_steps_by_the_real_barrier_layer(kernel):
     assert nitride_rows and all(b <= 0.8 - 0.06 - 0.185 or a >= 0.8 + 0.06 + 0.185 for a, b, _m in nitride_rows)
     oxide_rows = [i for i in section.intervals(0.8 + 0.025 + 0.03 + 0.012) if i[2] == "SiO2"]
     assert oxide_rows and any(b - a > 0.7 for a, b, _m in oxide_rows)
+
+
+def run(kernel, state, process_step, project, sketches, materials):
+    return kernel.run_step(
+        state,
+        process_step,
+        project=project,
+        recipes={},
+        sketches=sketches,
+        logger=lambda _message: None,
+        materials=materials,
+    )
+
+
+def test_a_planar_film_lands_on_every_surface_seen_from_above(kernel, project, sketches):
+    materials = default_materials()
+    state = kernel.initial_state(project, materials=materials)
+    trenched = run(
+        kernel,
+        state,
+        step(
+            ProcessType.ETCH,
+            mask_source="quick_sketch",
+            parameters={"target": 0.3, "directional_fraction": 1.0, "sketch_id": "default"},
+            material_responses={"Si": MaterialResponse("Si", 0.1)},
+        ),
+        project, sketches, materials,
+    )
+    filled = run(
+        kernel,
+        trenched,
+        step(ProcessType.DEPOSIT, parameters={"target": 0.1, "mode": "planar"}, output_material="W"),
+        project, sketches, materials,
+    )
+    device = filled.device
+    section = device.cross_section((-0.8, 0.0), (0.8, 0.0))
+    # The wafer top and the trench floor both rise by the film thickness, so
+    # the trench keeps its depth instead of being bridged at the top. (The
+    # argument is the distance along the line: 0.8 is the trench centre.)
+    assert section.surface_z(0.2) == pytest.approx(0.9)
+    assert section.surface_z(0.8) == pytest.approx(0.6)
+    assert device.material_at(0.0, 0.0, 0.55).name == "W"
+    assert device.material_at(0.0, 0.0, 0.7) is None
+    # Nothing on the sidewall: the film comes from straight above.
+    assert device.material_at(0.21, 0.0, 0.75) is None
+    # Every column got the same thickness.
+    x0, y0, x1, y1 = device._state.bounds
+    assert device.volume("W") == pytest.approx((x1 - x0) * (y1 - y0) * 0.1, rel=1e-3)
+
+
+def test_a_planar_film_leaves_a_cavity_under_an_overhang_empty(kernel, project, sketches):
+    materials = default_materials()
+    state = kernel.initial_state(project, materials=materials)
+    device = state.device
+    oxide = device.material("SiO2")
+    x0, y0, x1, y1 = device._state.bounds
+    from shapely.geometry import box
+
+    # A recess in the right half, roofed over by a full-width layer.
+    device._state.add_slab(0.8, 0.9, {oxide: box(x0, y0, 0.0, y1)})
+    device._state.add_slab(0.9, 1.0, {oxide: box(x0, y0, x1, y1)})
+    covered = run(
+        kernel,
+        state,
+        step(ProcessType.DEPOSIT, parameters={"target": 0.05, "mode": "planar"}, output_material="W"),
+        project, sketches, materials,
+    )
+    device = covered.device
+    assert device.material_at(0.4, 0.0, 0.85) is None, "the recess is shadowed by its roof"
+    assert device.material_at(0.4, 0.0, 1.02).name == "W"
+    assert device.material_at(-0.4, 0.0, 1.02).name == "W"
+    assert device.volume("W") == pytest.approx((x1 - x0) * (y1 - y0) * 0.05, rel=1e-3)
+
+
+def test_a_material_added_to_the_library_after_a_step_was_stored_is_known(
+    tmp_path, kernel, project, sketches
+):
+    from process_studio.models import MaterialDefinition
+
+    old_library = default_materials()
+    state = kernel.initial_state(project, materials=old_library)
+    path = tmp_path / "wafer.dfz"
+    state.save(path)
+    restored = kernel.load_state(path)
+    library = [*old_library, MaterialDefinition("SiN-trap", "Dielectric", "#2f7f7f")]
+    grown = run(
+        kernel,
+        restored,
+        step(ProcessType.DEPOSIT, parameters={"target": 0.02, "mode": "planar"}, output_material="SiN-trap"),
+        project, sketches, library,
+    )
+    assert grown.priority == ["Si", "SiN-trap"]
+    assert grown.device._materials.resolve("SiN-trap").role == "dielectric"
+    # An etch that names it is fine too, on a state that never grew it.
+    etched = run(
+        kernel,
+        restored,
+        step(
+            ProcessType.ETCH,
+            parameters={"target": 0.01, "directional_fraction": 1.0},
+            material_responses={"SiN-trap": MaterialResponse("SiN-trap", 0.1), "Si": MaterialResponse("Si", 0.1)},
+        ),
+        project, sketches, library,
+    )
+    assert etched.priority == ["Si"]
