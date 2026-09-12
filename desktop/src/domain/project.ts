@@ -525,7 +525,7 @@ export function moveSteps(
   const selected = new Set(orderedSelection(document, ids));
   if (selected.size === 0) return document;
   const steps = [...getSteps(document)];
-  const indices = steps.map((step, index) => index).filter((index) => selected.has(steps[index].id));
+  const indices = steps.map((_, index) => index).filter((index) => selected.has(steps[index].id));
   if (direction === 1) indices.reverse();
   let earliest: string | undefined;
   for (const index of indices) {

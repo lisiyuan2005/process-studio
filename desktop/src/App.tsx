@@ -3,18 +3,13 @@ import {
   CircleAlert,
   CheckCircle2,
   Cpu,
-  FileSpreadsheet,
   Grid3x3,
   Layers,
   LoaderCircle,
-  Map as MapIcon,
-  Palette,
   Play,
   Save,
   ScrollText,
   Square,
-  TerminalSquare,
-  Wrench,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
