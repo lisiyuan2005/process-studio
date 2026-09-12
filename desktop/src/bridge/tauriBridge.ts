@@ -15,6 +15,7 @@ import type {
   SectionLine,
   SurfaceDocument,
   TopViewDocument,
+  UpdateInfo,
   WindowBounds,
   WorkerCapabilities,
   WorkerEvent,
@@ -112,6 +113,14 @@ export class TauriBridge implements DesktopBridge {
 
   runCli(root: string, argv: string[], stdin?: string, requestId?: string): Promise<CliResult> {
     return call<CliResult>("run_cli", { root, argv, stdin: stdin ?? null }, requestId);
+  }
+
+  checkUpdate(): Promise<UpdateInfo> {
+    return call<UpdateInfo>("check_update");
+  }
+
+  async openUrl(url: string): Promise<void> {
+    await call<{ opened: boolean }>("open_url", { url });
   }
 
   getSurfaces(root: string, request: ViewRequest): Promise<SurfaceDocument> {

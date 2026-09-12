@@ -22,6 +22,8 @@ const WORKER_METHODS: &[&str] = &[
     "preview_mask",
     "run_flow",
     "run_cli",
+    "check_update",
+    "open_url",
     "get_surfaces",
     "get_section",
     "get_top_view",

@@ -629,3 +629,12 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .variant-controls .fidelity-button.fidelity-simplified { border-color: #d9a54a; background: #fff6e5; color: #9a6412; }
 .variant-controls .fidelity-button.fidelity-detailed { border-color: #7fb0dc; background: #eef5fb; color: #2b5f8f; }
 .fidelity-button:disabled { opacity: 0.6; cursor: default; }
+
+/* -- update check on the home page ------------------------------------------ */
+.update-check { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
+.update-news { color: var(--muted); font-size: 10px; }
+.update-news.muted { color: var(--faint); }
+.update-link { display: inline-flex; align-items: center; gap: 5px; padding: 3px 7px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--muted); font-size: 9.5px; cursor: pointer; }
+.update-link:hover { border-color: var(--accent); color: var(--text); }
+.update-link:disabled { opacity: 0.6; cursor: default; }
+.update-button { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent-soft); color: var(--accent); font-size: 10px; cursor: pointer; }

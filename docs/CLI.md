@@ -1,6 +1,6 @@
 # 命令行：`process-studio`
 
-`process-studio` 是 worker 的第二个客户端，和桌面外壳并列：它走同一个 `dispatch()`，读写同一份 document，保存走同一条路径。所以命令行改过的工作目录桌面能直接打开，反过来也一样；两边看到的步骤状态（ready / stale / not run）是同一套摘要链算出来的。
+`process-studio` 是 worker 的第二个客户端，和桌面外壳并列：它走同一个 `dispatch()`，读写同一份 document，保存走同一条路径。所以命令行改过的工作目录桌面能直接打开，反过来也一样；两边看到的步骤状态（ready / stale / not run）是同一套摘要链算出来的。摘要把整数值的浮点数（流程文件里的 `1.0`）和整数（桌面 JSON 里的 `1`）算作同一个值，所以桌面保存一次命令行建的工作目录不会让步骤变 stale。
 
 ## 安装
 

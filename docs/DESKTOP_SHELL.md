@@ -153,6 +153,8 @@ worker 二进制不带参数时是 RPC 服务，带参数时是命令行工具 `
 
 脚本先用 PyInstaller 把 worker 打成独立可执行文件放进 `desktop/src-tauri/resources/worker`，做一次 `describe` 冒烟测试，再执行 `npm run tauri build`。发布版通过 `PROCESS_STUDIO_WORKER` 可以覆盖 worker 路径。
 
+**发布与检查更新**：推一个 `v*` 标签（版本号同时写在 `pyproject.toml`、`src/process_studio/__init__.py`、`desktop/package.json`、`desktop/src-tauri/tauri.conf.json` 和 `Cargo.toml` 里）会构建两个平台的三个版本，并由 `publish` 任务发成一个 GitHub Release，资产命名为 `ProcessStudio-[Slab-|LevelSet-]Windows.zip` 和 `ProcessStudio-[Slab-|LevelSet-]macOS.zip`（外加 dmg）。首页版本号旁边的 **Check for updates** 走 worker 的 `check_update`（读 `releases/latest`，页面本身不联网），比较版本号后给出本平台本版本对应资产的 **Download** 按钮和 **Release notes**，两者都由 worker 的 `open_url` 用系统浏览器打开，且只允许仓库自己的地址。
+
 `PROCESS_STUDIO_KERNELS` 决定这一份打包带哪些内核：不设是两个都带；设成 `slab` 或 `levelset` 就只带一个。选择被写进 worker 里的 `process_studio/kernels/enabled.txt`，另一个内核的包不进 bundle（slab 版不带 scikit-image，level set 版不带 deviceflow、shapely、trimesh）。单内核版的产品名和标识符不同（`Process Studio Slab`、`Process Studio Level Set`），可以和完整版装在同一台机器上。单内核版新建工作区不再有内核选择，打开另一个内核建的工程会明确拒绝并说明该去哪个版本打开，不会用错的内核去跑它。冒烟测试按 `PROCESS_STUDIO_KERNELS` 检查 worker 报告的内核。
 
 `Desktop builds` 工作流跑的就是这两个脚本，打 tag 时每个平台跑三份（完整、只有 slab、只有 level set）；手动触发时可以在 GitHub 的 Run workflow 对话框里选平台和版本，只跑一个作业，比如本机杀毒软件（CrowdStrike 一类）会删掉 PyInstaller 产物时，就用它打 Windows 包。构建前先执行 `python -m pytest -q`，前端测试由脚本里的 `npm run test` 负责。构建只产出应用本身：Windows 用 `--no-bundle`，交付 `ProcessStudio.exe` 加同级的 `resources/`；macOS 用 `--bundles app`，交付 `Process Studio.app`。不生成 NSIS、MSI 或 DMG。

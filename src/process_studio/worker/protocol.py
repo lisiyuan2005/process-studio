@@ -27,6 +27,7 @@ from ..simulation_settings import MAXIMUM_NODES, estimate_grid, grid_for_target_
 from .errors import InvalidRequest, WorkerError, WorkspaceError
 from .export import write_image, write_mesh
 from .render import MAXIMUM_INTERPOLATION, MESHES_AVAILABLE, sketch_preview_image
+from .update import check_update, open_url
 from .runner import (
     apply_grid,
     apply_resolution,
@@ -630,6 +631,10 @@ def dispatch(
         )
     if method == "run_cli":
         return _run_cli(parameters, output, cancel)
+    if method == "check_update":
+        return check_update()
+    if method == "open_url":
+        return open_url(parameters.get("url"))
     if method == "run_flow":
         root = _root(parameters)
 

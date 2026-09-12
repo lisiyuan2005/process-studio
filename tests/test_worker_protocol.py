@@ -1040,3 +1040,16 @@ def test_results_of_both_fidelities_are_kept_side_by_side(tmp_path):
     with pytest.raises(InvalidRequest, match="fidelity"):
         document["project"]["fidelity"] = "rough"
         call("save_document", root=root, document=document)
+
+
+def test_a_digest_does_not_tell_a_whole_float_from_an_int():
+    from process_studio.models import ProcessStep, ProcessType, Recipe
+    from process_studio.worker.workspace import step_digest
+
+    def digest(fraction):
+        step = ProcessStep("Etch", process_type=ProcessType.ETCH, parameters={"target": 0.3, "directional_fraction": fraction})
+        recipe = Recipe("r", ProcessType.ETCH, parameters=dict(step.parameters))
+        return step_digest("genesis", step, recipe, None, {"nx": 10, "spacingUm": 0.01})
+
+    assert digest(1) == digest(1.0)
+    assert digest(1) != digest(0)

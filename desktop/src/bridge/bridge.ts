@@ -11,6 +11,7 @@ import type {
   SectionLine,
   SurfaceDocument,
   TopShading,
+  UpdateInfo,
   TopViewDocument,
   WindowBounds,
   WorkerCapabilities,
@@ -59,6 +60,10 @@ export interface DesktopBridge {
    * `cancel` stop a `run` started this way.
    */
   runCli(root: string, argv: string[], stdin?: string, requestId?: string): Promise<CliResult>;
+  /** Ask GitHub for the newest release and how it compares with this build. */
+  checkUpdate(): Promise<UpdateInfo>;
+  /** Open one of the repository's own pages (a release, a download) in the browser. */
+  openUrl(url: string): Promise<void>;
   getSurfaces(root: string, request: ViewRequest): Promise<SurfaceDocument>;
   getSection(
     root: string,

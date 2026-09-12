@@ -1,7 +1,80 @@
-import { ArrowRight, Boxes, Clock3, FolderOpen, Layers3, Lock, Plus, X } from "lucide-react";
+import { ArrowRight, Boxes, Clock3, Download, FolderOpen, Layers3, Lock, Plus, RefreshCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { RecentWorkspace } from "../domain/recent";
-import type { KernelDescription } from "../types";
+import type { KernelDescription, UpdateInfo } from "../types";
+
+function megabytes(bytes: number): string {
+  return `${(bytes / 1_048_576).toFixed(bytes >= 104_857_600 ? 0 : 1)} MB`;
+}
+
+/** The version line of the home page: this build, and whether GitHub has a newer one. */
+function UpdateCheck({
+  version,
+  onCheck,
+  onOpenUrl,
+}: {
+  version: string;
+  onCheck: () => Promise<UpdateInfo>;
+  onOpenUrl: (url: string) => Promise<void>;
+}) {
+  const [state, setState] = useState<
+    { kind: "idle" } | { kind: "checking" } | { kind: "done"; info: UpdateInfo } | { kind: "failed"; message: string }
+  >({ kind: "idle" });
+  const check = async () => {
+    setState({ kind: "checking" });
+    try {
+      setState({ kind: "done", info: await onCheck() });
+    } catch (reason) {
+      setState({ kind: "failed", message: reason instanceof Error ? reason.message : String(reason) });
+    }
+  };
+  return (
+    <div className="update-check">
+      <span className="version-tag" title="This build">{version}</span>
+      {state.kind === "done" && state.info.isNewer ? (
+        <>
+          <span className="update-news">
+            {state.info.latestVersion} is available
+            {state.info.asset ? "" : " (no download for this platform; see the release page)"}
+          </span>
+          {state.info.asset && (
+            <button
+              type="button"
+              className="update-button"
+              title={`Download ${state.info.asset.name} with the browser`}
+              onClick={() => void onOpenUrl(state.info.asset!.url)}
+            >
+              <Download size={12} />
+              Download {megabytes(state.info.asset.sizeBytes)}
+            </button>
+          )}
+          <button type="button" className="update-link" onClick={() => void onOpenUrl(state.info.releaseUrl)}>
+            Release notes
+          </button>
+        </>
+      ) : (
+        <>
+          {state.kind === "done" && <span className="update-news muted">Up to date</span>}
+          {state.kind === "failed" && (
+            <span className="update-news muted" title={state.message}>
+              Could not check: {state.message}
+            </span>
+          )}
+          <button
+            type="button"
+            className="update-link"
+            disabled={state.kind === "checking"}
+            title="Ask GitHub for the newest release"
+            onClick={() => void check()}
+          >
+            <RefreshCw size={11} className={state.kind === "checking" ? "spin" : ""} />
+            {state.kind === "checking" ? "Checking…" : "Check for updates"}
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
 
 interface ProjectHomeProps {
   runtime: "tauri" | "browser";
@@ -14,6 +87,10 @@ interface ProjectHomeProps {
   onOpen: () => void;
   onOpenRecent: (root: string) => void;
   onForgetRecent: (root: string) => void;
+  /** The worker's version, which is the application's. */
+  version?: string;
+  onCheckUpdate: () => Promise<UpdateInfo>;
+  onOpenUrl: (url: string) => Promise<void>;
 }
 
 export function ProjectHome({
@@ -27,6 +104,9 @@ export function ProjectHome({
   onOpen,
   onOpenRecent,
   onForgetRecent,
+  version,
+  onCheckUpdate,
+  onOpenUrl,
 }: ProjectHomeProps) {
   const [name, setName] = useState("Process Studio Project");
   const [kernel, setKernel] = useState(defaultKernel);
@@ -42,7 +122,7 @@ export function ProjectHome({
           <Layers3 size={21} />
         </div>
         <span>Process Studio</span>
-        <span className="version-tag">0.5</span>
+        <UpdateCheck version={version ?? "—"} onCheck={onCheckUpdate} onOpenUrl={onOpenUrl} />
       </header>
 
       <main className="home-main">

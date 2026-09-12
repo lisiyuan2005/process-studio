@@ -179,6 +179,18 @@ export interface WorkspaceDocument {
   stepStatuses: Record<string, Record<string, StepStatus>>;
 }
 
+/** The newest published release, compared with this build. */
+export interface UpdateInfo {
+  currentVersion: string;
+  latestVersion: string;
+  isNewer: boolean;
+  releaseUrl: string;
+  publishedAt: string | null;
+  notes: string;
+  /** The download for this platform and edition, when the release carries one. */
+  asset: { name: string; url: string; sizeBytes: number } | null;
+}
+
 /** One command line run inside the worker, as the CLI would have run it. */
 export interface CliResult {
   exitCode: number;

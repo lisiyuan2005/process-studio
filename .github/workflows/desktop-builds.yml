@@ -21,7 +21,12 @@ on:
       - "v*"
 
 # The Tauri shell is the desktop application; the artifacts are the
-# executable and the .app, with no installer or disk image.
+# executable and the .app, with no installer or disk image. A tag also
+# publishes a GitHub release carrying every edition, which is what the
+# application's "Check for updates" reads.
+permissions:
+  contents: write
+
 # Three builds of each: both kernels, the slab kernel alone, the level-set
 # kernel alone. A single-kernel build offers no kernel choice and refuses a
 # project made with the other one.
@@ -167,3 +172,35 @@ jobs:
             release/${{ env.ARTIFACT }}.zip
             desktop/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
+
+  publish:
+    # Every edition of both platforms goes into one release under the tag,
+    # named the way the worker's update check expects (see worker/update.py).
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Zip the Windows editions
+        run: |
+          set -e
+          mkdir -p release
+          for edition in ProcessStudio-Windows ProcessStudio-Slab-Windows ProcessStudio-LevelSet-Windows; do
+            if [ -d "artifacts/$edition" ]; then
+              (cd "artifacts/$edition" && zip -qr "../../release/$edition.zip" .)
+            fi
+          done
+          for edition in ProcessStudio-macOS ProcessStudio-Slab-macOS ProcessStudio-LevelSet-macOS; do
+            if [ -d "artifacts/$edition" ]; then
+              find "artifacts/$edition" \( -name '*.zip' -o -name '*.dmg' \) -exec cp {} release/ \;
+            fi
+          done
+          ls -l release
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true

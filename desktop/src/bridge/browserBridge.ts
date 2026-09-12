@@ -1,6 +1,7 @@
 import type { DesktopBridge, RunOptions, ViewRequest } from "./bridge";
 import type {
   CliResult,
+  UpdateInfo,
   GdsImportResult,
   MaskPreview,
   ProcessStep,
@@ -136,6 +137,14 @@ export class BrowserBridge implements DesktopBridge {
 
   async runCli(): Promise<CliResult> {
     throw new Error(NO_KERNEL);
+  }
+
+  async checkUpdate(): Promise<UpdateInfo> {
+    throw new Error("The update check needs the desktop application.");
+  }
+
+  async openUrl(url: string): Promise<void> {
+    window.open(url, "_blank", "noopener");
   }
 
   async getSurfaces(_root: string, _request: ViewRequest): Promise<SurfaceDocument> {

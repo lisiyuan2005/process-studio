@@ -837,6 +837,9 @@ export default function App() {
         onOpen={handleOpen}
         onOpenRecent={(rootPath) => void handleOpenRecent(rootPath)}
         onForgetRecent={(rootPath) => setRecent(forgetWorkspace(rootPath))}
+        version={capabilities?.workerVersion}
+        onCheckUpdate={() => bridge.checkUpdate()}
+        onOpenUrl={(url) => bridge.openUrl(url)}
       />
     );
   }

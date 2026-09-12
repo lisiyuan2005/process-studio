@@ -242,8 +242,27 @@ def load_project(repository: ProjectRepository, project_id: str | None = None) -
         return projects[0]
 
 
+def _plain_numbers(value: Any) -> Any:
+    """The value with every whole float as an integer.
+
+    The shell's JSON carries a whole number as ``1`` and a flow file's as
+    ``1.0``; Python compares them equal but serialises them differently,
+    and a digest that told them apart made every masked step stale after
+    the desktop saved a workspace the CLI had built. Whole floats become
+    integers, the form the shell has always stored, so the digests of
+    workspaces built in the desktop stay what they were.
+    """
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, Mapping):
+        return {str(k): _plain_numbers(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain_numbers(v) for v in value]
+    return value
+
+
 def _canonical(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return json.dumps(_plain_numbers(value), sort_keys=True, separators=(",", ":"), default=str)
 
 
 def step_digest(
