@@ -782,9 +782,12 @@ def test_a_planar_film_lands_on_every_surface_seen_from_above(kernel, project, s
     assert section.surface_z(0.8) == pytest.approx(0.6)
     assert device.material_at(0.0, 0.0, 0.55).name == "W"
     assert device.material_at(0.0, 0.0, 0.7) is None
-    # The wall faces the sky, so it is coated too: the hole narrows by t.
+    # The wall faces the sky, so it is coated too: the hole narrows by t at
+    # every height, the top film included (no rounding at the mouth).
     assert device.material_at(0.18, 0.0, 0.75).name == "W"
     assert device.material_at(0.05, 0.0, 0.75) is None
+    assert device.material_at(0.13, 0.0, 0.85).name == "W"
+    assert device.material_at(0.11, 0.0, 0.85) is None
 
 
 def test_a_planar_film_leaves_a_recess_under_an_overhang_empty(kernel, project, sketches):
@@ -815,6 +818,9 @@ def test_a_planar_film_leaves_a_recess_under_an_overhang_empty(kernel, project, 
     assert device.material_at(0.22, 0.0, 0.88) is None
     assert device.material_at(0.22, 0.0, 0.82).name == "W"
     assert device.material_at(0.3, 0.0, 0.87) is None
+    # The roof's top film reaches out over its riser film: a square corner.
+    assert device.material_at(0.23, 0.0, 1.02).name == "W"
+    assert device.material_at(0.26, 0.0, 1.02) is None
     assert device.material_at(-0.4, 0.0, 1.02).name == "W"
 
 

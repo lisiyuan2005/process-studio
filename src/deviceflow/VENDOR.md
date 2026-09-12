@@ -61,11 +61,12 @@ under the MIT license in `LICENSE`.
   takes 19 MB.
 - `process/planar.py`, `process/conformal.py`: planar deposition is the
   film that arrives from straight above instead of one blanket slab on
-  the top plane: the conformal film with `from_above`, which cuts each z
-  sample to the columns with no solid anywhere above it and seeds it only
-  from solids at or below the sample, so no lip hangs down from an
-  overhang's lower edge. Tops, floors and walls that face the sky are
-  coated, a recess under an overhang stays empty and its mouth narrows
-  only by the floor rising, a step stays a step and a hole keeps its
-  depth while its floor rises. The blanket slab remains for an empty
-  device (the substrate).
+  the top plane. At each height the film is the solid's outline pushed
+  out by `t` (wall film, flat-ended at the wall's top and bottom) plus
+  every sky-visible horizontal face raised by `t` and reaching `t` past
+  its edge (a square outer corner), minus the columns with a solid
+  anywhere above. A recess under an overhang stays empty and both lips
+  of its mouth end flat, a step stays a step, a hole narrows by `t` and
+  keeps its depth while its floor rises. Nothing is rounded in z, so one
+  sample between consecutive planes (and planes + `t`) is exact. The
+  blanket slab remains for an empty device (the substrate).

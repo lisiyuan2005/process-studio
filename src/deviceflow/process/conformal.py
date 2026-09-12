@@ -50,8 +50,6 @@ def deposit_conformal(
     thickness: float,
     resolution: float,
     xy_resolution: float | None = None,
-    *,
-    from_above: bool = False,
 ) -> tuple[float, float, float]:
     """Deposit ``thickness`` conformally; returns (z_low, z_high, volume added).
 
@@ -59,14 +57,6 @@ def deposit_conformal(
     the staircase that sampling leaves; ``xy_resolution`` is the largest
     sagitta an XY arc may have. It defaults to ``resolution``, which ties
     the two; setting it separately keeps rings cheap while z is fine.
-
-    With ``from_above`` the film only forms where the material can arrive
-    from straight up: a point gets film if no solid lies anywhere above it
-    in its XY column, and only solids at or below the point seed it, so
-    nothing hangs down from an overhang's lower edge. Walls, floors and
-    tops that face the sky are coated as in a conformal film; a recess
-    under an overhang stays empty and its mouth is narrowed only by the
-    floor rising, so it closes only when it is lower than the thickness.
     """
     t = float(thickness)
     if not t > 0:
@@ -129,17 +119,6 @@ def deposit_conformal(
     # scanning every slab for every sample.
     starts = [z0 for z0, _, _ in slabs]
     ends = [z1 for _, z1, _ in slabs]
-    # Footprint of everything from a source upward, for the from-above
-    # cut: a sample at z is shadowed by every source whose z0 lies above it.
-    roof: list[MultiPolygon] = []
-    if from_above:
-        cover = P.EMPTY
-        for _, _, occ in reversed(slabs):
-            if not occ.is_empty:
-                cover = P.as_multipolygon(shapely.unary_union([cover, occ]))
-            roof.append(cover)
-        roof.reverse()
-        roof.append(P.EMPTY)
     # A dilation is a pure function of its geometry, radius and segment count,
     # and the same three recur across samples, so each distinct one is
     # computed once per deposition. The radius is not quantised: only exactly
@@ -153,12 +132,6 @@ def deposit_conformal(
         for index in range(first, last):
             z0, z1, occ = slabs[index]
             if occ.is_empty:
-                continue
-            # Nothing grows downward from a solid: the lower edge of an
-            # overhang gets no lip, so the mouth of a recess under it is
-            # narrowed only by the floor rising, and the film on the riser
-            # above it ends flat at the overhang's underside.
-            if from_above and z0 > zm:
                 continue
             if z0 <= zm < z1:
                 dz = 0.0
@@ -186,10 +159,6 @@ def deposit_conformal(
                 dilated = state.clean(shapely.snap(dilated, previous, merge_tol))
         previous = dilated
         new = state.clean(dilated.difference(solid_at(zm)))
-        if from_above and not new.is_empty:
-            shadow = roof[bisect.bisect_right(starts, zm)]
-            if not shadow.is_empty:
-                new = state.clean(new.difference(shadow))
         if not new.is_empty:
             new_regions.append((za, zb, new))
 
