@@ -16,6 +16,10 @@ on:
         type: choice
         default: all
         options: [all, full, slab, levelset]
+      release:
+        description: Also publish a GitHub release under this tag (e.g. v0.6.0); needs all platforms and editions
+        type: string
+        default: ""
   push:
     tags:
       - "v*"
@@ -176,7 +180,9 @@ jobs:
   publish:
     # Every edition of both platforms goes into one release under the tag,
     # named the way the worker's update check expects (see worker/update.py).
-    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    # A manual run names the tag in `release`; the release action creates
+    # the tag at this commit when it does not exist yet.
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.release != '' }}
     needs: [windows, macos]
     runs-on: ubuntu-latest
     steps:
@@ -202,5 +208,7 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.release || github.ref_name }}
+          target_commitish: ${{ github.sha }}
           files: release/*
           generate_release_notes: true
