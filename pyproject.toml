@@ -20,6 +20,8 @@ dependencies = [
   # The slab kernel: exact polygon geometry and its triangle meshes.
   "shapely>=2.1",
   "trimesh>=4.0",
+  # Flow files and the File menu's YAML export.
+  "pyyaml>=6",
 ]
 
 [project.scripts]
@@ -29,7 +31,7 @@ process-studio = "process_studio.cli:main"
 [project.optional-dependencies]
 test = ["pytest>=8"]
 render = ["scikit-image>=0.25"]
-# Flow files in YAML; JSON and TOML need nothing extra.
+# Kept for older install commands; pyyaml is a core dependency now.
 yaml = ["pyyaml>=6"]
 
 [tool.pytest.ini_options]
