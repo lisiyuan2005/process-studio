@@ -108,6 +108,18 @@ export interface Recipe {
   materialResponses: Record<string, MaterialResponse>;
 }
 
+/**
+ * A block of steps repeated N times. Every iteration is a real step in the
+ * flow (each with its own result), tagged with the loop and its 0-based
+ * iteration; the editor keeps the iterations identical.
+ */
+export interface StepLoop {
+  id: string;
+  name: string;
+  repeat: number;
+  iteration: number;
+}
+
 export interface ProcessStep {
   id: string;
   name: string;
@@ -121,6 +133,8 @@ export interface ProcessStep {
   datatype: number | null;
   keep: MaskKeep;
   enabled: boolean;
+  /** The loop the step belongs to; absent or null when it stands alone. */
+  loop?: StepLoop | null;
 }
 
 export interface FlowBranch {

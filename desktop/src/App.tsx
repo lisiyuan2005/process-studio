@@ -16,7 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { bridge } from "./bridge";
 import { CliPanel } from "./components/CliPanel";
 import { GridEditor } from "./components/GridEditor";
-import { Inspector } from "./components/Inspector";
+import { Inspector, type LoopSummary } from "./components/Inspector";
 import { MaterialEditor } from "./components/MaterialEditor";
 import { ToolEditor } from "./components/ToolEditor";
 import { PanelResizer } from "./components/PanelResizer";
@@ -24,14 +24,20 @@ import { ProjectHome } from "./components/ProjectHome";
 import { RecipeEditor } from "./components/RecipeEditor";
 import { SketchEditor } from "./components/SketchEditor";
 import { MenuBar, type Menu } from "./components/MenuBar";
-import { PROCESS_LABELS, StepList, type SelectModifiers } from "./components/StepList";
+import { PROCESS_LABELS, StepList, summarizeStatuses, type LoopActions, type SelectModifiers } from "./components/StepList";
 import { Viewport, type ViewMode } from "./components/Viewport";
 import {
   addStep,
+  dissolveLoop,
   duplicateStep,
   duplicateSteps,
   insertSteps,
+  loopObstacle,
+  loopSteps,
+  makeLoop,
   moveSteps,
+  renameLoop,
+  setLoopRepeat,
   orderedSelection,
   removeSteps,
   setStepsEnabled,
@@ -140,6 +146,10 @@ export default function App() {
   // anchor a Shift-click extends from, the way a file list selects.
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const anchorId = useRef("");
+  // The loop whose header is selected: its steps are the selection, the
+  // inspector shows its settings and the view the wafer after its last step.
+  const [selectedLoopId, setSelectedLoopId] = useState("");
+  const [loopDialog, setLoopDialog] = useState(false);
   // Steps copied with Ctrl+C, pasted after the focused step with Ctrl+V.
   const stepClipboard = useRef<ProcessStep[]>([]);
   const [clipboardSize, setClipboardSize] = useState(0);
@@ -506,8 +516,12 @@ export default function App() {
       anchorId.current = stepId;
     }
     setSelectedStepId(stepId);
+    setSelectedLoopId("");
   };
-  const clearSelection = () => setSelectedIds(selectedStepId ? [selectedStepId] : []);
+  const clearSelection = () => {
+    setSelectedIds(selectedStepId ? [selectedStepId] : []);
+    setSelectedLoopId("");
+  };
   const selectAll = () => {
     setSelectedIds(steps.map((step) => step.id));
     if (!selectedStepId && steps[0]) setSelectedStepId(steps[0].id);
@@ -522,6 +536,88 @@ export default function App() {
     });
   }, [document, selectedStepId]);
   const batchIds = selectedIds.length > 1 ? selectedIds : selectedStepId ? [selectedStepId] : [];
+  // A selected loop stays selected only while the focus is on one of its steps.
+  useEffect(() => {
+    if (!selectedLoopId) return;
+    if (!loopSteps(steps, selectedLoopId).some((step) => step.id === selectedStepId)) setSelectedLoopId("");
+  }, [steps, selectedStepId, selectedLoopId]);
+
+  // -- loops ----------------------------------------------------------------------
+  const selectLoop = (loopId: string, within: WorkspaceDocument | null = document) => {
+    const members = within ? loopSteps(getSteps(within), loopId) : [];
+    if (members.length === 0) return;
+    setSelectedIds(members.map((step) => step.id));
+    setSelectedStepId(members[members.length - 1].id);
+    anchorId.current = members[0].id;
+    setSelectedLoopId(loopId);
+  };
+  const selectedLoop = selectedLoopId ? loopSteps(steps, selectedLoopId) : [];
+  const loopSummary: LoopSummary | null =
+    selectedLoop.length > 0
+      ? {
+          loop: selectedLoop[0].loop!,
+          stepsPerIteration: selectedLoop.length / selectedLoop[0].loop!.repeat,
+          first: steps.indexOf(selectedLoop[0]) + 1,
+          last: steps.indexOf(selectedLoop[selectedLoop.length - 1]) + 1,
+          status: summarizeStatuses(selectedLoop.map((step) => statuses[step.id] ?? "dirty")),
+        }
+      : null;
+  const loopActions: LoopActions = {
+    create: (name, repeat) => {
+      if (!document) return;
+      const result = makeLoop(document, batchIds, name, repeat);
+      if (!result) return;
+      setDocument(result.document);
+      selectLoop(result.loop.id, result.document);
+    },
+    select: (loopId) => selectLoop(loopId),
+    rename: (loopId, name) => document && setDocument(renameLoop(document, loopId, name)),
+    setRepeat: (loopId, repeat) => {
+      if (!document) return;
+      const next = setLoopRepeat(document, loopId, repeat);
+      setDocument(next);
+      if (selectedLoopId === loopId) selectLoop(loopId, next);
+    },
+    dissolve: (loopId) => {
+      if (!document) return;
+      setDocument(dissolveLoop(document, loopId));
+      setSelectedLoopId("");
+      setSelectedIds(selectedStepId ? [selectedStepId] : []);
+    },
+    remove: (loopId) => {
+      if (!document) return;
+      const members = loopSteps(steps, loopId);
+      if (members.length === 0) return;
+      if (!window.confirm(`Delete the loop ${members[0].loop!.name} (${members.length} steps) and its stored results?`)) return;
+      const first = steps.indexOf(members[0]);
+      const next = removeSteps(document, members.map((step) => step.id));
+      setDocument(next);
+      const remaining = getSteps(next);
+      const focus = remaining[Math.min(Math.max(0, first - 1), remaining.length - 1)]?.id ?? "";
+      setSelectedLoopId("");
+      setSelectedStepId(focus);
+      setSelectedIds(focus ? [focus] : []);
+    },
+    duplicate: (loopId) => {
+      if (!document) return;
+      const members = loopSteps(steps, loopId);
+      if (members.length === 0) return;
+      const result = insertSteps(document, members, members[members.length - 1].id);
+      setDocument(result.document);
+      const copy = result.steps[0]?.loop?.id;
+      if (copy) selectLoop(copy, result.document);
+    },
+    copy: (loopId) => copyIds(loopSteps(steps, loopId).map((step) => step.id)),
+    move: (loopId, direction) =>
+      document && setDocument(moveSteps(document, loopSteps(steps, loopId).map((step) => step.id), direction)),
+    setEnabled: (loopId, enabled) =>
+      document && setDocument(setStepsEnabled(document, loopSteps(steps, loopId).map((step) => step.id), enabled)),
+    runToEnd: (loopId) => {
+      const last = loopSteps(steps, loopId).at(-1);
+      if (last) void runFlow(last.id);
+    },
+  };
+  const loopBlocker = document ? loopObstacle(document, batchIds) : "Open a project first.";
 
   const duplicateSelected = () => {
     if (!document || batchIds.length === 0) return;
@@ -551,9 +647,10 @@ export default function App() {
     if (!document || batchIds.length === 0) return;
     setDocument(setStepsEnabled(document, batchIds, enabled));
   };
-  const copySelected = () => {
-    if (batchIds.length === 0) return;
-    const copied = batchIds.map((id) => steps.find((step) => step.id === id)!).filter(Boolean);
+  const copySelected = () => copyIds(batchIds);
+  const copyIds = (ids: string[]) => {
+    if (ids.length === 0) return;
+    const copied = ids.map((id) => steps.find((step) => step.id === id)!).filter(Boolean);
     stepClipboard.current = copied;
     setClipboardSize(copied.length);
     // The same steps as JSON on the system clipboard: they can be pasted
@@ -682,6 +779,9 @@ export default function App() {
       } else if (mod && key === "d") {
         event.preventDefault();
         duplicateSelected();
+      } else if (mod && key === "g") {
+        event.preventDefault();
+        if (loopBlocker === null) setLoopDialog(true);
       } else if (event.key === "Delete" || event.key === "Backspace") {
         if (batchIds.length && !busy) {
           event.preventDefault();
@@ -1175,6 +1275,8 @@ export default function App() {
         { label: `Copy${selectionCount > 1 ? ` ${selectionCount} steps` : ""}`, action: copySelected, shortcut: "Ctrl+C", disabled: selectionCount === 0 },
         { label: `Paste after the selected step${clipboardSize ? ` (${clipboardSize})` : ""}`, action: pasteSteps, shortcut: "Ctrl+V", disabled: clipboardSize === 0 },
         { label: `Delete${selectionCount > 1 ? ` ${selectionCount} steps` : ""}…`, action: removeSelected, shortcut: "Del", disabled: selectionCount === 0 || busy, danger: true },
+        { label: `Repeat${selectionCount > 1 ? ` ${selectionCount} steps` : " the selected step"} as a loop…`, action: () => setLoopDialog(true), shortcut: "Ctrl+G", separated: true, disabled: loopBlocker !== null },
+        { label: "Take the selected loop apart", action: () => selectedLoopId && loopActions.dissolve(selectedLoopId), disabled: !selectedLoopId },
         { label: "Select all steps", action: selectAll, shortcut: "Ctrl+A", separated: true },
         { label: "Move up", action: () => moveSelected(-1), shortcut: "Alt+↑", disabled: selectionCount === 0 },
         { label: "Move down", action: () => moveSelected(1), shortcut: "Alt+↓", disabled: selectionCount === 0 },
@@ -1433,14 +1535,21 @@ export default function App() {
           }}
           onMove={(stepId, direction) => setDocument(moveStep(document, stepId, direction))}
           onRemove={removeStepById}
+          selectedLoopId={selectedLoopId}
+          loopObstacle={loopBlocker}
+          loops={loopActions}
+          loopDialogOpen={loopDialog}
+          onLoopDialogChange={setLoopDialog}
         />
         <Viewport
           mode={mode}
           onModeChange={setMode}
           title={
-            selectedStep
-              ? `${selectedStep.name} · after step ${steps.indexOf(selectedStep) + 1}`
-              : "Initial wafer"
+            loopSummary
+              ? `${loopSummary.loop.name} · after its last step (${loopSummary.last})`
+              : selectedStep
+                ? `${selectedStep.name} · after step ${steps.indexOf(selectedStep) + 1}`
+                : "Initial wafer"
           }
           loading={viewLoading}
           error={viewError}
@@ -1510,6 +1619,13 @@ export default function App() {
         />
         <Inspector
           step={selectedStep}
+          loop={loopSummary}
+          onLoopRename={(name) => selectedLoopId && loopActions.rename(selectedLoopId, name)}
+          onLoopRepeat={(repeat) => selectedLoopId && loopActions.setRepeat(selectedLoopId, repeat)}
+          onLoopDissolve={() => selectedLoopId && loopActions.dissolve(selectedLoopId)}
+          onLoopRemove={() => selectedLoopId && loopActions.remove(selectedLoopId)}
+          onLoopRun={() => selectedLoopId && loopActions.runToEnd(selectedLoopId)}
+          onSelectLoop={() => selectedStep?.loop && selectLoop(selectedStep.loop.id)}
           recipes={document.recipes}
           tools={document.tools}
           onManageTools={() => setShowTools(true)}
@@ -1678,6 +1794,7 @@ export default function App() {
                   ["Ctrl+A", "Select every step"],
                   ["Ctrl+C / Ctrl+V", "Copy the selected steps / paste them after the selected step"],
                   ["Ctrl+D", "Duplicate the selected steps"],
+                  ["Ctrl+G", "Repeat the selected steps as a loop"],
                   ["Delete", "Delete the selected steps"],
                   ["Alt+↑ / Alt+↓", "Move the selected steps"],
                   ["Ctrl+Z / Ctrl+Y", "Undo / redo an edit"],

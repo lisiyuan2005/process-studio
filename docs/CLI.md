@@ -40,6 +40,7 @@ cd ~/devices/dram
 | `steps set STEP [选项]` | 改一步 |
 | `steps rm STEP...` / `dup STEP` / `mv STEP POS` | 删除 / 原位复制 / 移到第 POS 位 |
 | `steps skip STEP...` / `include STEP...` | 跳过 / 放回运行 |
+| `steps loop STEP... [--repeat N] [--name NAME]` / `steps unloop STEP` | 把相邻的几步做成重复 N 次的循环（这几步是第 1 次，后面接上 N−1 份副本）/ 拆开循环，各次留下成为普通步骤 |
 | `run [--through STEP] [--force]` | 运行；结果还有效的步骤直接复用 |
 | `fidelity [detailed\|simplified]` | 看或切换 slab 内核的膜模型：detailed 圆角、按分辨率采样；simplified 直角、每个平面一段，快得多。两档的结果分开保存，切回去不用重算 |
 | `window [--x A B] [--y A B] [--z A B] [--spacing NM] [--spacing-xy NM]` | 看或改工程窗口和精度（改动会丢弃全部结果）；slab 工程 `--spacing` 是 z 步长，`--spacing-xy` 是 XY 弧线弦高，0 表示跟随 z |
@@ -106,7 +107,14 @@ steps:
   - {name: Fill, type: deposit, material: W, parameters: {target: 0.2, mode: conformal}}
   - {name: CMP, type: cmp, parameters: {target_z: 0.0}}
   - {name: Gate oxide, type: oxidation, material: SiO2, parameters: {target: 0.005}, rates: {Si: 1}}
+  - loop: ON pair            # 一个循环：里面的步骤按顺序重复 repeat 次
+    repeat: 4
+    steps:
+      - {name: Oxide, type: deposit, material: SiO2, parameters: {target: 0.02, mode: conformal}}
+      - {name: Nitride, type: deposit, material: SiN, parameters: {target: 0.03, mode: conformal}}
 ```
+
+循环（`loop` 条目）在工作目录里展开成真实的步骤：每一次都是列表里的一步，带着 `loop: {id, name, repeat, iteration}` 标记，`steps list` 的 Loop 列显示「ON pair 2/4」。`flow dump` 把同一个循环折回一个条目（只写第 1 次）；文件里循环可以嵌套，展开时内层并入外层。
 
 `oxidation`（slab 内核）：`rates` 里列出会被氧化的材料，`parameters.target` 是被消耗的厚度（按各材料的 rate 比例），`material` 是生成的氧化物（默认 SiO2）。露出的表面向内 `target` 那一层原地变成氧化物，不模拟体积膨胀。
 

@@ -31,6 +31,7 @@ from .session import (
     STATUS_WORDS,
     STEP_HEADER,
     Session,
+    describe_loop,
     describe_mask,
     find_root,
     format_number,
@@ -237,6 +238,8 @@ def cmd_steps_show(session: Session, args: argparse.Namespace) -> int:
             f"   material  {step.get('outputMaterial') or '-'}",
             f"   mask      {describe_mask(step)}",
         ]
+        if step.get("loop"):
+            lines.append(f"   loop      {describe_loop(step)}")
         parameters = {key: value for key, value in step["parameters"].items() if key != "sketch_id"}
         lines.append("   parameters")
         for key, value in parameters.items():
@@ -318,6 +321,7 @@ def cmd_steps_dup(session: Session, args: argparse.Namespace) -> int:
     copy = json.loads(json.dumps(steps[index]))
     copy["id"] = new_id()
     copy["name"] = args.name or f"{steps[index]['name']} copy"
+    copy["loop"] = None  # a copy stands on its own, outside any loop
     steps.insert(index + 1, copy)
     return _save_and_report(session, document, f"Duplicated step {index + 1} as step {index + 2}: {copy['name']}")
 
@@ -344,6 +348,55 @@ def cmd_steps_enable(session: Session, args: argparse.Namespace, enabled: bool) 
         names.append(step["name"])
     verb = "Included" if enabled else "Skipped"
     return _save_and_report(session, document, f"{verb} {', '.join(names)}")
+
+
+def cmd_steps_loop(session: Session, args: argparse.Namespace) -> int:
+    """Repeat a contiguous block of steps: the block becomes iteration 1, copies follow."""
+    document = session.document()
+    steps = Session.steps(document)
+    indexes = sorted({session.step_index(document, reference) for reference in args.step})
+    if indexes != list(range(indexes[0], indexes[-1] + 1)):
+        raise InvalidRequest("the steps of a loop must be next to each other.")
+    if any(steps[index].get("loop") for index in indexes):
+        raise InvalidRequest("a step is already in a loop; `steps unloop` it first.")
+    if args.repeat < 1:
+        raise InvalidRequest("--repeat must be at least 1.")
+    block = [steps[index] for index in indexes]
+    name = args.name or f"Loop {sum(1 for step in steps if step.get('loop') and step['loop']['iteration'] == 0) + 1}"
+    loop_id = new_id()
+    for step in block:
+        step["loop"] = {"id": loop_id, "name": name, "repeat": args.repeat, "iteration": 0}
+    copies = []
+    for iteration in range(1, args.repeat):
+        for step in block:
+            copy = json.loads(json.dumps(step))
+            copy["id"] = new_id()
+            copy["loop"] = {"id": loop_id, "name": name, "repeat": args.repeat, "iteration": iteration}
+            copies.append(copy)
+    steps[indexes[-1] + 1 : indexes[-1] + 1] = copies
+    return _save_and_report(
+        session, document,
+        f"{name}: {len(block)} step(s) repeated {args.repeat} times ({len(copies)} step(s) added).",
+    )
+
+
+def cmd_steps_unloop(session: Session, args: argparse.Namespace) -> int:
+    """Take a loop apart: every iteration stays as ordinary steps."""
+    document = session.document()
+    steps = Session.steps(document)
+    step = steps[session.step_index(document, args.step)]
+    loop = step.get("loop")
+    if not loop:
+        raise InvalidRequest(f"{step['name']!r} is not in a loop.")
+    count = 0
+    for item in steps:
+        if item.get("loop") and item["loop"]["id"] == loop["id"]:
+            item["loop"] = None
+            count += 1
+    saved = session.save(document)
+    session.note(f"Took {loop.get('name') or 'the loop'} apart: {count} step(s) now stand on their own.")
+    session.emit(Session.steps(saved), lambda: table(STEP_HEADER, step_rows(saved)))
+    return EXIT_OK
 
 
 def cmd_run(session: Session, args: argparse.Namespace) -> int:
@@ -882,6 +935,14 @@ def build_parser() -> argparse.ArgumentParser:
     include = step_commands.add_parser("include", help="put skipped steps back in the run")
     include.add_argument("step", nargs="+")
     include.set_defaults(handler=lambda session, args: cmd_steps_enable(session, args, True))
+    loop = step_commands.add_parser("loop", help="repeat a block of adjacent steps N times")
+    loop.add_argument("step", nargs="+", help="the steps of the block, by number or name")
+    loop.add_argument("--repeat", "-n", type=int, default=2, metavar="N", help="how many times in all (default 2)")
+    loop.add_argument("--name", help="the loop's name, e.g. 'ON pair'")
+    loop.set_defaults(handler=cmd_steps_loop)
+    unloop = step_commands.add_parser("unloop", help="take a loop apart; its iterations stay as plain steps")
+    unloop.add_argument("step", help="any step of the loop")
+    unloop.set_defaults(handler=cmd_steps_unloop)
 
     run = commands.add_parser("run", help="run the flow, reusing results that are still current")
     run.add_argument("--through", metavar="STEP", help="stop after this step")

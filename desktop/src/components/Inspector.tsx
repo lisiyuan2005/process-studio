@@ -1,4 +1,4 @@
-import { BookDown, CircleAlert, Layers, PenLine, Play, Plus, Save, Trash2, Wrench, X } from "lucide-react";
+import { BookDown, CircleAlert, Layers, PenLine, Play, Plus, Repeat, Save, Trash2, Ungroup, Wrench, X } from "lucide-react";
 import { ToolPicker } from "./ToolPicker";
 import { useEffect, useMemo, useState } from "react";
 import type {
@@ -12,12 +12,33 @@ import type {
   ProcessType,
   QuickSketch,
   Recipe,
+  StepLoop,
   StepStatus,
   ToolDefinition,
 } from "../types";
 
+/** What the inspector shows for a selected loop. */
+export interface LoopSummary {
+  loop: StepLoop;
+  /** How many steps one time through holds. */
+  stepsPerIteration: number;
+  /** The loop's first and last position in the flow, 1-based. */
+  first: number;
+  last: number;
+  status: StepStatus;
+}
+
 interface InspectorProps {
   step: ProcessStep | undefined;
+  /** When set, the loop's settings show instead of a step. */
+  loop?: LoopSummary | null;
+  onLoopRename: (name: string) => void;
+  onLoopRepeat: (repeat: number) => void;
+  onLoopDissolve: () => void;
+  onLoopRemove: () => void;
+  onLoopRun: () => void;
+  /** Show the settings of the loop the selected step is in. */
+  onSelectLoop: () => void;
   recipes: Recipe[];
   tools: ToolDefinition[];
   onManageTools: () => void;
@@ -267,8 +288,106 @@ function UnknownParameterRow({
   );
 }
 
+function LoopInspector({
+  summary,
+  busy,
+  onRename,
+  onRepeat,
+  onDissolve,
+  onRemove,
+  onRun,
+}: {
+  summary: LoopSummary;
+  busy: boolean;
+  onRename: (name: string) => void;
+  onRepeat: (repeat: number) => void;
+  onDissolve: () => void;
+  onRemove: () => void;
+  onRun: () => void;
+}) {
+  const { loop } = summary;
+  const [name, setName] = useState(loop.name);
+  const [repeat, setRepeat] = useState(String(loop.repeat));
+  useEffect(() => {
+    setName(loop.name);
+    setRepeat(String(loop.repeat));
+  }, [loop.id, loop.name, loop.repeat]);
+  const commitRepeat = () => {
+    const value = Math.floor(Number(repeat));
+    if (Number.isFinite(value) && value >= 1 && value !== loop.repeat) onRepeat(value);
+    else setRepeat(String(loop.repeat));
+  };
+  return (
+    <aside className="inspector-panel">
+      <div className="panel-heading inspector-heading">
+        <div>
+          <span className="eyebrow">LOOP</span>
+          <h2>{loop.name}</h2>
+        </div>
+        <span className={`status-chip status-${summary.status}`}>{summary.status}</span>
+      </div>
+      <div className="inspector-scroll">
+        <label className="field-row">
+          <span>Loop name</span>
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            onBlur={() => name.trim() && name.trim() !== loop.name && onRename(name)}
+            onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()}
+          />
+        </label>
+        <label className="field-row">
+          <span>Times through</span>
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={repeat}
+            onChange={(event) => setRepeat(event.target.value)}
+            onBlur={commitRepeat}
+            onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()}
+          />
+          <small>
+            More times add copies of the first time through after the last one; fewer drop the
+            last ones, with their results.
+          </small>
+        </label>
+        <p className="loop-facts">
+          <Repeat size={13} />
+          <span>
+            {summary.stepsPerIteration} step{summary.stepsPerIteration === 1 ? "" : "s"} each time, {loop.repeat} times: steps{" "}
+            {summary.first}–{summary.last} of the flow. Every time through is a real step with its own result, so
+            selecting one shows the wafer after it. An edit to any of them changes all of them.
+          </span>
+        </p>
+        <div className="form-section">
+          <button type="button" className="secondary-button" onClick={onDissolve}>
+            <Ungroup size={13} /> Take the loop apart
+          </button>
+          <small className="field-hint">The steps stay, as ordinary steps, and keep their results.</small>
+        </div>
+      </div>
+      <div className="inspector-actions">
+        <button type="button" className="secondary-button" disabled={busy} onClick={onRun}>
+          <Play size={13} /> Run to its end
+        </button>
+        <button type="button" className="danger-button" disabled={busy} onClick={onRemove}>
+          <Trash2 size={13} /> Delete loop
+        </button>
+      </div>
+    </aside>
+  );
+}
+
 export function Inspector({
   step,
+  loop,
+  onLoopRename,
+  onLoopRepeat,
+  onLoopDissolve,
+  onLoopRemove,
+  onLoopRun,
+  onSelectLoop,
   recipes,
   tools,
   onManageTools,
@@ -320,6 +439,20 @@ export function Inspector({
     }
     return [...byGroup.entries()];
   }, [matchingRecipes]);
+
+  if (loop) {
+    return (
+      <LoopInspector
+        summary={loop}
+        busy={busy}
+        onRename={onLoopRename}
+        onRepeat={onLoopRepeat}
+        onDissolve={onLoopDissolve}
+        onRemove={onLoopRemove}
+        onRun={onLoopRun}
+      />
+    );
+  }
 
   if (!step) {
     return (
@@ -394,6 +527,16 @@ export function Inspector({
       </div>
 
       <div className="inspector-scroll">
+        {step.loop && (
+          <div className="loop-banner">
+            <Repeat size={13} />
+            <span>
+              In <strong>{step.loop.name}</strong>, time {step.loop.iteration + 1} of {step.loop.repeat}. Edits here
+              apply to every time through.
+            </span>
+            <button type="button" onClick={onSelectLoop}>Loop settings</button>
+          </div>
+        )}
         <label className="field-row">
           <span>Step name</span>
           <input

@@ -219,6 +219,7 @@ def step_rows(document: Mapping[str, Any]) -> list[list[str]]:
                 step["processType"].replace("_", " "),
                 step.get("outputMaterial") or "",
                 describe_mask(step),
+                describe_loop(step),
                 "yes" if step.get("enabled", True) else "skip",
                 STATUS_WORDS.get(Session.status_of(document, step["id"]), "?"),
             ]
@@ -226,7 +227,15 @@ def step_rows(document: Mapping[str, Any]) -> list[list[str]]:
     return rows
 
 
-STEP_HEADER = ("#", "Name", "Type", "Material", "Mask", "Run", "Status")
+STEP_HEADER = ("#", "Name", "Type", "Material", "Mask", "Loop", "Run", "Status")
+
+
+def describe_loop(step: Mapping[str, Any]) -> str:
+    """"NAME 2/4" for a step inside a repeated block, "" for one on its own."""
+    loop = step.get("loop")
+    if not loop:
+        return ""
+    return f"{loop.get('name') or 'Loop'} {int(loop.get('iteration', 0)) + 1}/{int(loop.get('repeat', 1))}"
 
 
 def describe_mask(step: Mapping[str, Any]) -> str:

@@ -673,3 +673,44 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .tool-picker { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
 .tool-picker select, .tool-picker input { width: 100%; min-width: 0; }
 .step-card, .step-card * { user-select: none; }
+
+/* Loops: a block of steps repeated N times. The header drags and selects the
+   whole block; each time through folds to one line. */
+.loop-block { border: 1px solid var(--line); border-radius: 9px; background: color-mix(in srgb, var(--panel) 92%, var(--accent) 8%); overflow: hidden; }
+.loop-block.selected { border-color: #3f658f; box-shadow: 0 0 0 1px rgba(77, 143, 224, 0.12); }
+.loop-block.muted { opacity: 0.55; }
+.loop-head { display: flex; align-items: center; gap: 6px; min-height: 56px; padding: 6px 30px 6px 4px; cursor: pointer; position: relative; }
+.loop-copy { flex: 1; min-width: 0; }
+.loop-head .status-chip { flex: 0 0 auto; white-space: nowrap; }
+.loop-head:hover { background: rgba(78, 143, 232, 0.08); }
+.loop-block.selected .loop-head { background: rgba(78, 143, 232, 0.14); }
+.loop-head .drag-handle { height: 30px; }
+.loop-fold { width: 22px; height: 22px; display: grid; place-items: center; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; padding: 0; }
+.loop-fold:hover { background: rgba(78, 143, 232, 0.16); color: var(--text); }
+.loop-icon { display: grid; place-items: center; color: var(--accent); }
+.loop-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 600; color: var(--text); }
+.loop-repeat { padding: 1px 6px; border-radius: 9px; background: var(--accent); color: #ffffff; font-size: 11px; font-weight: 650; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.loop-head .loop-menu-button { opacity: 1; }
+.loop-body { display: flex; flex-direction: column; gap: 4px; padding: 0 6px 6px 6px; border-left: 3px solid var(--accent); margin-left: 12px; }
+.loop-iteration { display: flex; flex-direction: column; gap: 4px; }
+.loop-iteration-head { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 6px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); font-size: 11px; text-align: left; cursor: pointer; }
+.loop-iteration-head:hover { background: rgba(78, 143, 232, 0.1); color: var(--text); }
+.loop-iteration-head .step-index { margin-left: auto; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.status-dot.status-clean { background: #4caf7d; }
+.status-dot.status-failed { background: #e0575e; }
+.status-dot.status-running { background: var(--accent); }
+.status-dot.status-stale, .status-dot.status-dirty { background: #d9a441; }
+.step-card.in-loop { min-height: 54px; grid-template-columns: 10px 3px minmax(0, 1fr) auto auto; padding-left: 4px; }
+.loop-tick { width: 10px; height: 38px; display: grid; place-items: center; color: var(--faint); }
+.loop-tick::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--line); }
+.loop-banner { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding: 8px 10px; border: 1px solid rgba(78, 143, 232, 0.35); border-radius: 7px; background: rgba(78, 143, 232, 0.1); color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+.loop-banner svg { flex: 0 0 auto; color: var(--accent); }
+.loop-banner span { flex: 1; }
+.loop-banner strong { color: var(--text); }
+.loop-banner button { flex: 0 0 auto; height: 26px; padding: 0 8px; border: 1px solid var(--line); border-radius: 5px; background: transparent; color: var(--text); font-size: 11px; cursor: pointer; white-space: nowrap; }
+.loop-banner button:hover { border-color: var(--accent); }
+.loop-facts { display: flex; gap: 8px; margin: 4px 0 14px; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+.loop-facts svg { flex: 0 0 auto; margin-top: 3px; color: var(--accent); }
+.loop-form { padding: 16px 18px 4px; }
+.field-hint { display: block; margin-top: 6px; color: var(--faint); font-size: 11px; line-height: 1.45; }

@@ -288,3 +288,49 @@ def test_the_fidelity_is_a_project_setting_and_travels_in_flow_files(workspace: 
     (tmp_path / "flow.json").write_text(json.dumps(flow))
     as_json("flow", "apply", str(tmp_path / "flow.json"), root=workspace)
     assert as_json("fidelity", root=workspace) == {"fidelity": "detailed"}
+
+
+def test_loops_repeat_a_block_and_fold_back_into_the_flow_file(workspace: Path, tmp_path: Path):
+    existing = as_json("steps", "list", root=workspace)
+    if existing:
+        as_json("steps", "rm", *[str(number) for number in range(1, len(existing) + 1)], root=workspace)
+    as_json("steps", "add", "deposit", "--name", "Oxide", "--material", "SiO2", "--set", "target=0.02", root=workspace)
+    as_json("steps", "add", "deposit", "--name", "Nitride", "--material", "SiN", "--set", "target=0.03", root=workspace)
+    as_json("steps", "add", "cmp", "--name", "Polish", root=workspace)
+    # The two films become a pair repeated three times: the pair itself is
+    # iteration 1, and two copies follow it, before the polish.
+    steps = as_json("steps", "loop", "Oxide", "Nitride", "--repeat", "3", "--name", "ON pair", root=workspace)
+    assert [step["name"] for step in steps] == ["Oxide", "Nitride"] * 3 + ["Polish"]
+    assert [step["loop"]["iteration"] for step in steps[:6]] == [0, 0, 1, 1, 2, 2]
+    assert len({step["loop"]["id"] for step in steps[:6]}) == 1
+    assert steps[6]["loop"] is None
+    code, out, _ = run("steps", "list", root=workspace)
+    assert code == EXIT_OK and "ON pair 2/3" in out
+
+    # The file writes the loop once; applying it unrolls it again.
+    flow = as_json("flow", "dump", root=workspace)
+    assert [entry.get("loop") or entry["name"] for entry in flow["steps"]] == ["ON pair", "Polish"]
+    assert flow["steps"][0]["repeat"] == 3
+    assert [spec["name"] for spec in flow["steps"][0]["steps"]] == ["Oxide", "Nitride"]
+    flow["steps"][0]["repeat"] = 2
+    (tmp_path / "flow.yaml").write_text(__import__("yaml").safe_dump(flow, sort_keys=False))
+    applied = as_json("flow", "apply", str(tmp_path / "flow.yaml"), root=workspace)
+    assert [step["name"] for step in applied] == ["Oxide", "Nitride"] * 2 + ["Polish"]
+    # Steps keep their identity by position, so the first pair is untouched.
+    assert [step["id"] for step in applied[:4]] == [step["id"] for step in steps[:4]]
+
+    # A loop within a loop in the file unrolls into its parent.
+    nested = {"steps": [{"loop": "Outer", "repeat": 2, "steps": [
+        {"name": "A", "type": "cmp"},
+        {"loop": "Inner", "repeat": 2, "steps": [{"name": "B", "type": "cmp"}]},
+    ]}]}
+    (tmp_path / "nested.json").write_text(json.dumps(nested))
+    unrolled = as_json("flow", "apply", str(tmp_path / "nested.json"), root=workspace)
+    assert [step["name"] for step in unrolled] == ["A", "B", "B"] * 2
+    assert all(step["loop"]["name"] == "Outer" for step in unrolled)
+
+    # Taking a loop apart leaves plain steps; a copy never joins a loop.
+    plain = as_json("steps", "unloop", "1", root=workspace)
+    assert all(step["loop"] is None for step in plain)
+    code, _, err = run("steps", "loop", "1", "3", root=workspace)
+    assert code == EXIT_USAGE and "next to each other" in err

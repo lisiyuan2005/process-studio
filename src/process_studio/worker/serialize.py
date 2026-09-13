@@ -205,12 +205,16 @@ def step_to_json(step: ProcessStep, recipes: Mapping[str, Recipe]) -> dict[str, 
         "datatype": step.datatype,
         "keep": step.keep,
         "enabled": step.enabled,
+        "loop": None if step.loop is None else dict(step.loop),
     }
 
 
 def step_from_json(payload: Mapping[str, Any]) -> ProcessStep:
     layer = payload.get("layer")
     datatype = payload.get("datatype")
+    loop = payload.get("loop")
+    if loop is not None and not isinstance(loop, Mapping):
+        raise InvalidRequest("step loop must be an object or null")
     # Legacy clients send recipeId + overrides. Keep accepting that shape so an
     # existing workspace can be opened and migrated by the next save.
     if "processType" not in payload:
@@ -228,6 +232,7 @@ def step_from_json(payload: Mapping[str, Any]) -> ProcessStep:
                 str(payload.get("keep", "inside")),
                 bool(payload.get("enabled", True)),
                 id=str(payload.get("id") or new_id()),
+                loop=None if loop is None else dict(loop),
             )
         except KeyError as error:
             raise InvalidRequest(f"step is missing {error.args[0]}") from error
@@ -261,6 +266,7 @@ def step_from_json(payload: Mapping[str, Any]) -> ProcessStep:
                 str(name): response_from_json(response)
                 for name, response in responses.items()
             },
+            loop=None if loop is None else dict(loop),
         )
     except KeyError as error:
         raise InvalidRequest(f"step is missing {error.args[0]}") from error

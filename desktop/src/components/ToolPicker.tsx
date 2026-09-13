@@ -21,6 +21,9 @@ export function ToolPicker({
 }) {
   const known = tools.some((tool) => tool.name === value);
   const [custom, setCustom] = useState(!known && value !== "");
+  // Only a choice of "Other" moves the focus into the text field; a step
+  // that opens with a name outside the library must not steal it.
+  const [typing, setTyping] = useState(false);
   const groups = useMemo(() => {
     const byGroup = new Map<string, ToolDefinition[]>();
     const sorted = [...tools].sort(
@@ -42,9 +45,11 @@ export function ToolPicker({
         onChange={(event) => {
           if (event.target.value === CUSTOM) {
             setCustom(true);
+            setTyping(true);
             return;
           }
           setCustom(false);
+          setTyping(false);
           onChange(event.target.value);
         }}
       >
@@ -73,7 +78,7 @@ export function ToolPicker({
           type="text"
           value={value}
           placeholder="tool name"
-          autoFocus={custom}
+          autoFocus={typing}
           onChange={(event) => onChange(event.target.value)}
         />
       )}

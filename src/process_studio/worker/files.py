@@ -29,7 +29,7 @@ from .workspace import load_project, open_repository
 
 FLOW_COLUMNS = [
     "#", "Step", "Type", "Tool", "Material", "Mode", "Target (um)", "Directional fraction",
-    "Mask", "Keep", "Rates (um/min)", "Stop layers", "Other parameters (JSON)", "Enabled", "Status",
+    "Mask", "Keep", "Rates (um/min)", "Stop layers", "Other parameters (JSON)", "Enabled", "Status", "Loop",
 ]
 MATERIAL_COLUMNS = ["Material", "Category", "Color", "Opacity"]
 TOOL_COLUMNS = ["Tool", "Group", "Notes"]
@@ -81,8 +81,16 @@ def flow_rows(document: Mapping[str, Any]) -> list[list[Any]]:
             step.get("keep", "inside") if mask else "", rates, stops,
             json.dumps(parameters, ensure_ascii=False) if parameters else "",
             bool(step.get("enabled", True)), _status_word(document, step["id"]),
+            _loop_word(step),
         ])
     return rows
+
+
+def _loop_word(step: Mapping[str, Any]) -> str:
+    loop = step.get("loop")
+    if not loop:
+        return ""
+    return f"{loop.get('name') or 'Loop'} {int(loop.get('iteration', 0)) + 1}/{int(loop.get('repeat', 1))}"
 
 
 def export_flow(root: Path, destination: Path, fmt: str, project_id: str | None = None) -> dict[str, Any]:
@@ -105,8 +113,8 @@ def export_flow(root: Path, destination: Path, fmt: str, project_id: str | None 
             sheet.append(row)
         sheet.freeze_panes = "A2"
         sheet.auto_filter.ref = sheet.dimensions
-        widths = [4, 30, 12, 16, 12, 11, 11, 10, 18, 8, 28, 16, 30, 8, 9]
-        for column, width in zip("ABCDEFGHIJKLMNO", widths):
+        widths = [4, 30, 12, 16, 12, 11, 11, 10, 18, 8, 28, 16, 30, 8, 9, 14]
+        for column, width in zip("ABCDEFGHIJKLMNOP", widths):
             sheet.column_dimensions[column].width = width
         workbook.save(destination)
     elif fmt == "csv":

@@ -2,7 +2,18 @@ import { describe, expect, it } from "vitest";
 import { demoDocument } from "../bridge/browserBridge";
 import {
   addStep,
+  dissolveLoop,
   duplicateStep,
+  duplicateSteps,
+  flowUnits,
+  insertSteps,
+  loopCounterparts,
+  loopIterations,
+  loopObstacle,
+  makeLoop,
+  moveSteps,
+  removeSteps,
+  setLoopRepeat,
   getActiveBranch,
   groupRecipes,
   getSteps,
@@ -249,5 +260,125 @@ describe("libraries", () => {
     expect(upsertTool(document, { id: "t1", name: "ICP-RIE 2", group: "Etch", notes: "" }).tools[0].name).toBe("ICP-RIE 2");
     expect(removeTool(document, "t1").tools).toEqual([]);
     expect(toolUsage(document).get("ICP-RIE")).toBeGreaterThan(0);
+  });
+});
+
+describe("loops", () => {
+  const names = (document: WorkspaceDocument) => getSteps(document).map((step) => step.name);
+  const looped = () => {
+    // The etch and the strip become a pair run three times, before the ALD.
+    const result = makeLoop(cleanDocument(), ["step-etch", "step-strip"], "Trench pair", 3)!;
+    return { document: result.document, loop: result.loop };
+  };
+
+  it("repeats a contiguous block: the block is iteration 1, copies follow it", () => {
+    expect(loopObstacle(cleanDocument(), ["step-litho", "step-strip"])).toMatch(/next to each other/);
+    const { document, loop } = looped();
+    expect(names(document)).toEqual([
+      "Lithography", "Trench Etch", "Resist Strip", "Trench Etch", "Resist Strip", "Trench Etch", "Resist Strip", "Conformal Al2O3",
+    ]);
+    const steps = getSteps(document);
+    expect(steps.slice(1, 7).map((step) => step.loop?.iteration)).toEqual([0, 0, 1, 1, 2, 2]);
+    expect(steps.slice(1, 7).every((step) => step.loop?.id === loop.id && step.loop.repeat === 3)).toBe(true);
+    // The original pair keeps its results; the copies and what follows do not.
+    expect(stepStatus(document, "step-etch")).toBe("clean");
+    expect(stepStatus(document, steps[3].id)).toBe("dirty");
+    expect(stepStatus(document, "step-ald")).toBe("stale");
+    expect(loopObstacle(document, ["step-etch"])).toMatch(/already in a loop/);
+    expect(flowUnits(steps).map((unit) => unit.steps.length)).toEqual([1, 6, 1]);
+  });
+
+  it("finds a step's counterpart in every iteration", () => {
+    const { document } = looped();
+    const steps = getSteps(document);
+    expect(loopCounterparts(steps, "step-strip")).toEqual([steps[2].id, steps[4].id, steps[6].id]);
+    expect(loopCounterparts(steps, "step-litho")).toEqual(["step-litho"]);
+    expect(loopIterations(steps, steps[1].loop!.id).map((iteration) => iteration.length)).toEqual([2, 2, 2]);
+  });
+
+  it("repeats an edit, a rename, a skip, a new step and a deletion in every iteration", () => {
+    const { document } = looped();
+    let steps = getSteps(document);
+    const edited = updateStepParameters(document, steps[3].id, { target: 0.42 });
+    steps = getSteps(edited);
+    expect([steps[1], steps[3], steps[5]].map((step) => step.parameters.target)).toEqual([0.42, 0.42, 0.42]);
+    // Invalidation starts at the first iteration, whichever copy was edited.
+    expect(stepStatus(edited, "step-etch")).toBe("stale");
+    expect(stepStatus(edited, "step-litho")).toBe("clean");
+
+    steps = getSteps(renameStep(edited, "step-strip", "Ash"));
+    expect(steps.filter((step) => step.name === "Ash")).toHaveLength(3);
+    steps = getSteps(toggleStep(edited, steps[4].id));
+    expect([steps[2], steps[4], steps[6]].map((step) => step.enabled)).toEqual([false, false, false]);
+
+    const added = addStep(edited, "cmp", steps[4].id);
+    steps = getSteps(added.document);
+    expect(names(added.document)).toEqual([
+      "Lithography", "Trench Etch", "Resist Strip", "New CMP", "Trench Etch", "Resist Strip", "New CMP",
+      "Trench Etch", "Resist Strip", "New CMP", "Conformal Al2O3",
+    ]);
+    expect(steps[6].id).toBe(added.step.id);
+    expect(steps.slice(1, 10).every((step) => step.loop)).toBe(true);
+
+    const removed = removeStep(added.document, added.step.id);
+    expect(names(removed)).toEqual(names(edited));
+    const duplicated = duplicateStep(edited, "step-etch")!;
+    expect(names(duplicated.document).filter((name) => name === "Trench Etch copy")).toHaveLength(3);
+  });
+
+  it("changes the count by copying the first iteration or dropping the last ones", () => {
+    const { document, loop } = looped();
+    const grown = setLoopRepeat(document, loop.id, 4);
+    expect(names(grown).filter((name) => name === "Trench Etch")).toHaveLength(4);
+    expect(getSteps(grown).every((step) => !step.loop || step.loop.repeat === 4)).toBe(true);
+    const shrunk = setLoopRepeat(grown, loop.id, 2);
+    expect(names(shrunk)).toEqual([
+      "Lithography", "Trench Etch", "Resist Strip", "Trench Etch", "Resist Strip", "Conformal Al2O3",
+    ]);
+    expect(getSteps(shrunk)[1].loop?.repeat).toBe(2);
+    expect(stepStatus(shrunk, "step-etch")).toBe("clean");
+    const apart = dissolveLoop(shrunk, loop.id);
+    expect(getSteps(apart).every((step) => !step.loop)).toBe(true);
+    expect(names(apart)).toEqual(names(shrunk));
+  });
+
+  it("moves a loop as one unit and a step inside it within its iteration", () => {
+    const { document, loop } = looped();
+    const steps = getSteps(document);
+    const loopIds = steps.slice(1, 7).map((step) => step.id);
+    // The lithography passes the whole loop in one move.
+    expect(names(moveSteps(document, ["step-litho"], 1))).toEqual([
+      "Trench Etch", "Resist Strip", "Trench Etch", "Resist Strip", "Trench Etch", "Resist Strip", "Lithography", "Conformal Al2O3",
+    ]);
+    // The whole loop, selected, moves up past it.
+    expect(names(moveSteps(document, loopIds, -1))[0]).toBe("Trench Etch");
+    expect(names(moveSteps(document, loopIds, -1))[6]).toBe("Lithography");
+    // One step inside moves within every iteration, and stops at the iteration's edge.
+    const swapped = moveSteps(document, [steps[4].id], -1);
+    expect(names(swapped)).toEqual([
+      "Lithography", "Resist Strip", "Trench Etch", "Resist Strip", "Trench Etch", "Resist Strip", "Trench Etch", "Conformal Al2O3",
+    ]);
+    expect(moveSteps(swapped, [getSteps(swapped)[1].id], -1)).toBe(swapped);
+    // Dragging by units: the loop dropped where the lithography is.
+    expect(names(reorderSteps(document, `loop:${loop.id}`, "step-litho"))[0]).toBe("Trench Etch");
+  });
+
+  it("copies a whole loop as a new loop and a partial copy as plain steps", () => {
+    const { document, loop } = looped();
+    const steps = getSteps(document);
+    const whole = insertSteps(document, steps.slice(1, 7), "step-ald");
+    const copies = whole.steps;
+    expect(copies.every((step) => step.loop && step.loop.id !== loop.id)).toBe(true);
+    expect(new Set(copies.map((step) => step.loop!.id)).size).toBe(1);
+    const partial = insertSteps(document, steps.slice(1, 4), "step-ald");
+    expect(partial.steps.every((step) => !step.loop)).toBe(true);
+    // Pasting after a step inside the loop lands after the loop.
+    const pasted = insertSteps(document, [steps[0]], steps[3].id);
+    expect(names(pasted.document)[7]).toBe("Lithography");
+    // Duplicating one selected step inside the loop copies it in every iteration.
+    const duplicated = duplicateSteps(document, [steps[3].id]);
+    expect(names(duplicated.document).filter((name) => name === "Trench Etch copy")).toHaveLength(3);
+    // Deleting the loop's steps removes all of them.
+    expect(names(removeSteps(document, [steps[1].id, steps[2].id]))).toEqual(["Lithography", "Conformal Al2O3"]);
   });
 });

@@ -93,6 +93,39 @@ def normalize_group(value: str | None) -> str:
     return "/".join(part.strip() for part in str(value).split("/") if part.strip())
 
 
+def normalize_loop(value: Any) -> dict[str, Any] | None:
+    """A step's loop membership, checked: {"id", "name", "repeat", "iteration"}.
+
+    A loop is a block of steps repeated ``repeat`` times. Every iteration
+    is a real step in the flow (so each has its own result), tagged with
+    the loop it belongs to and which iteration it is (0-based); the
+    desktop keeps the iterations identical. None means the step is on its
+    own.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError("a step's loop must be an object")
+    try:
+        repeat = int(value.get("repeat", 1))
+        iteration = int(value.get("iteration", 0))
+    except (TypeError, ValueError) as error:
+        raise ValueError("a loop's repeat and iteration must be whole numbers") from error
+    if repeat < 1:
+        raise ValueError("a loop repeats at least once")
+    if not 0 <= iteration < repeat:
+        raise ValueError("a loop iteration must be between 0 and repeat - 1")
+    loop_id = str(value.get("id") or "").strip()
+    if not loop_id:
+        raise ValueError("a loop needs an id")
+    return {
+        "id": loop_id,
+        "name": str(value.get("name") or "Loop"),
+        "repeat": repeat,
+        "iteration": iteration,
+    }
+
+
 @dataclass
 class Recipe:
     name: str
@@ -134,10 +167,14 @@ class ProcessStep:
     output_material: str | None = None
     parameters: dict[str, Any] = field(default_factory=dict)
     material_responses: dict[str, MaterialResponse] = field(default_factory=dict)
+    #: The repeated block this step belongs to, see ``normalize_loop``. It is
+    #: bookkeeping for the editor: a result never depends on it.
+    loop: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.process_type is not None and not isinstance(self.process_type, ProcessType):
             self.process_type = ProcessType(self.process_type)
+        self.loop = normalize_loop(self.loop)
         self.material_responses = {
             name: (
                 response

@@ -113,8 +113,71 @@ def flow_from_document(document: Mapping[str, Any]) -> dict[str, Any]:
         sketch["id"]: {"name": sketch["name"], "shapes": sketch["shapes"]}
         for sketch in document.get("sketches", [])
     }
-    flow["steps"] = [spec_from_step(step) for step in Session.steps(document)]
+    flow["steps"] = nest_loops(Session.steps(document))
     return flow
+
+
+# -- loops: a block of steps repeated N times ---------------------------------
+#
+# In the workspace every iteration is a real step tagged with the loop it
+# belongs to (``step["loop"] = {"id", "name", "repeat", "iteration"}``). In
+# the file a loop is written once, as an entry ``{"loop": NAME, "repeat": N,
+# "steps": [...]}`` holding the first iteration; applying the file expands
+# it again.
+
+
+def nest_loops(steps: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Flow-file entries for the steps: loops folded back into one entry each."""
+    entries: list[dict[str, Any]] = []
+    open_loops: dict[str, dict[str, Any]] = {}
+    for step in steps:
+        loop = step.get("loop")
+        if not loop:
+            entries.append(spec_from_step(step))
+            continue
+        if int(loop.get("iteration", 0)) != 0:
+            continue  # the first iteration stands for all of them
+        entry = open_loops.get(loop["id"])
+        if entry is None:
+            entry = {"loop": loop.get("name") or "Loop", "repeat": int(loop.get("repeat", 1)), "steps": []}
+            open_loops[loop["id"]] = entry
+            entries.append(entry)
+        entry["steps"].append(spec_from_step(step))
+    return entries
+
+
+def expand_loops(specs: list[Any]) -> list[dict[str, Any]]:
+    """Flat step specs from flow-file entries, unrolling every loop entry.
+
+    Each unrolled step carries ``_loop`` = {"id", "name", "repeat",
+    "iteration"} for ``step_from_spec`` to store. A loop inside a loop is
+    unrolled into its parent: the file may nest, the workspace does not.
+    """
+    flat: list[dict[str, Any]] = []
+    for spec in specs:
+        if not isinstance(spec, Mapping):
+            raise InvalidRequest("every entry of steps must be an object.")
+        if "repeat" not in spec and "loop" not in spec:
+            flat.append(dict(spec))
+            continue
+        try:
+            repeat = int(spec.get("repeat", 1))
+        except (TypeError, ValueError) as error:
+            raise InvalidRequest(f"loop {spec.get('loop', '?')!r}: repeat must be a whole number.") from error
+        if repeat < 1:
+            raise InvalidRequest(f"loop {spec.get('loop', '?')!r}: repeat must be at least 1.")
+        body = spec.get("steps")
+        if not isinstance(body, list) or not body:
+            raise InvalidRequest(f"loop {spec.get('loop', '?')!r}: a loop holds a list of steps.")
+        inner = [dict(item) for item in expand_loops(body)]
+        for item in inner:
+            item.pop("_loop", None)
+        name = str(spec.get("loop") or spec.get("name") or "Loop")
+        loop_id = new_id()
+        for iteration in range(repeat):
+            for item in inner:
+                flat.append({**item, "_loop": {"id": loop_id, "name": name, "repeat": repeat, "iteration": iteration}})
+    return flat
 
 
 def spec_from_step(step: Mapping[str, Any]) -> dict[str, Any]:
@@ -202,6 +265,7 @@ def step_from_spec(spec: Mapping[str, Any], *, step_id: str | None = None) -> di
         **mask,
         "keep": keep,
         "enabled": bool(spec.get("enabled", True)),
+        "loop": dict(spec["_loop"]) if isinstance(spec.get("_loop"), Mapping) else None,
     }
 
 
@@ -300,6 +364,6 @@ def apply_flow(session: Session, flow: Mapping[str, Any]) -> dict[str, Any]:
         branch = Session.branch(document)
         branch["steps"] = [
             step_from_spec(spec, step_id=existing[index]["id"] if index < len(existing) else None)
-            for index, spec in enumerate(specs)
+            for index, spec in enumerate(expand_loops(specs))
         ]
     return session.save(document)
