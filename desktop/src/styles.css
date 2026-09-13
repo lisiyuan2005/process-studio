@@ -714,3 +714,24 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .loop-facts svg { flex: 0 0 auto; margin-top: 3px; color: var(--accent); }
 .loop-form { padding: 16px 18px 4px; }
 .field-hint { display: block; margin-top: 6px; color: var(--faint); font-size: 11px; line-height: 1.45; }
+
+/* The 3D clipping plane controls in the viewport footer. */
+.clip-controls { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; }
+.clip-controls .footer-toggle { min-width: 26px; padding: 0 6px; display: inline-grid; place-items: center; }
+.clip-controls input[type="range"] { width: 120px; accent-color: var(--accent); }
+.clip-controls code { color: var(--faint); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+/* A material's look in the 3D view: colour and opacity, not saved. */
+.legend button.custom-look { border-style: dashed; }
+.legend button i { cursor: pointer; }
+.look-popover { position: fixed; z-index: 60; width: 236px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); color: var(--text); box-shadow: 0 14px 40px rgba(36, 53, 67, 0.22); font-size: 11.5px; }
+.look-title { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; }
+.look-title i { width: 12px; height: 12px; border: 1px solid rgba(40, 55, 66, 0.2); border-radius: 3px; }
+.look-title span { margin-left: auto; color: var(--faint); font-size: 10.5px; }
+.look-popover label { display: grid; grid-template-columns: 52px 1fr auto; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--muted); }
+.look-popover input[type="color"] { width: 100%; height: 26px; padding: 0 2px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel-raised); cursor: pointer; }
+.look-popover input[type="range"] { width: 100%; accent-color: var(--accent); }
+.look-popover code { min-width: 34px; text-align: right; color: var(--faint); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+.look-actions { display: flex; gap: 6px; margin-top: 4px; }
+.look-actions button { flex: 1; height: 26px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid var(--line); border-radius: 5px; background: transparent; color: var(--text); font-size: 11px; cursor: pointer; }
+.look-actions button:hover:not(:disabled) { border-color: var(--accent); }
+.look-actions button:disabled { opacity: 0.45; cursor: default; }

@@ -25,7 +25,7 @@ import { RecipeEditor } from "./components/RecipeEditor";
 import { SketchEditor } from "./components/SketchEditor";
 import { MenuBar, type Menu } from "./components/MenuBar";
 import { PROCESS_LABELS, StepList, summarizeStatuses, type LoopActions, type SelectModifiers } from "./components/StepList";
-import { Viewport, type ViewMode } from "./components/Viewport";
+import { Viewport, type MaterialLook, type ViewMode } from "./components/Viewport";
 import {
   addStep,
   dissolveLoop,
@@ -188,6 +188,8 @@ export default function App() {
   const [viewError, setViewError] = useState<string>();
 
   const [hiddenMaterials, setHiddenMaterials] = useState<string[]>([]);
+  // Colours and opacities for the 3D view only; the library is not touched.
+  const [materialLooks, setMaterialLooks] = useState<Record<string, MaterialLook>>({});
 
   const skipNextAutosave = useRef(false);
   const runningStepId = useRef<string | undefined>(undefined);
@@ -369,6 +371,7 @@ export default function App() {
     setSectionIndex(null);
     sectionPosition.current = null;
     setHiddenMaterials([]);
+    setMaterialLooks({});
   };
 
   // The worker downloads and unpacks the release and starts the updater;
@@ -1612,6 +1615,15 @@ export default function App() {
                 ? current.filter((name) => name !== material)
                 : [...current, material],
             )
+          }
+          looks={materialLooks}
+          onLookChange={(material, look) =>
+            setMaterialLooks((current) => {
+              const next = { ...current };
+              if (look) next[material] = look;
+              else delete next[material];
+              return next;
+            })
           }
           surfaces={surfaces}
           section={section}

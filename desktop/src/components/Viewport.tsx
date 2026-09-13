@@ -7,6 +7,7 @@ import {
   Eye,
   EyeOff,
   FileBox,
+  FlipHorizontal2,
   Image as ImageIcon,
   LoaderCircle,
   PenLine,
@@ -16,7 +17,8 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ContextMenu, type MenuAnchor } from "./ContextMenu";
 import { SectionLineEditor } from "./SectionLineEditor";
 import * as THREE from "three";
@@ -61,6 +63,10 @@ interface ViewportProps {
   materials: MaterialDefinition[];
   hiddenMaterials: string[];
   onToggleMaterial: (material: string) => void;
+  /** How the 3D view shows each material for now: a colour or opacity other than the library's. */
+  looks: Record<string, MaterialLook>;
+  /** Change a material's look in the view, or null to go back to the library's. */
+  onLookChange: (material: string, look: MaterialLook | null) => void;
   /** Write the 3D surfaces of the shown step to a file the user picks. */
   onExportMesh: () => void;
   /** Write a PNG the user picks a place for; `image` is base64 without prefix. */
@@ -70,6 +76,20 @@ interface ViewportProps {
   topView?: TopViewDocument;
   topShading: TopShading;
   onTopShadingChange: (shading: TopShading) => void;
+}
+
+/** A temporary colour or opacity for one material in the 3D view; nothing is saved. */
+export interface MaterialLook {
+  color?: string;
+  opacity?: number;
+}
+
+/** The clipping plane of the 3D view: an axis, where along it (0..1 of the window) and which side stays. */
+export interface ClipState {
+  axis: "x" | "y" | "z" | null;
+  fraction: number;
+  /** False keeps the side towards +axis, true the side towards −axis. */
+  flip: boolean;
 }
 
 function decodeFloats(value: string): Float32Array {
@@ -95,15 +115,20 @@ function decodeBytes(value: string): Uint8Array {
 
 function SurfaceMesh({
   surface,
+  color,
   opacity,
   offset,
   order,
   exact,
   hiddenMaterials,
+  clipPlane,
 }: {
   surface: SurfacePayload;
+  color: string;
   opacity: number;
   offset: THREE.Vector3;
+  /** The plane everything is cut by, or null when the view is whole. */
+  clipPlane: THREE.Plane | null;
   /** The material's place in the draw order, for a deterministic depth bias. */
   order: number;
   /** True when the faces are the geometry itself, so no two drawn faces coincide. */
@@ -155,7 +180,10 @@ function SurfaceMesh({
   useEffect(() => () => geometry.dispose(), [geometry]);
 
   const position: [number, number, number] = [-offset.x, -offset.y, -offset.z];
-  const side = exact ? THREE.FrontSide : THREE.DoubleSide;
+  // A cut solid shows its inside: while the plane is on, the back faces
+  // behind the cut are what the eye sees as the interior, so they are drawn.
+  const side = exact && !clipPlane ? THREE.FrontSide : THREE.DoubleSide;
+  const clippingPlanes = clipPlane ? [clipPlane] : [];
   const translucent = opacity < 1;
   return (
     <group>
@@ -168,14 +196,15 @@ function SurfaceMesh({
         // queue so the opaque materials behind the film are already drawn
         // and still show through.
         <mesh geometry={geometry} position={position} renderOrder={2 * order}>
-          <meshBasicMaterial transparent colorWrite={false} side={side} />
+          <meshBasicMaterial transparent colorWrite={false} side={side} clippingPlanes={clippingPlanes} />
         </mesh>
       )}
       <mesh geometry={geometry} position={position} renderOrder={translucent ? 2 * order + 1 : 0}>
         <meshStandardMaterial
-          color={surface.color}
+          color={color}
           transparent={translucent}
           opacity={opacity}
+          clippingPlanes={clippingPlanes}
           roughness={0.62}
           metalness={0.08}
           // Exact geometry is closed, so its back faces are never in view;
@@ -239,15 +268,27 @@ function Snapshot({ register }: { register: (capture: (() => string) | null) => 
   return null;
 }
 
+/** Where a clip setting cuts, in model coordinates along its axis. */
+function clipPosition(clip: ClipState, bounds: SurfaceDocument["bounds"]): number {
+  if (!clip.axis) return 0;
+  const low = bounds[`${clip.axis}Min`];
+  const high = bounds[`${clip.axis}Max`];
+  return low + clip.fraction * (high - low);
+}
+
 function SurfaceScene({
   surfaces,
   materials,
   hiddenMaterials,
+  looks,
+  clip,
   registerSnapshot,
 }: {
   surfaces: SurfaceDocument;
   materials: MaterialDefinition[];
   hiddenMaterials: string[];
+  looks: Record<string, MaterialLook>;
+  clip: ClipState;
   registerSnapshot: (capture: (() => string) | null) => void;
 }) {
   const { bounds } = surfaces;
@@ -280,28 +321,66 @@ function SurfaceScene({
     [distance, span],
   );
   const shown = surfaces.surfaces.filter((surface) => !hiddenMaterials.includes(surface.material));
+  // The clipping plane in scene coordinates (the model sits at -center).
+  // three keeps what lies on the plane's normal side; flipping turns the
+  // normal round so the other half stays.
+  const clipPlane = useMemo(() => {
+    if (!clip.axis) return null;
+    const at = clipPosition(clip, bounds) - center[clip.axis];
+    const normal = new THREE.Vector3(
+      clip.axis === "x" ? 1 : 0,
+      clip.axis === "y" ? 1 : 0,
+      clip.axis === "z" ? 1 : 0,
+    );
+    if (clip.flip) normal.negate();
+    return new THREE.Plane(normal, clip.flip ? at : -at);
+  }, [clip, bounds, center]);
+  const planeSize = span * 1.3;
+  const planeRotation: [number, number, number] =
+    clip.axis === "x" ? [0, Math.PI / 2, 0] : clip.axis === "y" ? [Math.PI / 2, 0, 0] : [0, 0, 0];
+  const planeAt = clip.axis ? clipPosition(clip, bounds) - center[clip.axis] : 0;
 
   return (
     // Frames are drawn only when something changed: a still scene stays
     // still, and a driver that re-presents each frame differently has
     // nothing to flicker with.
-    <Canvas camera={camera} dpr={[1, 2]} frameloop="demand">
+    <Canvas camera={camera} dpr={[1, 2]} frameloop="demand" gl={{ localClippingEnabled: true }}>
       <color attach="background" args={["#f4f7f9"]} />
       <ambientLight intensity={0.72} />
       <directionalLight position={[span, -span, span * 1.6]} intensity={1.25} />
       <directionalLight position={[-span, span * 0.6, span]} intensity={0.45} />
       <group>
-        {shown.map((surface, index) => (
-          <SurfaceMesh
-            key={surface.material}
-            surface={surface}
-            opacity={materials.find((material) => material.name === surface.material)?.opacity ?? 1}
-            offset={center}
-            order={index}
-            exact={surfaces.exact === true}
-            hiddenMaterials={hiddenMaterials}
-          />
-        ))}
+        {shown.map((surface, index) => {
+          const library = materials.find((material) => material.name === surface.material);
+          const look = looks[surface.material] ?? {};
+          return (
+            <SurfaceMesh
+              key={surface.material}
+              surface={surface}
+              color={look.color ?? library?.color ?? surface.color}
+              opacity={look.opacity ?? library?.opacity ?? 1}
+              offset={center}
+              order={index}
+              exact={surfaces.exact === true}
+              hiddenMaterials={hiddenMaterials}
+              clipPlane={clipPlane}
+            />
+          );
+        })}
+        {clip.axis && (
+          // A faint sheet where the cut is, so the plane can be placed by eye.
+          <mesh
+            rotation={planeRotation}
+            position={[
+              clip.axis === "x" ? planeAt : 0,
+              clip.axis === "y" ? planeAt : 0,
+              clip.axis === "z" ? planeAt : 0,
+            ]}
+          >
+            <planeGeometry args={[planeSize, planeSize]} />
+            <meshBasicMaterial color="#4e8fe8" transparent opacity={0.08} side={THREE.DoubleSide} depthWrite={false} />
+          </mesh>
+        )}
         <gridHelper
           args={[span * 1.4, 14, "#c7d2db", "#dde5eb"]}
           rotation={[Math.PI / 2, 0, 0]}
@@ -658,6 +737,8 @@ export function Viewport({
   materials,
   hiddenMaterials,
   onToggleMaterial,
+  looks,
+  onLookChange,
   onExportMesh,
   onSaveImage,
   surfaces,
@@ -666,6 +747,9 @@ export function Viewport({
   topShading,
   onTopShadingChange,
 }: ViewportProps) {
+  // The 3D clipping plane and the material whose look is being edited.
+  const [clip, setClip] = useState<ClipState>({ axis: null, fraction: 0.5, flip: false });
+  const [lookEditor, setLookEditor] = useState<{ material: MaterialDefinition; x: number; y: number } | null>(null);
   // Drawing the AA–BB line: two clicks on the top view, A then B.
   const [drawing, setDrawing] = useState(false);
   const [pendingStart, setPendingStart] = useState<[number, number] | null>(null);
@@ -952,6 +1036,8 @@ export function Viewport({
               surfaces={surfaces}
               materials={materials}
               hiddenMaterials={hiddenMaterials}
+              looks={looks}
+              clip={clip}
               registerSnapshot={registerSnapshot}
             />
           ) : (
@@ -1099,6 +1185,46 @@ export function Viewport({
             </select>
           </label>
         )}
+        {mode === "surfaces" && (
+          <div className="clip-controls" role="group" aria-label="Clipping plane">
+            <span>Clip</span>
+            {(["x", "y", "z"] as const).map((axis) => (
+              <button
+                key={axis}
+                type="button"
+                className={`footer-toggle ${clip.axis === axis ? "active" : ""}`}
+                title={clip.axis === axis ? "Turn the clipping plane off" : `Cut the model with a plane across ${axis}`}
+                onClick={() => setClip((current) => ({ ...current, axis: current.axis === axis ? null : axis }))}
+              >
+                {axis.toUpperCase()}
+              </button>
+            ))}
+            {clip.axis && (
+              <>
+                <input
+                  type="range"
+                  min={0}
+                  max={1000}
+                  value={Math.round(clip.fraction * 1000)}
+                  aria-label="Where the plane cuts"
+                  onChange={(event) => setClip((current) => ({ ...current, fraction: Number(event.target.value) / 1000 }))}
+                />
+                <code>
+                  {clip.axis} = {surfaces ? clipPosition(clip, surfaces.bounds).toFixed(3) : "–"} µm
+                </code>
+                <button
+                  type="button"
+                  className={`footer-toggle ${clip.flip ? "active" : ""}`}
+                  title={clip.flip ? `Keeping the −${clip.axis} side; click to keep the +${clip.axis} side` : `Keeping the +${clip.axis} side; click to keep the −${clip.axis} side`}
+                  aria-label="Keep the other side of the plane"
+                  onClick={() => setClip((current) => ({ ...current, flip: !current.flip }))}
+                >
+                  <FlipHorizontal2 size={13} />
+                </button>
+              </>
+            )}
+          </div>
+        )}
         {mode !== "top" && (
           <label>
             Sampling
@@ -1130,15 +1256,29 @@ export function Viewport({
                 <button
                   key={material.id}
                   type="button"
-                  className={hiddenMaterials.includes(material.name) ? "hidden-material" : ""}
+                  className={`${hiddenMaterials.includes(material.name) ? "hidden-material" : ""} ${looks[material.name] ? "custom-look" : ""}`}
                   title={
-                    hiddenMaterials.includes(material.name)
+                    (hiddenMaterials.includes(material.name)
                       ? `Show ${material.name} in the 3D view`
-                      : `Hide ${material.name} in the 3D view`
+                      : `Hide ${material.name} in the 3D view`) + ". Right-click, or click the swatch, for its colour and opacity here."
                   }
                   onClick={() => onToggleMaterial(material.name)}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    setLookEditor({ material, x: event.clientX, y: event.clientY });
+                  }}
                 >
-                  <i style={{ background: material.color }} />
+                  <i
+                    style={{
+                      background: looks[material.name]?.color ?? material.color,
+                      opacity: 0.35 + 0.65 * (looks[material.name]?.opacity ?? material.opacity),
+                    }}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      const box = event.currentTarget.getBoundingClientRect();
+                      setLookEditor({ material, x: box.left, y: box.top - 6 });
+                    }}
+                  />
                   {material.name}
                   {hiddenMaterials.includes(material.name) ? (
                     <EyeOff size={11} />
@@ -1155,6 +1295,118 @@ export function Viewport({
             )}
         </div>
       </div>
+      {lookEditor && (
+        <MaterialLookPopover
+          material={lookEditor.material}
+          look={looks[lookEditor.material.name] ?? {}}
+          hidden={hiddenMaterials.includes(lookEditor.material.name)}
+          anchor={lookEditor}
+          onChange={(look) => onLookChange(lookEditor.material.name, look)}
+          onToggleHidden={() => onToggleMaterial(lookEditor.material.name)}
+          onClose={() => setLookEditor(null)}
+        />
+      )}
     </section>
+  );
+}
+
+/**
+ * A material's colour and opacity for the 3D view only. It opens above the
+ * legend chip, stays until a click elsewhere or Escape, and never touches
+ * the material library: the section and top view keep the library's colours.
+ */
+function MaterialLookPopover({
+  material,
+  look,
+  hidden,
+  anchor,
+  onChange,
+  onToggleHidden,
+  onClose,
+}: {
+  material: MaterialDefinition;
+  look: MaterialLook;
+  hidden: boolean;
+  anchor: { x: number; y: number };
+  onChange: (look: MaterialLook | null) => void;
+  onToggleHidden: () => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [place, setPlace] = useState({ left: anchor.x, top: anchor.y });
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const box = element.getBoundingClientRect();
+    setPlace({
+      left: Math.max(8, Math.min(anchor.x, window.innerWidth - box.width - 8)),
+      // Above the anchor when it fits, else below.
+      top: anchor.y - box.height - 8 >= 8 ? anchor.y - box.height - 8 : Math.min(anchor.y + 8, window.innerHeight - box.height - 8),
+    });
+  }, [anchor]);
+  useEffect(() => {
+    const away = (event: Event) => {
+      if (event.target instanceof Node && ref.current?.contains(event.target)) return;
+      onClose();
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("pointerdown", away, true);
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("pointerdown", away, true);
+      window.removeEventListener("keydown", key);
+    };
+  }, [onClose]);
+  const color = look.color ?? material.color;
+  const opacity = look.opacity ?? material.opacity;
+  const changed = look.color !== undefined || look.opacity !== undefined;
+  const update = (patch: MaterialLook) => {
+    const next: MaterialLook = { ...look, ...patch };
+    if (next.color === material.color) delete next.color;
+    if (next.opacity === material.opacity) delete next.opacity;
+    onChange(next.color === undefined && next.opacity === undefined ? null : next);
+  };
+  return createPortal(
+    <div
+      ref={ref}
+      className="look-popover"
+      role="dialog"
+      aria-label={`How ${material.name} looks in the 3D view`}
+      style={{ left: place.left, top: place.top }}
+      onContextMenu={(event) => event.preventDefault()}
+    >
+      <div className="look-title">
+        <i style={{ background: color }} />
+        <strong>{material.name}</strong>
+        <span>3D view only</span>
+      </div>
+      <label>
+        <span>Colour</span>
+        <input type="color" value={color} onChange={(event) => update({ color: event.target.value })} />
+      </label>
+      <label>
+        <span>Opacity</span>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          value={Math.round(opacity * 100)}
+          onChange={(event) => update({ opacity: Number(event.target.value) / 100 })}
+        />
+        <code>{Math.round(opacity * 100)}%</code>
+      </label>
+      <div className="look-actions">
+        <button type="button" onClick={onToggleHidden}>
+          {hidden ? <Eye size={12} /> : <EyeOff size={12} />}
+          {hidden ? "Show" : "Hide"}
+        </button>
+        <button type="button" disabled={!changed} onClick={() => onChange(null)}>
+          Library colour
+        </button>
+      </div>
+    </div>,
+    document.body,
   );
 }
