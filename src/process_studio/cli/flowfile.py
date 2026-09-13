@@ -17,7 +17,7 @@ from ..models import new_id
 from ..worker.errors import InvalidRequest
 from .session import Session
 
-PROCESS_TYPES = ("deposit", "etch", "cmp", "no_geometry")
+PROCESS_TYPES = ("deposit", "etch", "cmp", "no_geometry", "oxidation")
 
 
 # -- reading and writing the file ------------------------------------------

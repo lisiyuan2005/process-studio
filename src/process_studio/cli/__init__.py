@@ -51,6 +51,7 @@ STEP_DEFAULTS: dict[str, tuple[str, dict[str, Any]]] = {
     "etch": ("New etch", {"target": 0.1, "directional_fraction": 1.0}),
     "cmp": ("New CMP", {"target_z": 0.0}),
     "no_geometry": ("New process note", {}),
+    "oxidation": ("New oxidation", {"target": 0.02}),
 }
 
 

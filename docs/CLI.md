@@ -36,7 +36,7 @@ cd ~/devices/dram
 | `info` | 工程、内核、窗口、精度、步骤数、材料 |
 | `status` | 每步的状态 |
 | `steps list` / `steps show STEP` | 步骤列表 / 一步的全部设置 |
-| `steps add TYPE [--after STEP\|--before STEP] [选项]` | 加一步；TYPE 是 deposit / etch / cmp / no_geometry |
+| `steps add TYPE [--after STEP\|--before STEP] [选项]` | 加一步；TYPE 是 deposit / etch / cmp / no_geometry / oxidation（slab 内核） |
 | `steps set STEP [选项]` | 改一步 |
 | `steps rm STEP...` / `dup STEP` / `mv STEP POS` | 删除 / 原位复制 / 移到第 POS 位 |
 | `steps skip STEP...` / `include STEP...` | 跳过 / 放回运行 |
@@ -105,6 +105,9 @@ steps:
   - {name: Liner, type: deposit, material: TiN, parameters: {target: 0.02, mode: conformal}}
   - {name: Fill, type: deposit, material: W, parameters: {target: 0.2, mode: conformal}}
   - {name: CMP, type: cmp, parameters: {target_z: 0.0}}
+  - {name: Gate oxide, type: oxidation, material: SiO2, parameters: {target: 0.005}, rates: {Si: 1}}
 ```
+
+`oxidation`（slab 内核）：`rates` 里列出会被氧化的材料，`parameters.target` 是被消耗的厚度（按各材料的 rate 比例），`material` 是生成的氧化物（默认 SiO2）。露出的表面向内 `target` 那一层原地变成氧化物，不模拟体积膨胀。
 
 JSON 和 TOML 也能读；`dump` 写 JSON 或 YAML。

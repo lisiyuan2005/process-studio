@@ -21,6 +21,7 @@ from .material import Material, MaterialRegistry
 from .process.cmp import planarize
 from .process.conformal import deposit_conformal
 from .process.isotropic_etch import etch_isotropic
+from .process.oxidation import oxidize
 from .process.planar import deposit_planar
 from .process.square import deposit_square
 from .process.vertical_etch import etch_vertical
@@ -234,6 +235,56 @@ class Device:
             "mask_area": round(opening.area, 9),
         }
         step.update(self._etch_record(removed, rate_map, budget, ref, target, depth, rates, selectivity, overetch))
+        self._history.append(step)
+        self._end(t_start)
+        self._after_step()
+
+    def oxidize(
+        self,
+        mask=None,
+        target=None,
+        depth=None,
+        *,
+        product="SiO2",
+        rates=None,
+        time=None,
+        selectivity=None,
+        reference=None,
+        overetch=None,
+        square: bool = False,
+    ) -> None:
+        """Turn the exposed skin of the listed materials into ``product``.
+
+        The consumed depth is set the way :meth:`wet_etch` sets its depth
+        (``target``+``depth``, ``rates``+``time``, ``selectivity``); the
+        skin is taken from every exposed surface the way a wet etch takes
+        it, and the product fills exactly the space it leaves (no swelling).
+        """
+        blanket = mask is None
+        mask = self._mask_or_window(mask, "oxidize")
+        rate_map, budget, unit, ref = self._resolve_etch(target, depth, rates, time, selectivity, reference, overetch)
+        opening = mask.clip(self.bounds)
+        if opening.is_empty:
+            raise MaskError("mask does not overlap the device bounds")
+        depths = {m: r * budget for m, r in rate_map.items() if r > 0}
+        oxide = self._materials.resolve(product)
+        t_start = self._begin(
+            f"oxidize into {oxide.name}: {self._etch_text(rate_map, budget, ref, target, depth, rates, selectivity)}, "
+            f"{self._mask_text(None if blanket else mask, opening)}"
+        )
+        state = self._state.copy()  # transactional: commit only after success
+        converted = oxidize(
+            state, depths, oxide, self.conformal_resolution, None if blanket else opening._geom,
+            self.xy_resolution, square=square,
+        )
+        converted = {m: converted.get(m, 0.0) for m in rate_map}
+        self._state = state
+        self._meshes = None
+        step = {
+            "op": "oxidize", "product": oxide.name, "square": bool(square),
+            "mask_area": round(opening.area, 9),
+        }
+        step.update(self._etch_record(converted, rate_map, budget, ref, target, depth, rates, selectivity, overetch))
         self._history.append(step)
         self._end(t_start)
         self._after_step()

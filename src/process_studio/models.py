@@ -39,6 +39,9 @@ class ProcessType(str, Enum):
     ETCH = "etch"
     CMP = "cmp"
     NO_GEOMETRY = "no_geometry"
+    #: The exposed skin of the listed materials becomes the output material
+    #: (slab kernel only): rates and target as for an etch, no swelling.
+    OXIDATION = "oxidation"
 
 
 @dataclass

@@ -117,6 +117,11 @@ const PARAMETER_SPECS: Record<ProcessType, ParameterSpec[]> = {
     { key: "time_min", label: "Time", unit: "min", initial: 1 },
     { key: "temperature_c", label: "Temperature", unit: "°C", initial: 25 },
   ],
+  oxidation: [
+    { key: "target", label: "Consumed thickness", unit: "µm", initial: 0.02 },
+    { key: "time_min", label: "Time", unit: "min", initial: 1 },
+    { key: "temperature_c", label: "Temperature", unit: "°C", initial: 900 },
+  ],
 };
 
 const MODE_LABELS: Record<string, string> = {
@@ -132,6 +137,7 @@ const TYPE_LABELS: Record<ProcessType, string> = {
   etch: "Etch",
   cmp: "CMP",
   no_geometry: "No geometry change",
+  oxidation: "Oxidation",
 };
 
 function NumberInput({
@@ -477,9 +483,9 @@ export function Inspector({
               </button>
             </span>
           </label>
-          {step.processType === "deposit" && (
+          {(step.processType === "deposit" || step.processType === "oxidation") && (
             <label className="field-row">
-              <span>Output material</span>
+              <span>{step.processType === "oxidation" ? "Oxide it becomes" : "Output material"}</span>
               <select
                 value={step.outputMaterial ?? ""}
                 onChange={(event) =>
@@ -541,9 +547,11 @@ export function Inspector({
           )}
         </div>
 
-        {step.processType === "etch" && (
+        {(step.processType === "etch" || step.processType === "oxidation") && (
           <div className="form-section">
-            <span className="section-label">MATERIAL ETCH RESPONSES</span>
+            <span className="section-label">
+              {step.processType === "oxidation" ? "MATERIALS THAT OXIDISE" : "MATERIAL ETCH RESPONSES"}
+            </span>
             {Object.values(step.materialResponses).map((response) => (
               <div className="response-row" key={response.material}>
                 <input value={response.material} readOnly />
@@ -581,7 +589,11 @@ export function Inspector({
                 <option key={material.id} value={material.name}>{material.name}</option>
               ))}
             </select>
-            <small className="field-hint">Rates are µm/min. A stop layer is stored as zero rate.</small>
+            <small className="field-hint">
+              {step.processType === "oxidation"
+                ? "The exposed skin of each listed material, the consumed thickness deep (scaled by its rate), becomes the oxide in place; nothing swells."
+                : "Rates are µm/min. A stop layer is stored as zero rate."}
+            </small>
           </div>
         )}
 

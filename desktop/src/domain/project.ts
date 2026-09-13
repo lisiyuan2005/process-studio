@@ -41,6 +41,7 @@ const STEP_DEFAULTS: Record<ProcessType, { name: string; parameters: Record<stri
   etch: { name: "New etch", parameters: { target: 0.1, directional_fraction: 1 } },
   cmp: { name: "New CMP", parameters: { target_z: 0 } },
   no_geometry: { name: "New process note", parameters: {} },
+  oxidation: { name: "New oxidation", parameters: { target: 0.02 } },
 };
 
 function copyResponses(responses: Recipe["materialResponses"]) {
@@ -95,7 +96,7 @@ export function addStep(
     name: defaults.name,
     processType,
     tool: "",
-    outputMaterial: null,
+    outputMaterial: processType === "oxidation" ? "SiO2" : null,
     parameters: { ...defaults.parameters },
     materialResponses: {},
     maskSource: "none",

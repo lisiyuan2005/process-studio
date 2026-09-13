@@ -992,3 +992,57 @@ def test_the_simplified_isotropic_etch_creeps_the_same_layer_with_square_ends(ke
     # The square front ends flat: the whole recess height is open at r = 0.31.
     for z in (0.855, 0.87, 0.885):
         assert results["simplified"].material_at(0.31, 0.0, z) is None
+
+
+def test_oxidation_turns_the_exposed_skin_into_oxide_without_swelling(kernel, project, sketches):
+    materials = default_materials()
+    state = kernel.initial_state(project, materials=materials)
+    trenched = run(
+        kernel, state,
+        step(
+            ProcessType.ETCH, mask_source="quick_sketch",
+            parameters={"target": 0.3, "directional_fraction": 1.0, "sketch_id": "default"},
+            material_responses={"Si": MaterialResponse("Si", 0.1)},
+        ),
+        project, sketches, materials,
+    )
+    solid_before = sum(trenched.device.volume(m) for m in ("Si",))
+    oxidised = run(
+        kernel, trenched,
+        step(
+            ProcessType.OXIDATION,
+            parameters={"target": 0.02},
+            output_material="SiO2",
+            material_responses={"Si": MaterialResponse("Si", 0.1)},
+        ),
+        project, sketches, materials,
+    )
+    device = oxidised.device
+    # The skin is oxide on the top, the trench floor and the trench wall.
+    assert device.material_at(0.6, 0.0, 0.79).name == "SiO2"
+    assert device.material_at(0.6, 0.0, 0.77).name == "Si"
+    # The floor and the wall recede into the silicon: the oxide sits where
+    # silicon was, and the trench is as open as before (no swelling).
+    assert device.material_at(0.0, 0.0, 0.49).name == "SiO2"
+    assert device.material_at(0.0, 0.0, 0.51) is None
+    assert device.material_at(0.23, 0.0, 0.65).name == "SiO2"
+    assert device.material_at(0.21, 0.0, 0.65) is None
+    assert device.material_at(0.0, 0.0, 0.7) is None, "the trench stays open"
+    # Nothing grew outward: the solid's outline is what it was.
+    assert device.top == pytest.approx(0.8)
+    total = device.volume("Si") + device.volume("SiO2")
+    assert total == pytest.approx(solid_before, rel=1e-6)
+    assert device.volume("SiO2") > 0
+    assert oxidised.priority == ["Si", "SiO2"]
+
+
+def test_oxidation_refuses_to_oxidise_the_oxide_itself(kernel, project, sketches):
+    materials = default_materials()
+    state = kernel.initial_state(project, materials=materials)
+    with pytest.raises(SlabError, match="cannot be both"):
+        run(
+            kernel, state,
+            step(ProcessType.OXIDATION, parameters={"target": 0.02}, output_material="SiO2",
+                 material_responses={"SiO2": MaterialResponse("SiO2", 0.1)}),
+            project, sketches, materials,
+        )

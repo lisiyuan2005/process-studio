@@ -23,6 +23,7 @@ import {
   Clock3,
   Copy,
   EllipsisVertical,
+  Flame,
   GripVertical,
   Layers3,
   LoaderCircle,
@@ -72,6 +73,8 @@ interface StepListProps {
   onEnableSelected: (enabled: boolean) => void;
   onCopySelected: () => void;
   onPaste: () => void;
+  /** The step types this project's kernel runs. */
+  processTypes: ProcessType[];
 }
 
 /** Where a step's menu was asked for: the pointer, or the step's own button. */
@@ -80,6 +83,14 @@ interface MenuAnchor {
   x: number;
   y: number;
 }
+
+export const PROCESS_LABELS: Record<ProcessType, string> = {
+  deposit: "Deposition",
+  etch: "Etch",
+  cmp: "CMP",
+  no_geometry: "No geometry change",
+  oxidation: "Oxidation",
+};
 
 const STATUS_LABELS: Record<StepStatus, string> = {
   clean: "Ready",
@@ -94,6 +105,7 @@ function ProcessIcon({ type }: { type: ProcessType | undefined }) {
   if (type === "deposit") return <Sparkles size={15} />;
   if (type === "cmp") return <Minimize2 size={15} />;
   if (type === "no_geometry") return <ClipboardList size={15} />;
+  if (type === "oxidation") return <Flame size={15} />;
   return <Layers3 size={15} />;
 }
 
@@ -358,6 +370,7 @@ export function StepList({
   onEnableSelected,
   onCopySelected,
   onPaste,
+  processTypes,
 }: StepListProps) {
   const [menu, setMenu] = useState<MenuAnchor | null>(null);
   const menuIndex = menu ? steps.findIndex((step) => step.id === menu.stepId) : -1;
@@ -486,15 +499,9 @@ export function StepList({
             <option value="" disabled>
               Choose a process type…
             </option>
-            {(["deposit", "etch", "cmp", "no_geometry"] as ProcessType[]).map((type) => (
+            {processTypes.map((type) => (
               <option key={type} value={type}>
-                {type === "deposit"
-                  ? "Deposition"
-                  : type === "etch"
-                    ? "Etch"
-                    : type === "cmp"
-                      ? "CMP"
-                      : "No geometry change"}
+                {PROCESS_LABELS[type] ?? type}
               </option>
             ))}
           </select>

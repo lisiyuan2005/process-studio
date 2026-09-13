@@ -98,3 +98,8 @@ under the MIT license in `LICENSE`.
   with the box front, shares only identical reaches between samples. The
   slowest films of the 3D NAND example went from 6.8 s to 3.2 s and from
   6.6 s to 2.2 s, the nitride removal from 5.6 s to 3.6 s.
+- `process/oxidation.py`, `device.py`: `Device.oxidize(...)` takes the
+  exposed skin of the listed materials the way `wet_etch` does and puts
+  the product material back in its place (no swelling), rebuilding the
+  pieces from the planes of both states so a layer consumed whole comes
+  back as oxide.

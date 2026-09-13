@@ -237,6 +237,10 @@ class ProcessEngine:
                     stop_material=stop,
                 )
             self.logger(f"CMP plane z={plane:.4f} µm")
+        elif recipe.process_type is ProcessType.OXIDATION:
+            raise ValueError(
+                "oxidation is a slab-kernel step; the level-set kernel does not run it"
+            )
         else:
             result = state.clone()
 

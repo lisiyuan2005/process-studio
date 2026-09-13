@@ -24,7 +24,7 @@ import { ProjectHome } from "./components/ProjectHome";
 import { RecipeEditor } from "./components/RecipeEditor";
 import { SketchEditor } from "./components/SketchEditor";
 import { MenuBar, type Menu } from "./components/MenuBar";
-import { StepList, type SelectModifiers } from "./components/StepList";
+import { PROCESS_LABELS, StepList, type SelectModifiers } from "./components/StepList";
 import { Viewport, type ViewMode } from "./components/Viewport";
 import {
   addStep,
@@ -71,6 +71,7 @@ import type {
   FlowExportFormat,
   LibraryKind,
   ProcessStep,
+  ProcessType,
   TopShading,
   ParameterValue,
   QuickSketch,
@@ -1121,6 +1122,7 @@ export default function App() {
 
   const fidelity = document.project.fidelity ?? "detailed";
   const selectionCount = batchIds.length;
+  const kernelProcessTypes = (projectKernel?.processTypes ?? ["deposit", "etch", "cmp", "no_geometry"]) as ProcessType[];
   const menus: Menu[] = [
     {
       label: "File",
@@ -1159,8 +1161,8 @@ export default function App() {
       items: [
         { label: "Undo", action: undo, shortcut: "Ctrl+Z", disabled: historySize.undo === 0 },
         { label: "Redo", action: redo, shortcut: "Ctrl+Y", disabled: historySize.redo === 0 },
-        ...(["deposit", "etch", "cmp", "no_geometry"] as const).map((type, index) => ({
-          label: { deposit: "Deposition", etch: "Etch", cmp: "CMP", no_geometry: "No geometry change" }[type],
+        ...kernelProcessTypes.map((type, index) => ({
+          label: PROCESS_LABELS[type] ?? type,
           heading: index === 0 ? "Add step after the selected one" : undefined,
           separated: index === 0,
           action: () => {
@@ -1414,6 +1416,7 @@ export default function App() {
           onEnableSelected={enableSelected}
           onCopySelected={copySelected}
           onPaste={pasteSteps}
+          processTypes={kernelProcessTypes}
           onAdd={(processType) => {
             const { document: next, step } = addStep(document, processType, selectedStepId);
             setDocument(next);

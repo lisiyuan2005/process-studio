@@ -576,6 +576,52 @@ def _etch(
     )
 
 
+def _oxidize(
+    device: Device,
+    step: ProcessStep,
+    recipe: Recipe,
+    parameters,
+    mask: Mask | None,
+    logger,
+    project: ProjectDefinition,
+    materials: Sequence[MaterialDefinition] = (),
+) -> None:
+    """The listed materials lose a skin from every exposed surface; it becomes the product."""
+    rates = _etch_rates(recipe, parameters)
+    active = {name: rate for name, rate in rates.items() if rate > 0.0}
+    if not active:
+        raise SlabError("an oxidation needs at least one material with a positive rate")
+    product = str(parameters.get("material") or recipe.output_material or "SiO2")
+    if product in active:
+        raise SlabError(f"{product} cannot be both oxidised and the oxide it becomes")
+    for name in (*rates, product):
+        _ensure_material(device, name, materials)
+    square = project.fidelity == "simplified"
+    if parameters.get("target") is not None:
+        depth = float(parameters["target"])
+        if depth <= 0.0:
+            raise SlabError("the consumed thickness must be greater than zero")
+        _check_length(depth, "An oxidation depth", project)
+        reference = max(active, key=lambda name: active[name])
+        selectivity = {name: rates[name] / rates[reference] for name in rates}
+        logger(f"SLAB oxidize {depth:g} um of {reference} into {product} ({len(active)} material(s))")
+        device.oxidize(mask, depth=depth, selectivity=selectivity, reference=reference, product=product, square=square)
+        return
+    if parameters.get("time_min") is None:
+        raise SlabError("an oxidation step needs a consumed thickness or a time")
+    minutes = float(parameters["time_min"])
+    if minutes <= 0.0:
+        raise SlabError("oxidation time must be greater than zero")
+    logger(f"SLAB oxidize for {minutes:g} min into {product}")
+    device.oxidize(
+        mask,
+        rates={name: f"{rate}um/min" for name, rate in rates.items()},
+        time=f"{minutes}min",
+        product=product,
+        square=square,
+    )
+
+
 def _cmp(device: Device, recipe: Recipe, parameters, z_offset: float, logger) -> None:
     selected = parameters.get("materials")
     stop = next(
@@ -719,7 +765,7 @@ class SlabKernel:
             "unselective CMP. No grid to converge; conformal deposition is "
             "walked at the set resolution."
         ),
-        process_types=("deposit", "etch", "cmp", "no_geometry"),
+        process_types=("deposit", "etch", "cmp", "no_geometry", "oxidation"),
         mask_sources=("none", "quick_sketch", "gds"),
         deposition_modes=("conformal", "planar"),
         directional_fractions=(0.0, 1.0),
@@ -786,6 +832,11 @@ class SlabKernel:
                 _etch(device, step, recipe, parameters, mask, logger, project, materials)
             elif recipe.process_type is ProcessType.CMP:
                 _cmp(device, recipe, parameters, state.z_offset, logger)
+            elif recipe.process_type is ProcessType.OXIDATION:
+                mask = step_mask(
+                    device, step, project=project, parameters=parameters, sketches=sketches
+                )
+                _oxidize(device, step, recipe, parameters, mask, logger, project, materials)
         except DeviceFlowError as error:
             raise _translate(error, project) from error
         return SlabState(device, state.z_offset)
