@@ -222,7 +222,19 @@ def write_updater(app: Path, staged: Path, wait_for: list[int]) -> tuple[list[st
                 f'echo %DATE% %TIME% updating "{app}" >> "{log}"',
                 waits,
                 "timeout /t 1 /nobreak >NUL",
-                f'robocopy "{staged}" "{app}" /E /R:5 /W:2 /NFL /NDL /NJH /NJS >> "{log}"',
+                # `resources` is mirrored rather than merged: it belongs
+                # wholly to the application and its layout changes between
+                # versions (0.9.0 replaced resources\worker's PyInstaller
+                # executable with an embeddable Python under
+                # resources\python). A plain /E copy leaves the old worker
+                # in place, and the shell prefers it, so the update would
+                # quietly keep running the previous version's worker.
+                # Everything outside `resources` is still merged, so
+                # anything the user keeps beside the application survives.
+                f'if exist "{staged}\\resources" robocopy "{staged}\\resources" "{app}\\resources"'
+                f' /MIR /R:5 /W:2 /NFL /NDL /NJH /NJS >> "{log}"',
+                f'robocopy "{staged}" "{app}" /E /XD "{staged}\\resources"'
+                f' /R:5 /W:2 /NFL /NDL /NJH /NJS >> "{log}"',
                 f'rmdir /S /Q "{staged.parent}"',
                 f'start "" "{exe}"',
                 'del "%~f0"',

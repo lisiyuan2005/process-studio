@@ -90,6 +90,10 @@ def test_the_updater_script_waits_copies_and_restarts(tmp_path, monkeypatch):
     script = (tmp_path / "process-studio-update.cmd").read_text()
     assert command[0] == "cmd.exe" and log.parent == tmp_path
     assert "PID eq 11" in script and "PID eq 22" in script and "robocopy" in script
+    # `resources` is mirrored, so a previous version's worker cannot linger
+    # there and be picked ahead of the one that just arrived; everything
+    # else is merged, leaving whatever the user keeps beside the app.
+    assert "/MIR" in script and "/XD" in script and "resources" in script
     monkeypatch.setattr(update.sys, "platform", "darwin")
     bundle = tmp_path / "Process Studio.app"
     command, _ = update.write_updater(bundle, staged, [33])
