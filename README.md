@@ -44,7 +44,7 @@ Windows 产物必须整个目录一起用：exe 会在自己同级的 `resources
 **worker 被杀毒软件删掉了怎么办**：解压后报 `The packaged process worker was not found`，几乎都是 Defender 或公司的终端防护把 PyInstaller 打的 `process-studio-worker.exe` 隔离了。要么到保护历史记录里恢复并把目录加入排除项，要么不用打包的 worker，改装 Python 包（需要 Python 3.11 以上）：
 
 ```powershell
-py -m pip install "process-studio[render] @ git+https://github.com/lisiyuan2005/process-studio@v0.8.0"
+py -m pip install "process-studio[render] @ git+https://github.com/lisiyuan2005/process-studio@v0.8.1"
 ```
 
 之后照常双击 `ProcessStudio.exe`：找不到打包的 worker 时它会自动用 pip 装出来的 `process-studio-worker`（在 PATH 或 Python 的 Scripts 目录里找；也可以用环境变量 `PROCESS_STUDIO_WORKER` 指定路径）。这个 worker 是普通的 Python 启动器，杀毒软件不会动它，代码和打包版完全一样。
