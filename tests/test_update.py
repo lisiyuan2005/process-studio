@@ -94,11 +94,25 @@ def test_the_updater_script_waits_copies_and_restarts(tmp_path, monkeypatch):
     # there and be picked ahead of the one that just arrived; everything
     # else is merged, leaving whatever the user keeps beside the app.
     assert "/MIR" in script and "/XD" in script and "resources" in script
+    # The script runs detached and with no console, where `timeout` fails at
+    # once ("input redirection is not supported"). It used to be the whole
+    # wait, so the copy started while the application was still running and
+    # every file it needed was locked: nothing was replaced and the unpacked
+    # build stayed behind as a new folder beside the old version.
+    assert "timeout" not in script and "ping -n" in script
+    # A failed copy has to look different from a successful one, or the old
+    # version is restarted as if it had been updated.
+    assert "if errorlevel 8 goto failed" in script and ":failed" in script
+    # The log has to say which application was being written over.
+    assert f'application: "{app}"' in script
     monkeypatch.setattr(update.sys, "platform", "darwin")
     bundle = tmp_path / "Process Studio.app"
     command, _ = update.write_updater(bundle, staged, [33])
     script = (tmp_path / ".process-studio-update.sh").read_text()
     assert command[0] == "/bin/bash" and "kill -0 33" in script and "ditto" in script and "open '" in script
+    # The bundle is only thrown away once its replacement is in place.
+    assert f"mv '{bundle}' '{bundle}.previous'" in script
+    assert f"mv '{bundle}.previous' '{bundle}'" in script
 
 
 def test_installing_needs_a_packaged_application_and_the_repository_url():
@@ -114,3 +128,18 @@ def test_application_root_takes_the_shells_override_first(monkeypatch, tmp_path)
     # it hands the app root down itself instead.
     monkeypatch.setenv("PROCESS_STUDIO_APP_ROOT", str(tmp_path))
     assert update.application_root() == tmp_path
+
+
+def test_a_failed_update_leaves_a_folder_that_the_next_one_clears(tmp_path):
+    # The visible symptom of a failed update: the unpacked build stays put
+    # beside the application instead of replacing it. Starting another
+    # update sweeps them, so they cannot pile up at a build apiece.
+    app = tmp_path / "ProcessStudio"
+    app.mkdir()
+    wreck = tmp_path / f"{update.STAGING_PREFIX}abcd"
+    (wreck / "unpacked").mkdir(parents=True)
+    (wreck / "unpacked" / "ProcessStudio.exe").write_bytes(b"old attempt")
+    keep = tmp_path / "my notes"
+    keep.mkdir()
+    update.clear_stale_staging(tmp_path)
+    assert not wreck.exists() and keep.exists() and app.exists()

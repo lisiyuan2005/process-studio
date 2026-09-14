@@ -212,16 +212,32 @@ def write_updater(app: Path, staged: Path, wait_for: list[int]) -> tuple[list[st
     if sys.platform.startswith("win"):
         script = app.parent / "process-studio-update.cmd"
         exe = next(app.glob("*.exe"), app / "ProcessStudio.exe")
+        # The updater is started detached and with no console, so `timeout`
+        # is not available to it: without a console it fails at once with
+        # "input redirection is not supported", which turned every wait
+        # into a busy loop spawning tasklist as fast as it could. `ping`
+        # needs no console. Each wait is bounded so a process that never
+        # exits leaves a line in the log instead of hanging for ever.
         waits = "\n".join(
-            f':wait{index}\ntasklist /FI "PID eq {pid}" 2>NUL | find "{pid}" >NUL && (timeout /t 1 /nobreak >NUL & goto wait{index})'
+            "\n".join([
+                f"for /L %%i in (1,1,120) do (",
+                f'  tasklist /FI "PID eq {pid}" /NH 2>NUL | find "{pid}" >NUL || goto gone{index}',
+                f"  ping -n 2 127.0.0.1 >NUL",
+                f")",
+                f'echo   process {pid} is still running after two minutes; copying anyway >> "{log}"',
+                f":gone{index}",
+            ])
             for index, pid in enumerate(wait_for)
         )
         script.write_text(
             "\n".join([
                 "@echo off",
-                f'echo %DATE% %TIME% updating "{app}" >> "{log}"',
+                f'echo. >> "{log}"',
+                f'echo ==== %DATE% %TIME% >> "{log}"',
+                f'echo   application: "{app}" >> "{log}"',
+                f'echo   new version: "{staged}" >> "{log}"',
                 waits,
-                "timeout /t 1 /nobreak >NUL",
+                "ping -n 3 127.0.0.1 >NUL",
                 # `resources` is mirrored rather than merged: it belongs
                 # wholly to the application and its layout changes between
                 # versions (0.9.0 replaced resources\worker's PyInstaller
@@ -231,28 +247,64 @@ def write_updater(app: Path, staged: Path, wait_for: list[int]) -> tuple[list[st
                 # quietly keep running the previous version's worker.
                 # Everything outside `resources` is still merged, so
                 # anything the user keeps beside the application survives.
-                f'if exist "{staged}\\resources" robocopy "{staged}\\resources" "{app}\\resources"'
+                f'if exist "{staged}\\resources" (',
+                f'  robocopy "{staged}\\resources" "{app}\\resources"'
                 f' /MIR /R:5 /W:2 /NFL /NDL /NJH /NJS >> "{log}"',
+                # robocopy reports what it did in the exit code: under 8 is
+                # success (files copied, or nothing needed copying), 8 and
+                # above is a real failure. Without this check a failed copy
+                # looked exactly like a successful one — the application was
+                # left untouched and the unpacked new version deleted.
+                "  if errorlevel 8 goto failed",
+                ")",
                 f'robocopy "{staged}" "{app}" /E /XD "{staged}\\resources"'
                 f' /R:5 /W:2 /NFL /NDL /NJH /NJS >> "{log}"',
+                "if errorlevel 8 goto failed",
+                f'echo   updated >> "{log}"',
                 f'rmdir /S /Q "{staged.parent}"',
                 f'start "" "{exe}"',
                 'del "%~f0"',
+                "exit /b 0",
+                ":failed",
+                f'echo   FAILED: could not write into "{app}". >> "{log}"',
+                f'echo   The new version is unpacked in "{staged}" >> "{log}"',
+                f'echo   and can be copied over the application by hand. >> "{log}"',
+                f'start "" "{staged}"',
+                "exit /b 1",
             ]),
             encoding="utf-8",
         )
         return ["cmd.exe", "/C", str(script)], log
     script = app.parent / ".process-studio-update.sh"
     waits = "\n".join(f"while kill -0 {pid} 2>/dev/null; do sleep 0.5; done" for pid in wait_for)
+    # The bundle is moved aside rather than deleted, and only thrown away
+    # once the new one is in place: if the copy fails — the application
+    # sits somewhere this user cannot write — putting the old one back is
+    # the difference between an update that did not happen and a machine
+    # with no application at all.
+    previous = f"{app}.previous"
     script.write_text(
         "\n".join([
             "#!/bin/bash",
             f"exec >> '{log}' 2>&1",
+            "echo",
+            "echo \"==== $(date)\"",
+            f"echo \"  application: {app}\"",
+            f"echo \"  new version: {staged}\"",
             waits,
             "sleep 1",
-            f"rm -rf '{app}'",
-            f"ditto '{staged}' '{app}'",
-            f"rm -rf '{staged.parent}'",
+            f"rm -rf '{previous}'",
+            f"mv '{app}' '{previous}' || true",
+            f"if ditto '{staged}' '{app}'; then",
+            f"  rm -rf '{previous}' '{staged.parent}'",
+            "  echo '  updated'",
+            "else",
+            f"  echo '  FAILED: could not write {app}'",
+            f"  echo '  the new version is unpacked in {staged}'",
+            f"  rm -rf '{app}'",
+            f"  mv '{previous}' '{app}'",
+            f"  open -R '{staged}'",
+            "fi",
             f"open '{app}'",
             f"rm -f '{script}'",
         ]),
@@ -260,6 +312,25 @@ def write_updater(app: Path, staged: Path, wait_for: list[int]) -> tuple[list[st
     )
     script.chmod(0o755)
     return ["/bin/bash", str(script)], log
+
+
+#: The staging directories an update unpacks into, beside the application.
+STAGING_PREFIX = "process-studio-update-"
+
+
+def clear_stale_staging(beside: Path) -> None:
+    """Remove staging directories an earlier update left behind.
+
+    A staging directory is deleted the moment its copy succeeds, so any
+    that survives is the wreckage of an update that failed. They are the
+    "a new folder appeared next to the application" the user sees, and
+    each holds a full unpacked build, so they are worth several hundred
+    megabytes apiece. One that cannot be removed (a file still open, a
+    permission) is left alone: the update itself is what matters.
+    """
+    for path in beside.glob(f"{STAGING_PREFIX}*"):
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
 
 
 def install_update(url: Any, report: Callable[[str], None] | None = None) -> dict[str, Any]:
@@ -276,6 +347,7 @@ def install_update(url: Any, report: Callable[[str], None] | None = None) -> dic
             "This is a source checkout, not a packaged application; update it with git and pip."
         )
     say = report or (lambda _message: None)
+    clear_stale_staging(app.parent)
     work = Path(tempfile.mkdtemp(prefix="process-studio-update-", dir=str(app.parent)))
     archive = work / "release.zip"
 
