@@ -17,11 +17,11 @@ looked, and its answer never settled as the resolution was refined.
 from __future__ import annotations
 
 import pytest
-from shapely.geometry import MultiPolygon, box
+from shapely.geometry import MultiPolygon, Point, box
 
 from deviceflow import Device
 from deviceflow.process.conformal import _nearly_same, _sample_intervals
-from deviceflow.process.isotropic_etch import _fold_runs, _merge_front
+from deviceflow.process.isotropic_etch import _accessible_reach, _fold_runs, _merge_front
 
 
 def _mp(x0, x1):
@@ -163,3 +163,75 @@ def test_a_step_hands_on_a_front_of_regions_not_of_slabs(monkeypatch):
     # The void of this structure is a handful of regions however finely
     # the steps have sliced it.
     assert max(sizes) <= 12
+
+
+def _sealed_shell(*, cavity: bool = False) -> tuple[Device, object]:
+    """A target behind a 5 nm sidewall and solid top/bottom caps."""
+    device = Device(
+        "sealed shell",
+        (-1.0, -1.0, 1.0, 1.0),
+        conformal_resolution=0.005,
+        verbose=False,
+    )
+    target = device.material("Target", role="dielectric")
+    barrier = device.material("Barrier", role="metal")
+    outer = Point(0.0, 0.0).buffer(0.5, quad_segs=32)
+    inner = Point(0.0, 0.0).buffer(0.495, quad_segs=32)
+    wall = outer.difference(inner)
+    middle = inner
+    if cavity:
+        middle = inner.difference(Point(0.0, 0.0).buffer(0.2, quad_segs=32))
+    device._state.add_slab(0.0, 0.1, {barrier: outer})
+    device._state.add_slab(0.1, 0.9, {barrier: wall, target: middle})
+    device._state.add_slab(0.9, 1.0, {barrier: outer})
+    return device, target
+
+
+def test_wet_etch_does_not_tunnel_through_a_closed_lateral_barrier():
+    """Barrier thickness is not only a Z distance.
+
+    A 5 nm cylindrical wall is much thinner than the per-step reach of this
+    etch.  Euclidean dilation used to jump across it and remove most of the
+    target, even though the wall and both caps form a closed shell.
+    """
+    device, target = _sealed_shell()
+    before = device.volume(target)
+
+    device.wet_etch(target=target, depth=0.2)
+
+    assert device.volume(target) == pytest.approx(before, rel=1e-9, abs=1e-12)
+
+
+def test_a_sealed_void_is_not_an_etchant_source():
+    """Only void connected to an opening may start a wet etch."""
+    device, target = _sealed_shell(cavity=True)
+    before = device.volume(target)
+
+    device.wet_etch(target=target, depth=0.1)
+
+    assert device.volume(target) == pytest.approx(before, rel=1e-9, abs=1e-12)
+
+
+def test_opening_the_shell_exposes_the_target_to_wet_etch():
+    """The accessibility guard must not turn a barrier into a blanket stop."""
+    device, target = _sealed_shell()
+    barrier = next(material for material in device.materials if material.name == "Barrier")
+    opening = Point(0.0, 0.0).buffer(0.08, quad_segs=16)
+    top = device._state.slabs[-1]
+    top.regions[barrier] = device._state.clean(top.regions[barrier].difference(opening))
+    before = device.volume(target)
+
+    device.wet_etch(target=target, depth=0.2)
+
+    assert device.volume(target) < before
+
+
+def test_barrier_free_reach_keeps_the_exact_fast_path():
+    """Accessibility must cost no overlays when there is no blocker."""
+    device = Device("open", (-1.0, -1.0, 1.0, 1.0), verbose=False)
+    target = device.material("Target", role="dielectric")
+    region = MultiPolygon([box(-0.5, -0.5, 0.5, 0.5)])
+    device._state.add_slab(0.0, 0.2, {target: region})
+    pieces = [(0.0, 0.2, region)]
+
+    assert _accessible_reach(device._state, pieces, pieces, {}) is pieces

@@ -16,12 +16,14 @@ The front is advanced in steps: the first dilates the live void by a
 small radius and removes what that reaches of each target; every later
 step dilates only the void the previous step created, since everything
 within a step of the older void is already gone and the barriers do not
-move, so the front only ever starts from the surface it just exposed. A step is smaller
-than half the thinnest barrier layer, so the dilation cannot jump over
-one, and a target uncovered during the etch is etched for the remaining
-time. Each step re-samples the curved front, so the profile error grows
-with the number of steps (about one ``conformal_resolution`` per step);
-with a single target and no barrier one exact step is used.
+move, so the front only ever starts from the surface it just exposed. Each
+dilated front is clipped by non-target materials and only its components
+connected to the live void are kept, so it cannot jump through a thin
+lateral or vertical barrier. A target uncovered during the etch is etched
+for the remaining time. Each step re-samples the curved front, so the
+profile error grows with the number of steps (about one
+``conformal_resolution`` per step); with a single target and no barrier one
+exact step is used.
 
 A barrier layer is a run of consecutive slabs whose non-target footprint
 is the same, that borders void or a target above or below: a 25 nm oxide
@@ -282,8 +284,12 @@ def _merge_front(front: Front) -> Front:
 
 
 def _live_void(state: ProcessState, covered) -> Front:
-    """The void the etch starts from: everything empty that the mask does
-    not cover, slab by slab, plus the half-space above the top."""
+    """Void connected to the ambient through the top of the stack.
+
+    Empty space in a sealed cavity is not an etchant source. The mask may
+    cover part of both the internal void and the half-space above the stack,
+    so connectivity is evaluated after applying it.
+    """
     if state.floor is None:
         return []
     window = box(*state.bounds)
@@ -301,8 +307,147 @@ def _live_void(state: ProcessState, covered) -> Front:
             voids.append((s.z0, s.z1, v))
     above = uncover(state.top, math.inf, state.clean(window))
     if not above.is_empty:
+        voids = _connected_to_sources(
+            voids,
+            [(state.top, math.inf, above)],
+            state.grid * state.grid,
+        )
         voids.append((state.top, math.inf, above))
+    else:
+        voids = []
     return voids
+
+
+def _open_overlap(a, b, area_eps: float) -> bool:
+    """Whether two XY regions share a finite opening, not only an edge."""
+    if _apart(a.bounds, b.bounds) or not a.intersects(b):
+        return False
+    return a.intersection(b).area > area_eps
+
+
+def _connected_to_sources(pieces: Front, sources: Front, area_eps: float) -> Front:
+    """Keep the 3-D components of ``pieces`` connected to ``sources``.
+
+    Every piece is constant in one Z interval. Its polygon components are
+    graph nodes; components in touching Z intervals are joined when their
+    horizontal-face intersection has finite area. This is the exact
+    connectivity test for a slab model and needs no voxel grid or optional
+    numerical dependency.
+    """
+    if not pieces or not sources:
+        return []
+
+    layers: list[tuple[float, float, MultiPolygon, list]] = []
+    for z0, z1, region in pieces:
+        components = list(region.geoms)
+        if components:
+            layers.append((z0, z1, region, components))
+    if not layers:
+        return []
+
+    offsets: list[int] = []
+    count = 0
+    for _z0, _z1, _region, components in layers:
+        offsets.append(count)
+        count += len(components)
+    parent = list(range(count))
+    rank = [0] * count
+
+    def find(node: int) -> int:
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    def union(left: int, right: int) -> None:
+        a, b = find(left), find(right)
+        if a == b:
+            return
+        if rank[a] < rank[b]:
+            a, b = b, a
+        parent[b] = a
+        if rank[a] == rank[b]:
+            rank[a] += 1
+
+    for index in range(len(layers) - 1):
+        _za, zb, _region_a, components_a = layers[index]
+        zc, _zd, _region_b, components_b = layers[index + 1]
+        if abs(zb - zc) > Z_TOUCH:
+            continue
+        for ia, a in enumerate(components_a):
+            for ib, b in enumerate(components_b):
+                if _open_overlap(a, b, area_eps):
+                    union(offsets[index] + ia, offsets[index + 1] + ib)
+
+    seeded: set[int] = set()
+    for index, (za, zb, _region, components) in enumerate(layers):
+        touching = [
+            region
+            for z0, z1, region in sources
+            if z0 <= zb + Z_TOUCH and z1 >= za - Z_TOUCH
+        ]
+        if not touching:
+            continue
+        source = touching[0] if len(touching) == 1 else shapely.unary_union(touching)
+        for component_index, component in enumerate(components):
+            if _open_overlap(component, source, area_eps):
+                seeded.add(find(offsets[index] + component_index))
+
+    if not seeded:
+        return []
+    seeded = {find(root) for root in seeded}
+
+    connected: Front = []
+    for index, (z0, z1, original, components) in enumerate(layers):
+        kept = [
+            component
+            for component_index, component in enumerate(components)
+            if find(offsets[index] + component_index) in seeded
+        ]
+        if not kept:
+            continue
+        if len(kept) == len(components):
+            region = original
+        else:
+            region = P.as_multipolygon(shapely.unary_union(kept))
+        connected.append((z0, z1, region))
+    return connected
+
+
+def _accessible_reach(
+    state: ProcessState,
+    pieces: Front,
+    front: Front,
+    blockers: dict[tuple[float, float], MultiPolygon],
+) -> Front:
+    """Remove barriers from a dilated front and reject enclosed components.
+
+    This is a fast no-op when no blocker intersects the reach, preserving
+    the exact one-step path for the common single-material case.
+    """
+    if not blockers:
+        return pieces
+    clipped: Front = []
+    changed = False
+    for za, zb, reach in pieces:
+        planes = [za, *(z for z in state.z_planes if za < z < zb), zb]
+        for z0, z1 in zip(planes, planes[1:]):
+            slab = state.slab_at((z0 + z1) / 2)
+            blocker = P.EMPTY if slab is None else blockers.get((slab.z0, slab.z1), P.EMPTY)
+            if (
+                blocker.is_empty
+                or _apart(reach.bounds, blocker.bounds)
+                or not reach.intersects(blocker)
+            ):
+                clipped.append((z0, z1, reach))
+                continue
+            changed = True
+            passable = P.as_multipolygon(reach.difference(blocker))
+            if not passable.is_empty:
+                clipped.append((z0, z1, passable))
+    if not changed:
+        return pieces
+    return _connected_to_sources(clipped, front, state.grid * state.grid)
 
 
 def _fold_runs(pieces: list[tuple[float, float, MultiPolygon]]) -> list[tuple[float, float, MultiPolygon]]:
@@ -353,6 +498,15 @@ def _step(
     segs = {m: _quad_segs(d, xy) for m, d in depths.items()}
     merge_tol = resolution / 4
 
+    # Non-target materials are impermeable. Cache their cross-section once
+    # per state slab; every target and every reach sample uses the same
+    # blockers in this step.
+    blockers: dict[tuple[float, float], MultiPolygon] = {}
+    for slab in state.slabs:
+        parts = [region for material, region in slab.regions.items() if material not in depths]
+        if parts:
+            blockers[(slab.z0, slab.z1)] = P.as_multipolygon(shapely.unary_union(parts))
+
     removed: dict[Material, list[tuple[float, float, MultiPolygon]]] = {m: [] for m in depths}
     previous: dict[Material, MultiPolygon | None] = {m: None for m in depths}
     for za, zb in samples:
@@ -390,6 +544,7 @@ def _step(
 
     created: Front = []
     for m, pieces in removed.items():
+        pieces = _accessible_reach(state, pieces, front, blockers)
         # Neighbouring samples within the merge tolerance were deliberately
         # given the same reach, ring for ring. Cutting it out of [za, zb]
         # and then out of [zb, zc] is cutting it out of [za, zc], so the
