@@ -121,12 +121,69 @@ fn packaged_worker_candidates(app: &AppHandle) -> Vec<PathBuf> {
     candidates
 }
 
+/// The name pip gives the worker's console script when the Python package
+/// is installed (`pip install process-studio`): a small launcher, not a
+/// PyInstaller build, so antivirus leaves it alone.
+const INSTALLED_WORKER_NAME: &str = if cfg!(target_os = "windows") {
+    "process-studio-worker.exe"
+} else {
+    "process-studio-worker"
+};
+
+/// Where pip puts console scripts on this machine: the PATH, and the
+/// per-user script directories that are not always on it. A GUI app started
+/// from the desktop sees the user's PATH but not a shell's additions.
+fn installed_worker_directories() -> Vec<PathBuf> {
+    let mut directories: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).collect())
+        .unwrap_or_default();
+    let mut python_roots = Vec::new();
+    if cfg!(target_os = "windows") {
+        // pip --user: %APPDATA%\Python\Python312\Scripts; a python.org
+        // install: %LOCALAPPDATA%\Programs\Python\Python312\Scripts.
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            python_roots.push(PathBuf::from(appdata).join("Python"));
+        }
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            python_roots.push(PathBuf::from(local).join("Programs").join("Python"));
+        }
+        for root in python_roots {
+            if let Ok(entries) = std::fs::read_dir(&root) {
+                for entry in entries.flatten() {
+                    directories.push(entry.path().join("Scripts"));
+                }
+            }
+        }
+    } else {
+        if let Some(home) = std::env::var_os("HOME") {
+            directories.push(PathBuf::from(home).join(".local").join("bin"));
+        }
+        directories.push(PathBuf::from("/opt/homebrew/bin"));
+        directories.push(PathBuf::from("/usr/local/bin"));
+    }
+    directories
+}
+
+/// The worker of an installed Python package, if one is on this machine.
+fn installed_worker() -> Option<PathBuf> {
+    installed_worker_directories()
+        .into_iter()
+        .map(|directory| directory.join(INSTALLED_WORKER_NAME))
+        .find(|path| path.is_file())
+}
+
 fn packaged_worker_command(app: &AppHandle) -> Result<Command, String> {
     if let Ok(explicit) = std::env::var("PROCESS_STUDIO_WORKER") {
         return Ok(Command::new(explicit));
     }
     let candidates = packaged_worker_candidates(app);
     if let Some(executable) = candidates.iter().find(|path| path.is_file()) {
+        return Ok(Command::new(executable));
+    }
+    // Without a packaged worker, the Python package installed with pip
+    // serves just as well: same code, and its launcher is not a PyInstaller
+    // build that antivirus quarantines.
+    if let Some(executable) = installed_worker() {
         return Ok(Command::new(executable));
     }
     // The release archive always carries the worker, so a missing file
@@ -139,7 +196,10 @@ fn packaged_worker_command(app: &AppHandle) -> Result<Command, String> {
          likely quarantined by antivirus or endpoint protection right after unpacking: check \
          Windows Security > Protection history (or your organisation's security tool) and \
          restore or allow it, add this folder as an exclusion, then unpack the archive again. \
-         PROCESS_STUDIO_WORKER can also point at a worker elsewhere.",
+         Alternatively install the Python package (pip install \
+         \"process-studio[render] @ git+https://github.com/lisiyuan2005/process-studio\"): \
+         this application then runs its process-studio-worker, which antivirus leaves alone. \
+         PROCESS_STUDIO_WORKER can also point at a worker anywhere.",
         candidates
             .iter()
             .map(|path| path.display().to_string())
