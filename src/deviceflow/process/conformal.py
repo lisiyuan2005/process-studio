@@ -200,18 +200,40 @@ def deposit_conformal(
 
 
 def _nearly_same(a: MultiPolygon, b: MultiPolygon, tol: float) -> bool:
-    """True if the two regions differ by less than ``tol`` everywhere."""
+    """True if the two regions differ by less than ``tol`` everywhere.
+
+    The two cheap tests in front are exact rejections, not guesses, and
+    they carry most of the answers: the Hausdorff distance below is
+    quadratic in the vertex count and is the single most expensive thing
+    in an isotropic etch once the fronts stop being trivial.
+    """
     if a.is_empty or b.is_empty:
         return False
     if abs(a.area - b.area) > tol * (a.length + b.length):
         return False
+    # An extreme point of one is that far from every point of the other,
+    # so a bounding box that has moved by more than tol settles it.
+    ba, bb = a.bounds, b.bounds
+    if any(abs(x - y) > tol for x, y in zip(ba, bb)):
+        return False
     return shapely.hausdorff_distance(a.boundary, b.boundary) <= tol
 
 
-def _sample_intervals(planes, lo, hi, t, h) -> list[tuple[float, float]]:
+def _sample_intervals(planes, lo, hi, t, h, offsets=None) -> list[tuple[float, float]]:
+    """Sample heights between ``lo`` and ``hi``.
+
+    The profile can only kink at a plane of the stack or at one shifted by
+    a reach, so those heights bound the intervals; ``t`` is the largest
+    reach and sets the band within which a curved profile is sampled at
+    ``h``. ``offsets`` are the reaches that kink the profile, defaulting to
+    ``t`` alone: an etch with one reach per material has one per depth, and
+    leaving the smaller ones out puts a kink in the middle of an interval,
+    where a single sample cannot see it.
+    """
+    offsets = (t,) if offsets is None else tuple(offsets)
     critical = {lo, hi}
     for p in planes:
-        for c in (p, p - t, p + t):
+        for c in (p, *(p - o for o in offsets), *(p + o for o in offsets)):
             c = znorm(c)
             if lo <= c <= hi:
                 critical.add(c)

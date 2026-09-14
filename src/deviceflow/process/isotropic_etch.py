@@ -33,6 +33,15 @@ The slabs are only harmonised (rings noded across slabs, seams removed)
 once, after the last step: between steps each slab is a clean polygon
 set of its own, which is all the next step reads.
 
+What a step passes on is the *void* it created, folded back to regions:
+it cuts the stack at every z sample it takes, so the pieces arrive one
+per slab and the same region comes back dozens of times over. A piece
+costs a buffer at every sample within reach of it and its two z planes
+are places the reach may kink, so the sampling around them is fine --
+a front that grows with the sampling makes the etch quadratic in it.
+:func:`_merge_front` joins the pieces back; see its note for why that
+changes no geometry.
+
 With a mask, the void that exists *before* the etch and lies outside the
 mask column is covered and never starts the etch (the mask is a vertical
 projection, like every mask in this library); void created by the etch
@@ -69,6 +78,10 @@ from .conformal import _nearly_same, _quad_segs, _sample_intervals
 
 
 MIN_STEPS = 4
+
+#: Two z intervals this close are touching (the z coordinates are rounded
+#: to Z_DECIMALS, so anything smaller is the same plane).
+Z_TOUCH = 1e-9
 
 
 def etch_isotropic(
@@ -110,7 +123,7 @@ def etch_isotropic(
     else:
         step = min(d_max / MIN_STEPS, barrier / 2)
         n_steps = max(MIN_STEPS, math.ceil(d_max / step - 1e-9))
-    front = _live_void(state, _covered(state, opening))
+    front = _merge_front(_live_void(state, _covered(state, opening)))
     per_step = {m: d / n_steps for m, d in depths.items()}
     mark = state.regions_mark()
     for _ in range(n_steps):
@@ -219,6 +232,55 @@ def _covered(state: ProcessState, opening) -> list[tuple[float, float, MultiPoly
 Front = list[tuple[float, float, MultiPolygon]]  # (z0, z1, region) pieces of void
 
 
+def _merge_front(front: Front) -> Front:
+    """Fold pieces that share a region and touch in z into one tall piece.
+
+    The front arrives cut into slabs -- one per sample plane the step
+    split, one per slab of the stack -- and most neighbours carry the very
+    same polygon, because the reach is deliberately shared between
+    neighbouring samples and because a void column spans a run of slabs.
+    A step of an etch through a stack routinely hands on 156 pieces that
+    are four.
+
+    Joining them changes nothing. The reach of a piece at a sample is its
+    region buffered by ``sqrt(r^2 - dz^2)``, with ``dz`` the distance from
+    the sample to the piece's z interval, and the union of two touching
+    intervals is at the distance of the nearer one: the taller piece
+    buffers the same region by the larger of the two radii, which is what
+    the union of the two reaches already was. The square front is the same
+    argument with ``d`` in place of the root.
+
+    It is worth a great deal: each piece costs one buffer at every sample
+    within reach of it, and each piece's two z planes are a place the
+    reach may kink, so the samples are taken finely around them. Merging
+    cuts both -- the buffers by the fold, the samples with the planes that
+    were never boundaries of anything.
+    """
+    if len(front) < 2:
+        return front
+    # Identical rings, not merely equal areas: the pieces to fold are the
+    # same polygon handed back over and over, so this is a dict lookup.
+    spans: dict[bytes, list[float]] = {}
+    regions: dict[bytes, MultiPolygon] = {}
+    for z0, z1, v in front:
+        key = shapely.to_wkb(v)
+        spans.setdefault(key, []).append((z0, z1))
+        regions.setdefault(key, v)
+    merged: Front = []
+    for key, pieces in spans.items():
+        region = regions[key]
+        pieces.sort()
+        z0, z1 = pieces[0]
+        for a, b in pieces[1:]:
+            if a <= z1 + Z_TOUCH:
+                z1 = max(z1, b)
+            else:
+                merged.append((z0, z1, region))
+                z0, z1 = a, b
+        merged.append((z0, z1, region))
+    return merged
+
+
 def _live_void(state: ProcessState, covered) -> Front:
     """The void the etch starts from: everything empty that the mask does
     not cover, slab by slab, plus the half-space above the top."""
@@ -241,6 +303,22 @@ def _live_void(state: ProcessState, covered) -> Front:
     if not above.is_empty:
         voids.append((state.top, math.inf, above))
     return voids
+
+
+def _fold_runs(pieces: list[tuple[float, float, MultiPolygon]]) -> list[tuple[float, float, MultiPolygon]]:
+    """Join neighbouring samples that share one reach into a single span."""
+    folded: list[tuple[float, float, MultiPolygon]] = []
+    for za, zb, reach in pieces:
+        if folded and folded[-1][2] is reach and abs(folded[-1][1] - za) <= Z_TOUCH:
+            folded[-1] = (folded[-1][0], zb, reach)
+        else:
+            folded.append((za, zb, reach))
+    return folded
+
+
+def _apart(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> bool:
+    """True if the two XY bounding boxes do not overlap."""
+    return a[0] > b[2] or b[0] > a[2] or a[1] > b[3] or b[1] > a[3]
 
 
 def _step(
@@ -269,7 +347,8 @@ def _step(
     # The square front is constant between the planes and the planes ± d:
     # one sample per interval; the round one curves there and is sampled.
     samples = _sample_intervals(
-        planes, lo, hi, d_max, math.inf if square else min(resolution, d_max / 4)
+        planes, lo, hi, d_max, math.inf if square else min(resolution, d_max / 4),
+        offsets=set(depths.values()),
     )
     segs = {m: _quad_segs(d, xy) for m, d in depths.items()}
     merge_tol = resolution / 4
@@ -311,13 +390,22 @@ def _step(
 
     created: Front = []
     for m, pieces in removed.items():
-        for za, zb, reach in pieces:
+        # Neighbouring samples within the merge tolerance were deliberately
+        # given the same reach, ring for ring. Cutting it out of [za, zb]
+        # and then out of [zb, zc] is cutting it out of [za, zc], so the
+        # run is applied once: one pair of splits and one difference per
+        # slab instead of one per sample. At a fine resolution most of a
+        # step's samples fall into a handful of runs.
+        for za, zb, reach in _fold_runs(pieces):
             state.split_at(za)
             state.split_at(zb)
+            reach_bounds = reach.bounds
             for slab in state.slabs_between(za, zb):
                 region = slab.regions.get(m)
                 if region is None:
                     continue
+                if _apart(region.bounds, reach_bounds):
+                    continue  # nothing of this material is within reach
                 left = state.clean(region.difference(reach))
                 if P.equals(left, region):
                     continue
@@ -333,4 +421,4 @@ def _step(
     # sample planes did split slabs, though, and most halves came out the
     # same: merge them back, or the slabs multiply with every step.
     state.consolidate()
-    return created
+    return _merge_front(created)

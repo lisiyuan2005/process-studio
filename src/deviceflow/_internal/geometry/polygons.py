@@ -69,6 +69,16 @@ def equals(a, b, area_eps: float = 1e-18) -> bool:
         return False
     if shapely.to_wkb(a) == shapely.to_wkb(b):  # the same rings: no predicate needed
         return True
+    # Equal regions have equal areas, so a difference in area settles it
+    # without building a geometry. It is the common answer here -- callers
+    # ask "did this change?" of something that usually did -- and the
+    # symmetric difference below is by far the most expensive thing in an
+    # isotropic etch when it is not short-circuited. The threshold is
+    # relative: the same region computed two ways has the same area only
+    # to within rounding, and ``area_eps`` is far below that, so testing
+    # against it would call equal regions different.
+    if abs(a.area - b.area) > max(area_eps, 1e-9 * (a.area + b.area)):
+        return False
     if a.equals(b):
         return True
     return a.symmetric_difference(b).area <= area_eps

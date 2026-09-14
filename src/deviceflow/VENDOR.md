@@ -114,3 +114,26 @@ under the MIT license in `LICENSE`.
   installed nothing changes; with one, the cost is a context-variable read
   per sample, which does not show up in the timings above. The caller's
   state is untouched because a step mutates its own working copy.
+- `process/isotropic_etch.py`, `process/conformal.py`,
+  `_internal/geometry/polygons.py`: the isotropic etch's front is folded
+  back to regions between steps. A step cut the stack at every z sample it
+  took and handed its successor one piece per slab, so the front grew with
+  the sampling — a stack etch with a liner reached 156 pieces that were
+  four regions — and every piece cost a buffer at each sample within reach
+  of it and made the sampling around its own two z planes fine.
+  `_merge_front` joins pieces that share a region and touch in z (the
+  union of the ball slices over two touching intervals is the slice over
+  their union, so the taller piece buffers the same region by the larger
+  of the two radii), and `_fold_runs` applies a reach that neighbouring
+  samples deliberately share once over the whole run instead of once per
+  sample. `polygons.equals` settles unequal regions by their areas before
+  building a symmetric difference, and `_nearly_same` rejects on the
+  bounding boxes before the quadratic Hausdorff distance. All of it is
+  arithmetic: the box front's answer is unchanged to the bit.
+  `_sample_intervals` now takes every reach as a critical offset rather
+  than the largest alone — an etch with one depth per material had a kink
+  half a depth from each plane where no sample looked, so the slower
+  material's answer did not settle as the resolution was refined. On the
+  cases measured: a stack etch 2.6 s to 0.75 s, the same at 4 nm 3.8 s to
+  1.4 s, a two-rate undercut 6.4 s to 2.4 s (12.9 s to 4.5 s at 4 nm),
+  and a 3D-NAND-like nitride pull-back 4.8 s to 0.38 s.
