@@ -7,7 +7,6 @@ Set-Location $ProjectRoot
 # reads (a comma-separated list of ids, unset for both); the variant names the
 # product so two builds can sit side by side on one machine.
 $Kernels = if ($env:PROCESS_STUDIO_KERNELS) { $env:PROCESS_STUDIO_KERNELS } else { "levelset,slab" }
-$env:PROCESS_STUDIO_KERNELS = $Kernels
 switch ($Kernels) {
   "slab"     { $Product = "Process Studio Slab";      $Identifier = "com.processstudio.desktop.slab" }
   "levelset" { $Product = "Process Studio Level Set"; $Identifier = "com.processstudio.desktop.levelset" }
@@ -22,36 +21,72 @@ $VariantConfig = Join-Path $ProjectRoot "work/tauri-variant.json"
 } | ConvertTo-Json -Depth 5 | Set-Content -Path $VariantConfig -Encoding UTF8
 Write-Host "Building $Product with kernels: $Kernels"
 
-# The build's Python lives in its own virtual environment unless one is
-# already active (see build_desktop.sh); PROCESS_STUDIO_VENV overrides where.
-if (-not $env:VIRTUAL_ENV) {
-    $venv = if ($env:PROCESS_STUDIO_VENV) { $env:PROCESS_STUDIO_VENV } else { Join-Path $ProjectRoot "work\venv" }
-    if (-not (Test-Path (Join-Path $venv "Scripts\python.exe"))) {
-        Write-Host "Creating the build's virtual environment at $venv"
-        python -m venv $venv
-    }
-    . (Join-Path $venv "Scripts\Activate.ps1")
+# The worker ships as an embeddable Python distribution with the package
+# installed into it as ordinary PyPI wheels, not a PyInstaller executable.
+# PyInstaller's single-file bundle is exactly the shape antivirus and
+# endpoint-protection tools flag on sight (an unsigned executable holding an
+# interpreter and bytecode); python.exe here is Python's own signed build,
+# and everything installed into it is a normal wheel, so there is nothing
+# unusual for a scanner to catch. This needs no system Python at all:
+# PowerShell downloads and unpacks everything itself, then bootstraps pip
+# with the embeddable interpreter.
+try {
+  # Windows PowerShell 5.1 (unlike PowerShell 7, which CI uses) does not
+  # always default to TLS 1.2, and both download hosts require it.
+  [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+} catch {}
+
+$PythonVersion = if ($env:PROCESS_STUDIO_EMBED_PYTHON) { $env:PROCESS_STUDIO_EMBED_PYTHON } else { "3.12.7" }
+$PythonDir = Join-Path $ProjectRoot "desktop/src-tauri/resources/python"
+if (Test-Path $PythonDir) { Remove-Item -Recurse -Force $PythonDir }
+New-Item -ItemType Directory -Force -Path $PythonDir | Out-Null
+
+$EmbedZip = Join-Path $ProjectRoot "work/python-embed.zip"
+Write-Host "Downloading the embeddable Python $PythonVersion runtime"
+Invoke-WebRequest -UseBasicParsing `
+  -Uri "https://www.python.org/ftp/python/$PythonVersion/python-$PythonVersion-embed-amd64.zip" `
+  -OutFile $EmbedZip
+Expand-Archive -Path $EmbedZip -DestinationPath $PythonDir -Force
+Remove-Item $EmbedZip
+
+$PythonExe = Join-Path $PythonDir "python.exe"
+$ShortVersion = ($PythonVersion.Split(".")[0..1] -join "")  # "3.12.7" -> "312"
+$PthFile = Join-Path $PythonDir "python$ShortVersion._pth"
+if (-not (Test-Path $PthFile)) {
+  throw "Expected $PthFile in the embeddable distribution; its layout may have changed."
 }
-python -m pip install --upgrade pip | Out-Null
-python -m pip install -e ".[render]"
-python -m pip install "pyinstaller>=6.10"
+# An embeddable distribution runs isolated (only its bundled stdlib zip on
+# sys.path) until site.py runs: uncomment the import it ships commented out,
+# and add the site-packages directory pip installs into once site.py does.
+(Get-Content $PthFile) -replace '^#\s*import site', 'import site' | Set-Content $PthFile
+Add-Content -Path $PthFile -Value "Lib\site-packages"
 
-# The shell spawns this binary for every RPC call, so it ships inside the bundle.
-python -m PyInstaller `
-  --noconfirm `
-  --clean `
-  --distpath desktop/src-tauri/resources/worker `
-  --workpath work/pyinstaller-worker `
-  packaging/ProcessStudioWorker.spec
-if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed to build the process worker." }
+Write-Host "Bootstrapping pip into the embeddable Python"
+$GetPip = Join-Path $ProjectRoot "work/get-pip.py"
+Invoke-WebRequest -UseBasicParsing -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile $GetPip
+& $PythonExe $GetPip --no-warn-script-location
+if ($LASTEXITCODE -ne 0) { throw "Bootstrapping pip into the embeddable Python failed." }
+Remove-Item $GetPip
 
-$Worker = "desktop/src-tauri/resources/worker/process-studio-worker.exe"
-if (-not (Test-Path $Worker)) { throw "The packaged worker is missing at $Worker." }
+Write-Host "Installing process-studio into the embeddable Python"
+& $PythonExe -m pip install --no-warn-script-location ".[render]"
+if ($LASTEXITCODE -ne 0) { throw "Installing process-studio into the embeddable Python failed." }
 
-# Smoke-test the worker on its own before it is wrapped in an installer. The
+# Which kernels this worker offers travels as a file, not just the
+# PROCESS_STUDIO_KERNELS this script set for itself: the end user's machine
+# never has that environment variable, so the registry falls back to reading
+# this beside it (see process_studio/kernels/__init__.py). shapely and
+# trimesh are core dependencies either way (the slab kernel needs them
+# unconditionally), so a level-set-only build still carries them; only the
+# kernels the registry offers depends on this file.
+$KernelsFile = Join-Path $PythonDir "Lib/site-packages/process_studio/kernels/enabled.txt"
+if (-not (Test-Path $KernelsFile)) { throw "process_studio was not installed where expected: $KernelsFile" }
+Set-Content -Path $KernelsFile -Value $Kernels -NoNewline
+
+# Smoke-test the worker on its own before it is wrapped in the app. The
 # kernels are checked by name: a worker that lost one of them still answers
 # describe, and the shell would simply stop offering that kernel.
-$Response = '{"kind":"request","id":1,"method":"describe"}' | & $Worker
+$Response = '{"kind":"request","id":1,"method":"describe"}' | & $PythonExe -m process_studio.worker
 if ($LASTEXITCODE -ne 0 -or -not ($Response -match '"protocolVersion"')) {
   throw "The packaged worker failed its describe smoke test."
 }

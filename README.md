@@ -41,10 +41,10 @@ npm run tauri dev
 
 Windows 产物必须整个目录一起用：exe 会在自己同级的 `resources/worker` 下找 worker，单独拷出 exe 无法运行。
 
-**worker 被杀毒软件删掉了怎么办**：解压后报 `The packaged process worker was not found`，几乎都是 Defender 或公司的终端防护把 PyInstaller 打的 `process-studio-worker.exe` 隔离了。要么到保护历史记录里恢复并把目录加入排除项，要么不用打包的 worker，改装 Python 包（需要 Python 3.11 以上）：
+**`v0.9.0` 起 Windows 包不再用 PyInstaller**，改用官方的 embeddable Python 加普通 PyPI wheel（`python.exe` 是签名的官方解释器，装进去的包都是正式发行的 wheel），不再是杀毒软件常见的误报对象。`v0.8.x` 及更早版本仍可能解压后报 `The packaged process worker was not found`（PyInstaller 打的 `process-studio-worker.exe` 被隔离了）；要么升级到 `v0.9.0`，要么到保护历史记录里恢复并把目录加入排除项，要么不用打包的 worker，改装 Python 包（需要 Python 3.11 以上）：
 
 ```powershell
-py -m pip install "process-studio[render] @ git+https://github.com/lisiyuan2005/process-studio@v0.8.1"
+py -m pip install "process-studio[render] @ git+https://github.com/lisiyuan2005/process-studio@v0.9.0"
 ```
 
 之后照常双击 `ProcessStudio.exe`：找不到打包的 worker 时它会自动用 pip 装出来的 `process-studio-worker`（在 PATH 或 Python 的 Scripts 目录里找；也可以用环境变量 `PROCESS_STUDIO_WORKER` 指定路径）。这个 worker 是普通的 Python 启动器，杀毒软件不会动它，代码和打包版完全一样。
@@ -59,7 +59,7 @@ py -m pip install "process-studio[render] @ git+https://github.com/lisiyuan2005/
 ./scripts/build_desktop.sh      # macOS / Linux
 ```
 
-脚本先用 PyInstaller 把 worker 打成独立可执行文件，跑一次 `describe` 冒烟测试，再执行 `npm run tauri build`。本机需要 Python 3.11 以上、Node 20 以上、Rust 工具链（Windows 还要 Visual Studio Build Tools 的 C++ 组件和 WebView2）；脚本会自己建虚拟环境装 Python 依赖。
+macOS/Linux 脚本先用 PyInstaller 把 worker 打成独立可执行文件；Windows 脚本改成下载官方的 embeddable Python，装上 pip 后把包装进去，不用 PyInstaller，也不需要本机先装 Python。两条路径都会跑一次 `describe` 冒烟测试，再执行 `npm run tauri build`。本机需要 Node 20 以上、Rust 工具链（Windows 还要 Visual Studio Build Tools 的 C++ 组件和 WebView2）；macOS/Linux 还需要 Python 3.11 以上（脚本会自己建虚拟环境装依赖）。详见[打包说明](docs/DESKTOP_SHELL.md#打包)。
 
 macOS 产物用 ad-hoc 身份签名（`signingIdentity: "-"`），没有 Developer ID 也没有 notarize。构建固定在 `macos-14` 运行器上，并在打包前校验 bundle 已封存资源，否则构建失败。
 

@@ -287,7 +287,7 @@ export function CliPanel({
             <TerminalSquare size={13} />
             {cli?.packaged
               ? "The worker of this build is also the command-line tool: with arguments it runs the command instead of serving the desktop. These lines do from a terminal what the desktop is showing."
-              : "This build runs from a source checkout; the commands use the interpreter the worker runs on. These lines do from a terminal what the desktop is showing."}
+              : "These commands use the interpreter this build's worker runs on, with -m process_studio.cli. These lines do from a terminal what the desktop is showing."}
           </p>
           {entries.map((entry, index) => (
             <div key={entry.label} className="cli-row">

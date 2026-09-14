@@ -1,4 +1,4 @@
 """JSON-line RPC worker that drives the process kernel for the desktop shell."""
 
-__version__ = "0.8.1"
+__version__ = "0.9.0"
 PROTOCOL_VERSION = 2

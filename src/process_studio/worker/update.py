@@ -132,6 +132,12 @@ from typing import Callable
 
 def application_root() -> Path | None:
     """The directory (Windows) or .app bundle (macOS) a packaged worker belongs to."""
+    # A Windows build running its worker as "python.exe -m process_studio.worker"
+    # (an embeddable Python beside the app, not a PyInstaller executable) is
+    # never frozen, so the shell hands the app root down directly instead.
+    override = os.environ.get("PROCESS_STUDIO_APP_ROOT")
+    if override:
+        return Path(override)
     if not getattr(sys, "frozen", False):
         return None
     executable = Path(sys.executable).resolve()

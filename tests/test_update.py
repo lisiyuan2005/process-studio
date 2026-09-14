@@ -103,3 +103,10 @@ def test_installing_needs_a_packaged_application_and_the_repository_url():
     with pytest.raises(InvalidRequest):
         update.download("https://example.com/x.zip", Path("/nonexistent/x.zip"))
     assert update.application_root() is None
+
+
+def test_application_root_takes_the_shells_override_first(monkeypatch, tmp_path):
+    # The Windows shell running an embeddable Python is never sys.frozen, so
+    # it hands the app root down itself instead.
+    monkeypatch.setenv("PROCESS_STUDIO_APP_ROOT", str(tmp_path))
+    assert update.application_root() == tmp_path

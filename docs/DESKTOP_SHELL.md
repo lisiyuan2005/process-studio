@@ -162,25 +162,28 @@ npm run tauri dev      # 需要本机能 import process_studio
 ./scripts/build_desktop.sh      # macOS / Linux
 ```
 
-worker 二进制不带参数时是 RPC 服务，带参数时是命令行工具 `process-studio`（见 [CLI](CLI.md)），所以打包产物里不需要第二个可执行文件。
+worker 二进制（或解释器加 `-m process_studio.worker`）不带参数时是 RPC 服务，带参数时是命令行工具 `process-studio`（见 [CLI](CLI.md)），所以打包产物里不需要第二个可执行文件。
 
-脚本先在 `work/venv` 建一个虚拟环境（已经激活了别的环境就直接用它；`PROCESS_STUDIO_VENV` 指定别的位置），在里面装依赖和 PyInstaller——Homebrew 或系统的 python3 不允许往自己里面装包（PEP 668 的 `externally-managed-environment`），所以不能直接 `pip install`。然后用 PyInstaller 把 worker 打成独立可执行文件放进 `desktop/src-tauri/resources/worker`，做一次 `describe` 冒烟测试，再执行 `npm run tauri build`。发布版通过 `PROCESS_STUDIO_WORKER` 可以覆盖 worker 路径。
+两个平台现在打包方式不一样：
+
+- **macOS / Linux**（`build_desktop.sh`）：先在 `work/venv` 建一个虚拟环境（已经激活了别的环境就直接用它；`PROCESS_STUDIO_VENV` 指定别的位置），在里面装依赖和 PyInstaller——Homebrew 或系统的 python3 不允许往自己里面装包（PEP 668 的 `externally-managed-environment`），所以不能直接 `pip install`。然后用 PyInstaller 把 worker 打成独立可执行文件放进 `desktop/src-tauri/resources/worker`。
+- **Windows**（`build_desktop.ps1`）：不用 PyInstaller。脚本自己下载官方的 embeddable Python（`PROCESS_STUDIO_EMBED_PYTHON` 指定版本，默认 3.12.7）解到 `desktop/src-tauri/resources/python`，改它的 `._pth` 打开 `import site` 并加上 `Lib\site-packages`，用 `get-pip.py` 装上 pip，再 `pip install ".[render]"` 把整个包装进去——全是 PyPI 上的普通 wheel，不需要系统装 Python。外壳找不到 `resources/worker` 下的可执行文件时，会去找 `resources/python/python.exe` 并以 `-m process_studio.worker` 启动它（见下面「杀毒软件」一节的原因）。两条路径做完都会做一次 `describe` 冒烟测试，再执行 `npm run tauri build`。发布版通过 `PROCESS_STUDIO_WORKER` 可以覆盖 worker 路径（两个平台都适用）。
 
 **发布与检查更新**：推一个 `v*` 标签（版本号同时写在 `pyproject.toml`、`src/process_studio/__init__.py`、`desktop/package.json`、`desktop/src-tauri/tauri.conf.json` 和 `Cargo.toml` 里）会构建两个平台的三个版本，并由 `publish` 任务发成一个 GitHub Release，资产命名为 `ProcessStudio-[Slab-|LevelSet-]Windows.zip` 和 `ProcessStudio-[Slab-|LevelSet-]macOS.zip`（外加 dmg）。首页版本号旁边的 **Check for updates** 走 worker 的 `check_update`（读 `releases/latest`，页面本身不联网），比较版本号后给出本平台本版本对应资产的 **Download** 按钮和 **Release notes**，两者都由 worker 的 `open_url` 用系统浏览器打开，且只允许仓库自己的地址。
 
 `PROCESS_STUDIO_KERNELS` 决定这一份打包带哪些内核：不设是两个都带；设成 `slab` 或 `levelset` 就只带一个。选择被写进 worker 里的 `process_studio/kernels/enabled.txt`，另一个内核的包不进 bundle（slab 版不带 scikit-image，level set 版不带 deviceflow、shapely、trimesh）。单内核版的产品名和标识符不同（`Process Studio Slab`、`Process Studio Level Set`），可以和完整版装在同一台机器上。单内核版新建工作区不再有内核选择，打开另一个内核建的工程会明确拒绝并说明该去哪个版本打开，不会用错的内核去跑它。冒烟测试按 `PROCESS_STUDIO_KERNELS` 检查 worker 报告的内核。
 
-`Desktop builds` 工作流跑的就是这两个脚本，打 tag 时每个平台跑三份（完整、只有 slab、只有 level set）；手动触发时可以在 GitHub 的 Run workflow 对话框里选平台和版本，只跑一个作业，比如本机杀毒软件（CrowdStrike 一类）会删掉 PyInstaller 产物时，就用它打 Windows 包。构建前先执行 `python -m pytest -q`，前端测试由脚本里的 `npm run test` 负责。构建只产出应用本身：Windows 用 `--no-bundle`，交付 `ProcessStudio.exe` 加同级的 `resources/`；macOS 用 `--bundles app`，交付 `Process Studio.app`。不生成 NSIS、MSI 或 DMG。
+`Desktop builds` 工作流跑的就是这两个脚本，打 tag 时每个平台跑三份（完整、只有 slab、只有 level set）；手动触发时可以在 GitHub 的 Run workflow 对话框里选平台和版本，只跑一个作业。构建前先执行 `python -m pytest -q`，前端测试由脚本里的 `npm run test` 负责。构建只产出应用本身：Windows 用 `--no-bundle`，交付 `ProcessStudio.exe` 加同级的 `resources/`；macOS 用 `--bundles app`，交付 `Process Studio.app`。不生成 NSIS、MSI 或 DMG。
 
 macOS 构建固定在 `macos-14` 运行器上，`tauri.conf.json` 里 `signingIdentity` 设为 `-`，由 Tauri 在打包时用 ad-hoc 身份签名整个 bundle，DMG 因此是从已签名的 app 生成的。
 
 只靠链接器留下的签名是不够的：那只覆盖可执行文件，bundle 没有 `_CodeSignature/CodeResources`，Info.plist 也未绑定，`spctl` 会报 `code has no resources but signature indicates they must be present`，内核在启动时直接 SIGKILL。CI 因此在打包前检查该文件存在并跑 `codesign --verify --strict`，不通过就让构建失败。
 
-**Windows 上报 `The packaged process worker was not found`**：release 的 zip 里一定有 `resources/worker/process-studio-worker.exe`（约 85 MB），解压后它不见了，几乎都是杀毒或终端防护软件（Windows Defender、CrowdStrike 之类）在解压时把 PyInstaller 打的 exe 当可疑文件隔离了。到 Windows 安全中心 → 病毒和威胁防护 → 保护历史记录里恢复并允许，或者把解压目录加入排除项，再重新解压一次；公司电脑可能要找 IT 放行。错误提示本身也写了这些步骤。另一条路是不用打包的 worker：`pip install "process-studio[render] @ git+https://github.com/lisiyuan2005/process-studio@v0.8.1"`，发布版的外壳在找不到打包 worker 时会依次找 `PROCESS_STUDIO_WORKER`、PATH 和 pip 的 Scripts 目录（Windows 的 `%APPDATA%\Python\Python3xx\Scripts`、`%LOCALAPPDATA%\Programs\Python\Python3xx\Scripts`；macOS/Linux 的 `~/.local/bin`、`/opt/homebrew/bin`、`/usr/local/bin`）里的 `process-studio-worker`，那是 pip 生成的普通启动器，杀毒软件不会隔离。
+**杀毒软件把 Windows 的 worker 删了（`v0.9.0` 之前的版本）**：`v0.8.x` 及更早的 Windows 包用 PyInstaller，杀毒或终端防护软件（Windows Defender、CrowdStrike 之类）经常把这类单文件可执行程序当可疑文件删掉，报 `The packaged process worker was not found`。`v0.9.0` 起 Windows 包不再用 PyInstaller，改成上面说的 embeddable Python + 普通 wheel，`python.exe` 是官方签名的解释器，安装的包都是 PyPI 正式发行的 wheel，不再是这类工具典型的误报目标。仍然遇到同样报错时：到 Windows 安全中心 → 病毒和威胁防护 → 保护历史记录里恢复并允许，或者把解压目录加入排除项，再重新解压一次；公司电脑可能要找 IT 放行。另一条路是不依赖打包的 worker：`pip install "process-studio[render] @ git+https://github.com/lisiyuan2005/process-studio@v0.9.0"`，发布版的外壳在找不到打包 worker 时会依次找 `PROCESS_STUDIO_WORKER`、`resources/python/python.exe`、PATH 和 pip 的 Scripts 目录（Windows 的 `%APPDATA%\Python\Python3xx\Scripts`、`%LOCALAPPDATA%\Programs\Python\Python3xx\Scripts`；macOS/Linux 的 `~/.local/bin`、`/opt/homebrew/bin`、`/usr/local/bin`）里的 `process-studio-worker`。
 
 首次打开会提示「Apple 无法验证此 App」，这是公证检查，不是签名失败。macOS 15 起右键打开不再绕过它，需到系统设置的隐私与安全性里点「仍要打开」，或执行 `xattr -dr com.apple.quarantine "/Applications/Process Studio.app"` 清掉隔离标记。
 
-worker 的查找顺序是先平台资源目录（`.app` 里的 `Contents/Resources`、Linux 包的 `/usr/lib/<产品名>`），再退回可执行文件所在目录。免安装布局靠的是第二条，`PROCESS_STUDIO_WORKER` 仍可覆盖两者。
+worker 的查找顺序：`PROCESS_STUDIO_WORKER` 指定的路径 → 平台资源目录（`.app` 里的 `Contents/Resources`、Linux 包的 `/usr/lib/<产品名>`）或可执行文件所在目录下的 `resources/worker/<worker>`（两个位置都试，免安装布局靠后一个）→ Windows 上同样两个位置下的 `resources/python/python.exe`（找到就以 `-m process_studio.worker` 启动，并把应用根目录通过 `PROCESS_STUDIO_APP_ROOT` 传给它，供自动更新定位）→ PATH 和 pip 的 per-user 脚本目录里 pip 装出来的 `process-studio-worker`。开发模式（`npm run tauri dev`）不走这条链，直接调本机 `python3 -m process_studio.worker`。
 
 
 ## 尚未实现

@@ -102,23 +102,62 @@ const WORKER_RELATIVE_PATH: &str = if cfg!(target_os = "windows") {
     "resources/worker/process-studio-worker"
 };
 
-/// Where a packaged worker can live, in the order they are tried.
+/// Where a file shipped beside the app can live, in the order tried.
 ///
 /// The platform resource directory is the installed location: `Contents/
 /// Resources` in a .app, `/usr/lib/<product>` for a Linux package. An
-/// unpacked build instead keeps the worker beside the executable, which is
-/// also where the Windows build looks first, so both layouts run.
-fn packaged_worker_candidates(app: &AppHandle) -> Vec<PathBuf> {
+/// unpacked build instead keeps it beside the executable, which is also
+/// where the Windows build looks first, so both layouts run.
+fn packaged_candidates(app: &AppHandle, relative: &str) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     if let Ok(resources) = app.path().resource_dir() {
-        candidates.push(resources.join(WORKER_RELATIVE_PATH));
+        candidates.push(resources.join(relative));
     }
     if let Some(directory) = std::env::current_exe().ok().and_then(|path| {
         path.parent().map(Path::to_path_buf)
     }) {
-        candidates.push(directory.join(WORKER_RELATIVE_PATH));
+        candidates.push(directory.join(relative));
     }
     candidates
+}
+
+fn packaged_worker_candidates(app: &AppHandle) -> Vec<PathBuf> {
+    packaged_candidates(app, WORKER_RELATIVE_PATH)
+}
+
+/// Windows only: the embeddable Python distribution the build script installs
+/// the package into, so the worker is a plain `python.exe -m` invocation
+/// rather than a PyInstaller executable. Antivirus and endpoint protection
+/// quarantine PyInstaller's single-file bundles on sight (an unsigned
+/// executable holding an interpreter and bytecode is exactly that shape);
+/// python.exe is Python's own signed build and the installed packages are
+/// ordinary PyPI wheels, so there is nothing unusual for them to flag.
+/// macOS and Linux keep the PyInstaller executable: the problem is
+/// Windows-specific and the platform resource layout (a signed, notarized
+/// .app on macOS) does not invite it the same way.
+const PACKAGED_PYTHON_RELATIVE_PATH: &str = "resources/python/python.exe";
+
+/// The app's own root directory, three levels above `python.exe`
+/// (`<app>/resources/python/python.exe`), for the worker to find itself by
+/// when it is not a frozen executable (`sys.frozen` is never set for a
+/// plain CPython run) — the auto-updater needs this to know what to replace.
+fn packaged_python_app_root(python_exe: &Path) -> Option<PathBuf> {
+    python_exe.parent()?.parent()?.parent().map(Path::to_path_buf)
+}
+
+fn packaged_python_command(app: &AppHandle) -> Option<Command> {
+    if !cfg!(target_os = "windows") {
+        return None;
+    }
+    let python = packaged_candidates(app, PACKAGED_PYTHON_RELATIVE_PATH)
+        .into_iter()
+        .find(|path| path.is_file())?;
+    let mut command = Command::new(&python);
+    command.arg("-m").arg("process_studio.worker");
+    if let Some(root) = packaged_python_app_root(&python) {
+        command.env("PROCESS_STUDIO_APP_ROOT", root);
+    }
+    Some(command)
 }
 
 /// The name pip gives the worker's console script when the Python package
@@ -180,6 +219,9 @@ fn packaged_worker_command(app: &AppHandle) -> Result<Command, String> {
     if let Some(executable) = candidates.iter().find(|path| path.is_file()) {
         return Ok(Command::new(executable));
     }
+    if let Some(command) = packaged_python_command(app) {
+        return Ok(command);
+    }
     // Without a packaged worker, the Python package installed with pip
     // serves just as well: same code, and its launcher is not a PyInstaller
     // build that antivirus quarantines.
@@ -190,17 +232,18 @@ fn packaged_worker_command(app: &AppHandle) -> Result<Command, String> {
     // was almost always removed after unpacking: antivirus and endpoint
     // protection quarantine PyInstaller executables on sight. Say so, and
     // say what to do, instead of just listing the places looked in.
+    let mut looked_in = candidates;
+    looked_in.extend(packaged_candidates(app, PACKAGED_PYTHON_RELATIVE_PATH));
     Err(format!(
         "The packaged process worker was not found. Looked in: {}. \
-         The download contains it (resources/worker/process-studio-worker.exe), so it was most \
-         likely quarantined by antivirus or endpoint protection right after unpacking: check \
-         Windows Security > Protection history (or your organisation's security tool) and \
-         restore or allow it, add this folder as an exclusion, then unpack the archive again. \
-         Alternatively install the Python package (pip install \
+         The download contains it, so it was most likely quarantined by antivirus or endpoint \
+         protection right after unpacking: check Windows Security > Protection history (or your \
+         organisation's security tool) and restore or allow it, add this folder as an exclusion, \
+         then unpack the archive again. Alternatively install the Python package (pip install \
          \"process-studio[render] @ git+https://github.com/lisiyuan2005/process-studio\"): \
          this application then runs its process-studio-worker, which antivirus leaves alone. \
          PROCESS_STUDIO_WORKER can also point at a worker anywhere.",
-        candidates
+        looked_in
             .iter()
             .map(|path| path.display().to_string())
             .collect::<Vec<_>>()
