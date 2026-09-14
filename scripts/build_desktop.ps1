@@ -68,8 +68,22 @@ Invoke-WebRequest -UseBasicParsing -Uri "https://bootstrap.pypa.io/get-pip.py" -
 if ($LASTEXITCODE -ne 0) { throw "Bootstrapping pip into the embeddable Python failed." }
 Remove-Item $GetPip
 
+# A "._pth" file (present the moment site.py is even optionally enabled)
+# makes CPython ignore PYTHONPATH outright, isolated mode or not. pip's
+# normal build isolation depends on exactly that variable to hand its
+# isolated setuptools install to the subprocess it spawns for the local
+# package's build hooks, so with a ._pth interpreter that subprocess can
+# never see it ("Cannot import 'setuptools.build_meta'") no matter how
+# cleanly the isolated install itself succeeded. Installing the build
+# backend into the interpreter's own site-packages and skipping build
+# isolation altogether sidesteps this: every hook call then runs against
+# sys.path as this interpreter already sees it.
+Write-Host "Installing the build backend into the embeddable Python"
+& $PythonExe -m pip install --no-warn-script-location setuptools wheel
+if ($LASTEXITCODE -ne 0) { throw "Installing setuptools into the embeddable Python failed." }
+
 Write-Host "Installing process-studio into the embeddable Python"
-& $PythonExe -m pip install --no-warn-script-location ".[render]"
+& $PythonExe -m pip install --no-warn-script-location --no-build-isolation ".[render]"
 if ($LASTEXITCODE -ne 0) { throw "Installing process-studio into the embeddable Python failed." }
 
 # Which kernels this worker offers travels as a file, not just the
