@@ -129,8 +129,17 @@ fn packaged_worker_command(app: &AppHandle) -> Result<Command, String> {
     if let Some(executable) = candidates.iter().find(|path| path.is_file()) {
         return Ok(Command::new(executable));
     }
+    // The release archive always carries the worker, so a missing file
+    // was almost always removed after unpacking: antivirus and endpoint
+    // protection quarantine PyInstaller executables on sight. Say so, and
+    // say what to do, instead of just listing the places looked in.
     Err(format!(
-        "The packaged process worker was not found. Looked in: {}",
+        "The packaged process worker was not found. Looked in: {}. \
+         The download contains it (resources/worker/process-studio-worker.exe), so it was most \
+         likely quarantined by antivirus or endpoint protection right after unpacking: check \
+         Windows Security > Protection history (or your organisation's security tool) and \
+         restore or allow it, add this folder as an exclusion, then unpack the archive again. \
+         PROCESS_STUDIO_WORKER can also point at a worker elsewhere.",
         candidates
             .iter()
             .map(|path| path.display().to_string())
