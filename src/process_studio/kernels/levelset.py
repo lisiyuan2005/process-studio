@@ -77,6 +77,7 @@ class LevelSetKernel:
         sketches: Mapping[str, QuickSketch],
         logger: Callable[[str], None],
         materials: Sequence[MaterialDefinition] = (),
+        should_cancel: Callable[[], bool] | None = None,
     ) -> MaterialState:
         engine = ProcessEngine(recipes, sketches=sketches, logger=logger)
         return engine.run_step(state, step, project=project)

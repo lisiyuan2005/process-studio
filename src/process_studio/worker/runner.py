@@ -138,8 +138,12 @@ def run_flow(
 ) -> dict[str, Any]:
     """Execute the branch, reusing snapshots whose digest still matches.
 
-    ``should_cancel`` is consulted between steps. A step that has finished
-    stays stored, so a cancelled run resumes from where it stopped.
+    ``should_cancel`` is consulted between steps and handed to the kernel,
+    which asks it again inside a step wherever it can afford to: a single
+    deposition walks hundreds of z samples and would otherwise have to run
+    to the end before the run could stop. A step that has finished stays
+    stored, so a cancelled run resumes from where it stopped; one stopped
+    part-way stores nothing and runs again next time.
     """
     emit = progress or (lambda _event: None)
     cancelled = should_cancel or (lambda: False)
@@ -213,6 +217,7 @@ def run_flow(
             sketches=sketches,
             logger=logger,
             materials=materials,
+            should_cancel=cancelled,
         )
         repository.save_snapshot(
             project.id,

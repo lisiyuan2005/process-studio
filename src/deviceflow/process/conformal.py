@@ -38,6 +38,7 @@ from shapely.geometry import MultiPolygon
 
 from .._internal.geometry import polygons as P
 from .._internal.geometry.state import ProcessState, znorm
+from ..cancellation import check_cancelled
 from ..exceptions import ProcessError
 from ..material import Material
 
@@ -145,6 +146,9 @@ def deposit_conformal(
     # equal radii share a result.
     dilations: dict[tuple[int, float], MultiPolygon] = {}
     for za, zb in samples:
+        # The walk over samples is where a conformal film spends its time,
+        # so it is where a caller asking to stop gets heard.
+        check_cancelled()
         zm = (za + zb) / 2
         first = bisect.bisect_right(ends, zm - t)
         last = bisect.bisect_left(starts, zm + t)

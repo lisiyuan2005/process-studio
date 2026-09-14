@@ -19,6 +19,7 @@ import numpy as np
 import shapely
 from shapely.geometry import MultiPolygon, Point, Polygon, box
 
+from ...cancellation import check_cancelled
 from ...exceptions import GeometryError
 from ...material import Material
 from . import polygons as P
@@ -235,6 +236,9 @@ class ProcessState:
         out of one arrangement are disjoint by construction, so nothing is
         checked for overlap here; ``validate`` still does.
         """
+        # Rebuilding the arrangement is the other half of a step's cost, so
+        # a caller asking to stop is heard here too, before the work starts.
+        check_cancelled()
         regions = [(s, m, r) for s in self._slabs for m, r in s.regions.items()]
         if not regions:
             return
@@ -260,6 +264,7 @@ class ProcessState:
             return
         master = shapely.unary_union(segments)
         for _ in range(6):
+            check_cancelled()
             rounded = shapely.set_precision(master, self.grid, mode="valid_output")
             noded = shapely.unary_union(rounded)
             if noded.equals_exact(master, 0.0):

@@ -208,6 +208,10 @@ export default function App() {
   const [viewNonce, setViewNonce] = useState(0);
   // The id of the run in flight, so the Stop button can name it.
   const runRequestId = useRef<string | undefined>(undefined);
+  // A stop has been asked for and the run has not ended yet. The worker
+  // stops at its next check inside the running step, which is quick but
+  // not instant, so the button says "Stopping…" rather than looking dead.
+  const [stopping, setStopping] = useState(false);
   // Only the newest view request may write to the view; a slower earlier one
   // must not land on top of it and show another step's geometry.
   const viewToken = useRef(0);
@@ -970,6 +974,7 @@ export default function App() {
     } finally {
       if (runningStepId.current) forgetViews(runningStepId.current);
       runRequestId.current = undefined;
+      setStopping(false);
       setBusy(false);
     }
   };
@@ -1071,13 +1076,15 @@ export default function App() {
 
   const stopRun = () => {
     const requestId = runRequestId.current;
-    if (!requestId) return;
-    void bridge.cancel(requestId).catch((reason) =>
+    if (!requestId || stopping) return;
+    setStopping(true);
+    void bridge.cancel(requestId).catch((reason) => {
+      setStopping(false);
       setEvents((current) => [
         ...current,
         { kind: "log", message: `Could not stop the run: ${errorMessage(reason)}` },
-      ]),
-    );
+      ]);
+    });
   };
 
   const handleImportGds = async () => {
@@ -1303,7 +1310,7 @@ export default function App() {
       items: [
         { label: "Run the flow", action: () => void runFlow(), shortcut: "F5", disabled: busy },
         { label: "Run to the selected step", action: () => void runFlow(selectedStepId || undefined), shortcut: "Shift+F5", disabled: busy || !selectedStepId },
-        { label: "Stop", action: stopRun, disabled: !(busy && runRequestId.current) },
+        { label: stopping ? "Stopping…" : "Stop", action: stopRun, disabled: stopping || !(busy && runRequestId.current) },
         { label: "Discard results and run everything again…", action: forceRerun, disabled: busy, separated: true },
         ...(projectKernel?.id === "slab"
           ? [
@@ -1461,11 +1468,16 @@ export default function App() {
           <button
             type="button"
             className="primary-button run-button stop-button"
-            title="Stop after the step that is running now; finished steps stay stored"
+            title={
+              stopping
+                ? "Stopping: the running step gives up at its next check; steps that finished stay stored"
+                : "Stop the run. The step running now gives up part-way and is not stored; steps that finished stay stored"
+            }
+            disabled={stopping}
             onClick={stopRun}
           >
             <Square size={13} fill="currentColor" />
-            Stop
+            {stopping ? "Stopping…" : "Stop"}
           </button>
         ) : (
           <button

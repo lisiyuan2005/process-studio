@@ -25,6 +25,7 @@ from shapely.geometry import MultiPolygon, box
 
 from .._internal.geometry import polygons as P
 from .._internal.geometry.state import ProcessState, znorm
+from ..cancellation import check_cancelled
 from ..exceptions import ProcessError
 from ..material import Material
 from .conformal import _quad_segs, apply_film
@@ -108,6 +109,7 @@ def deposit_square(
     before = state.volume(material)
     new_regions: list[tuple[float, float, MultiPolygon]] = []
     for za, zb in zip(critical[:-1], critical[1:]):
+        check_cancelled()
         if zb - za <= 0:
             continue
         zm = (za + zb) / 2

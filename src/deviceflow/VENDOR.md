@@ -103,3 +103,14 @@ under the MIT license in `LICENSE`.
   the product material back in its place (no swelling), rebuilding the
   pieces from the planes of both states so a layer consumed whole comes
   back as oxide.
+- `cancellation.py` (new), `process/conformal.py`, `process/square.py`,
+  `process/isotropic_etch.py`, `_internal/geometry/state.py`: a process
+  step can be stopped part-way. `cancelling(check)` installs a check for
+  the duration of a call, and the loops that cost the time — the z-sample
+  walks of conformal, square and isotropic fronts, and the arrangement
+  rebuild in `harmonize` — call `check_cancelled()` as they go, which
+  raises `cancellation.Cancelled` (deliberately not a `DeviceFlowError`,
+  so handlers that translate process errors let it past). Without a check
+  installed nothing changes; with one, the cost is a context-variable read
+  per sample, which does not show up in the timings above. The caller's
+  state is untouched because a step mutates its own working copy.

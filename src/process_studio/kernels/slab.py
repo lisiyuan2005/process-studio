@@ -31,6 +31,7 @@ from PIL import Image, ImageDraw
 from shapely.geometry import LineString, Point, Polygon, box
 
 from deviceflow import Device
+from deviceflow.cancellation import Cancelled as DeviceFlowCancelled, cancelling
 from deviceflow.exceptions import DeviceFlowError
 from deviceflow.mask import Mask
 from deviceflow.state_io import decode_state, encode_state
@@ -38,6 +39,7 @@ from deviceflow.state_io import decode_state, encode_state
 from ..layout.quick_sketch import QuickSketch, SketchShape
 from ..visualization import height_levels
 from ..models import MaterialDefinition, ProcessStep, ProcessType, ProjectDefinition, Recipe
+from ..worker.errors import Cancelled
 from .base import KernelInfo
 
 #: Snapping tolerance handed to DeviceFlow. It is the kernel's own default:
@@ -811,6 +813,7 @@ class SlabKernel:
         sketches: Mapping[str, QuickSketch],
         logger: Callable[[str], None],
         materials: Sequence[MaterialDefinition] = (),
+        should_cancel: Callable[[], bool] | None = None,
     ) -> SlabState:
         device = state.working_copy()
         if not step.enabled:
@@ -820,23 +823,30 @@ class SlabKernel:
         parameters = dict(recipe.parameters)
         logger(f"RUN {step.name} [{recipe.process_type.value}]")
         try:
-            if recipe.process_type is ProcessType.DEPOSIT:
-                mask = step_mask(
-                    device, step, project=project, parameters=parameters, sketches=sketches
-                )
-                _deposit(device, step, recipe, parameters, logger, project, mask, materials)
-            elif recipe.process_type is ProcessType.ETCH:
-                mask = step_mask(
-                    device, step, project=project, parameters=parameters, sketches=sketches
-                )
-                _etch(device, step, recipe, parameters, mask, logger, project, materials)
-            elif recipe.process_type is ProcessType.CMP:
-                _cmp(device, recipe, parameters, state.z_offset, logger)
-            elif recipe.process_type is ProcessType.OXIDATION:
-                mask = step_mask(
-                    device, step, project=project, parameters=parameters, sketches=sketches
-                )
-                _oxidize(device, step, recipe, parameters, mask, logger, project, materials)
+            # The geometry walks hundreds of z samples inside these calls;
+            # the hook lets it give up part-way instead of only between
+            # steps. `device` is this step's own working copy, so a step
+            # that stops leaves the caller's state untouched.
+            with cancelling(should_cancel):
+                if recipe.process_type is ProcessType.DEPOSIT:
+                    mask = step_mask(
+                        device, step, project=project, parameters=parameters, sketches=sketches
+                    )
+                    _deposit(device, step, recipe, parameters, logger, project, mask, materials)
+                elif recipe.process_type is ProcessType.ETCH:
+                    mask = step_mask(
+                        device, step, project=project, parameters=parameters, sketches=sketches
+                    )
+                    _etch(device, step, recipe, parameters, mask, logger, project, materials)
+                elif recipe.process_type is ProcessType.CMP:
+                    _cmp(device, recipe, parameters, state.z_offset, logger)
+                elif recipe.process_type is ProcessType.OXIDATION:
+                    mask = step_mask(
+                        device, step, project=project, parameters=parameters, sketches=sketches
+                    )
+                    _oxidize(device, step, recipe, parameters, mask, logger, project, materials)
+        except DeviceFlowCancelled as error:
+            raise Cancelled(f"Stopped during {step.name}; it did not finish.") from error
         except DeviceFlowError as error:
             raise _translate(error, project) from error
         return SlabState(device, state.z_offset)

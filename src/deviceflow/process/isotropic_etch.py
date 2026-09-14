@@ -62,6 +62,7 @@ from shapely.geometry import MultiPolygon, box
 
 from .._internal.geometry import polygons as P
 from .._internal.geometry.state import ProcessState, znorm
+from ..cancellation import check_cancelled
 from ..exceptions import ProcessError
 from ..material import Material
 from .conformal import _nearly_same, _quad_segs, _sample_intervals
@@ -113,6 +114,7 @@ def etch_isotropic(
     per_step = {m: d / n_steps for m, d in depths.items()}
     mark = state.regions_mark()
     for _ in range(n_steps):
+        check_cancelled()
         if not front:
             break  # nothing was exposed last step, so nothing more can be reached
         front = _step(state, per_step, resolution, front, xy, square=square)
@@ -275,6 +277,7 @@ def _step(
     removed: dict[Material, list[tuple[float, float, MultiPolygon]]] = {m: [] for m in depths}
     previous: dict[Material, MultiPolygon | None] = {m: None for m in depths}
     for za, zb in samples:
+        check_cancelled()
         zm = (za + zb) / 2
         for m, d in depths.items():
             parts = []

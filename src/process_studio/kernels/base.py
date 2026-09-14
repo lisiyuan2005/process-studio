@@ -93,8 +93,16 @@ class Kernel(Protocol):
         sketches: Mapping[str, QuickSketch],
         logger: Callable[[str], None],
         materials: Sequence[MaterialDefinition] = (),
+        should_cancel: Callable[[], bool] | None = None,
     ) -> Any:
-        """Advance one step, returning a new state and never mutating the old."""
+        """Advance one step, returning a new state and never mutating the old.
+
+        ``should_cancel`` is asked, as often as the kernel can afford to,
+        whether the caller has given up on this step; a kernel that honours
+        it raises ``Cancelled`` rather than running to the end. A step that
+        stops this way stores nothing, so the run resumes from the step
+        before it.
+        """
 
     def load_state(self, path: Path) -> Any:
         """Read back what ``state.save`` wrote."""
