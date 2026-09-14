@@ -93,9 +93,9 @@ if ($LASTEXITCODE -ne 0) { throw "Installing process-studio into the embeddable 
 # trimesh are core dependencies either way (the slab kernel needs them
 # unconditionally), so a level-set-only build still carries them; only the
 # kernels the registry offers depends on this file.
-$KernelsFile = Join-Path $PythonDir "Lib/site-packages/process_studio/kernels/enabled.txt"
-if (-not (Test-Path $KernelsFile)) { throw "process_studio was not installed where expected: $KernelsFile" }
-Set-Content -Path $KernelsFile -Value $Kernels -NoNewline
+$KernelsDir = Join-Path $PythonDir "Lib/site-packages/process_studio/kernels"
+if (-not (Test-Path $KernelsDir)) { throw "process_studio was not installed where expected: $KernelsDir" }
+Set-Content -Path (Join-Path $KernelsDir "enabled.txt") -Value $Kernels -NoNewline
 
 # Smoke-test the worker on its own before it is wrapped in the app. The
 # kernels are checked by name: a worker that lost one of them still answers
