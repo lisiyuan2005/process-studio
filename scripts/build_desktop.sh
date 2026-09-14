@@ -26,6 +26,23 @@ cat > "$VARIANT_CONFIG" <<JSON
 JSON
 echo "Building $PRODUCT with kernels: $KERNELS"
 
+# The build's Python lives in its own virtual environment: a Homebrew or
+# Debian python3 refuses to install packages into itself (PEP 668), and a
+# build that pollutes the system interpreter is a bad neighbour anyway. An
+# environment that is already active (CI, or one the user made) is used as
+# it is; PROCESS_STUDIO_VENV points the script at another directory.
+if [ -z "${VIRTUAL_ENV:-}" ]; then
+  VENV="${PROCESS_STUDIO_VENV:-$PROJECT_ROOT/work/venv}"
+  if [ ! -x "$VENV/bin/python" ]; then
+    echo "Creating the build's virtual environment at $VENV"
+    python3 -m venv "$VENV"
+  fi
+  # shellcheck disable=SC1091
+  . "$VENV/bin/activate"
+fi
+echo "Using Python $(python3 -c 'import sys; print(sys.version.split()[0], sys.executable)')"
+
+python3 -m pip install --upgrade pip >/dev/null
 python3 -m pip install -e ".[render]"
 python3 -m pip install 'pyinstaller>=6.10'
 

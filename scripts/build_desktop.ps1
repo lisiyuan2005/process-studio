@@ -22,6 +22,17 @@ $VariantConfig = Join-Path $ProjectRoot "work/tauri-variant.json"
 } | ConvertTo-Json -Depth 5 | Set-Content -Path $VariantConfig -Encoding UTF8
 Write-Host "Building $Product with kernels: $Kernels"
 
+# The build's Python lives in its own virtual environment unless one is
+# already active (see build_desktop.sh); PROCESS_STUDIO_VENV overrides where.
+if (-not $env:VIRTUAL_ENV) {
+    $venv = if ($env:PROCESS_STUDIO_VENV) { $env:PROCESS_STUDIO_VENV } else { Join-Path $ProjectRoot "work\venv" }
+    if (-not (Test-Path (Join-Path $venv "Scripts\python.exe"))) {
+        Write-Host "Creating the build's virtual environment at $venv"
+        python -m venv $venv
+    }
+    . (Join-Path $venv "Scripts\Activate.ps1")
+}
+python -m pip install --upgrade pip | Out-Null
 python -m pip install -e ".[render]"
 python -m pip install "pyinstaller>=6.10"
 

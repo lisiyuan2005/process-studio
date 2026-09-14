@@ -164,7 +164,7 @@ npm run tauri dev      # 需要本机能 import process_studio
 
 worker 二进制不带参数时是 RPC 服务，带参数时是命令行工具 `process-studio`（见 [CLI](CLI.md)），所以打包产物里不需要第二个可执行文件。
 
-脚本先用 PyInstaller 把 worker 打成独立可执行文件放进 `desktop/src-tauri/resources/worker`，做一次 `describe` 冒烟测试，再执行 `npm run tauri build`。发布版通过 `PROCESS_STUDIO_WORKER` 可以覆盖 worker 路径。
+脚本先在 `work/venv` 建一个虚拟环境（已经激活了别的环境就直接用它；`PROCESS_STUDIO_VENV` 指定别的位置），在里面装依赖和 PyInstaller——Homebrew 或系统的 python3 不允许往自己里面装包（PEP 668 的 `externally-managed-environment`），所以不能直接 `pip install`。然后用 PyInstaller 把 worker 打成独立可执行文件放进 `desktop/src-tauri/resources/worker`，做一次 `describe` 冒烟测试，再执行 `npm run tauri build`。发布版通过 `PROCESS_STUDIO_WORKER` 可以覆盖 worker 路径。
 
 **发布与检查更新**：推一个 `v*` 标签（版本号同时写在 `pyproject.toml`、`src/process_studio/__init__.py`、`desktop/package.json`、`desktop/src-tauri/tauri.conf.json` 和 `Cargo.toml` 里）会构建两个平台的三个版本，并由 `publish` 任务发成一个 GitHub Release，资产命名为 `ProcessStudio-[Slab-|LevelSet-]Windows.zip` 和 `ProcessStudio-[Slab-|LevelSet-]macOS.zip`（外加 dmg）。首页版本号旁边的 **Check for updates** 走 worker 的 `check_update`（读 `releases/latest`，页面本身不联网），比较版本号后给出本平台本版本对应资产的 **Download** 按钮和 **Release notes**，两者都由 worker 的 `open_url` 用系统浏览器打开，且只允许仓库自己的地址。
 
