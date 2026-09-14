@@ -19,6 +19,10 @@ dependencies = [
   # The slab kernel: exact polygon geometry and its triangle meshes.
   "shapely>=2.1",
   "trimesh>=4.0",
+  # Ear clipping for the display mesh's caps: about thirty times GEOS's
+  # constrained Delaunay on a cap with a hole array, and half the time to
+  # build a stack's 3D view. The mesh falls back to GEOS without it.
+  "mapbox-earcut>=1.0",
   # Flow files and the File menu's YAML export.
   "pyyaml>=6",
 ]

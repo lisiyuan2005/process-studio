@@ -137,3 +137,17 @@ under the MIT license in `LICENSE`.
   cases measured: a stack etch 2.6 s to 0.75 s, the same at 4 nm 3.8 s to
   1.4 s, a two-rate undercut 6.4 s to 2.4 s (12.9 s to 4.5 s at 4 nm),
   and a 3D-NAND-like nitride pull-back 4.8 s to 0.38 s.
+- `_internal/mesh/triangulate.py`: the display mesh's caps are ear-clipped
+  through `mapbox_earcut` when it is installed, and the whole
+  triangulation is read in one `get_coordinates` call rather than one per
+  triangle. Building the 3D view is the slow part of the slab kernel and
+  half of that was GEOS's constrained Delaunay: a cap of a layer with a
+  hole array is one polygon of a thousand vertices and GEOS takes 40 ms
+  over it. Ear clipping is about thirty times faster on the same
+  polygons, adds no vertex and drops none (so the side walls still share
+  the caps' vertices exactly), and yields the same triangle count --
+  `V + 2H - 2` for any such triangulation -- with the same area and
+  volume to the bit; only the diagonals inside a coplanar cap differ.
+  GEOS stays as the fallback when the wheel is absent or ear clipping
+  returns something that fails the checks, so nothing depends on the
+  accelerator. A 5x5 hole stack's mesh went from 3.0 s to 1.4 s.

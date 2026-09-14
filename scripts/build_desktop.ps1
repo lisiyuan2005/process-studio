@@ -97,7 +97,7 @@ if ($Kernels -eq "slab") {
   # in sync with pyproject.toml's [project] dependencies (minus
   # scikit-fmm) if that ever changes.
   & $PythonExe -m pip install --no-warn-script-location --no-build-isolation `
-    numpy scipy pillow gdstk openpyxl pyyaml shapely trimesh
+    numpy scipy pillow gdstk openpyxl pyyaml shapely trimesh mapbox-earcut
   if ($LASTEXITCODE -ne 0) { throw "Installing process-studio's dependencies into the embeddable Python failed." }
   & $PythonExe -m pip install --no-warn-script-location --no-build-isolation --no-deps .
 } else {
