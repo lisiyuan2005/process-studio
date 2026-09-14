@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "process-studio"
-version = "0.9.2"
+version = "0.9.3"
 description = "3D semiconductor process-flow modeling and visualization desktop prototype"
 requires-python = ">=3.11"
 license = "MIT"
