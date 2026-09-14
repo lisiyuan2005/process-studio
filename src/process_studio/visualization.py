@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
-from .kernel.material_state import MaterialState
+if TYPE_CHECKING:
+    # Type-only: MaterialState (and the scipy it is built on) is the
+    # level-set kernel's geometry. The slab kernel only ever calls the
+    # functions below it that take no MaterialState (height_levels,
+    # height_color, both plain numbers), and a slab-only build never has
+    # scipy installed to import the real class.
+    from .kernel.material_state import MaterialState
 
 
 def top_view_labels(state: MaterialState) -> np.ndarray:

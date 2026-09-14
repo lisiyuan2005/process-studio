@@ -7,10 +7,9 @@ import sqlite3
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-from .kernel.material_state import MaterialState
 from .models import (
     result_keys,
     FlowBranch,
@@ -22,6 +21,9 @@ from .models import (
     Recipe,
     ToolDefinition,
 )
+
+if TYPE_CHECKING:
+    from .kernel.material_state import MaterialState
 
 
 class ProjectRepository:
@@ -323,6 +325,12 @@ class ProjectRepository:
         return [self.load_branch(branch_id) for branch_id in ids]
 
     def load_latest_snapshot(self, branch_id: str) -> MaterialState | None:
+        # Level-set-only convenience (the runner loads snapshots through the
+        # kernel-generic snapshot_path + kernel.load_state instead): a
+        # module-level import would force scipy into every build merely by
+        # importing this module, which every kernel's code does.
+        from .kernel.material_state import MaterialState
+
         with self.connect() as connection:
             row = connection.execute(
                 """SELECT snapshots.path FROM branch_snapshots
@@ -418,6 +426,10 @@ class ProjectRepository:
         return Path(row["path"])
 
     def load_snapshot(self, branch_id: str, step_id: str) -> MaterialState:
+        # See load_latest_snapshot: kept lazy so importing this module never
+        # requires scipy.
+        from .kernel.material_state import MaterialState
+
         with self.connect() as connection:
             row = connection.execute(
                 """SELECT snapshots.path FROM snapshots JOIN branch_snapshots

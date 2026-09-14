@@ -83,7 +83,26 @@ Write-Host "Installing the build backend into the embeddable Python"
 if ($LASTEXITCODE -ne 0) { throw "Installing setuptools into the embeddable Python failed." }
 
 Write-Host "Installing process-studio into the embeddable Python"
-& $PythonExe -m pip install --no-warn-script-location --no-build-isolation ".[render]"
+if ($Kernels -eq "slab") {
+  # The slab-only build's own dependencies, minus everything only the
+  # level-set kernel reaches: scikit-fmm (its fast-marching solver),
+  # scikit-image and its own dependency tree (networkx, imageio, tifffile,
+  # lazy-loader — marching-cubes meshing for level-set's field grids).
+  # trimesh's mesh export needs scipy regardless of kernel (its own colour
+  # handling calls into scipy.sparse even for the slab kernel's exact
+  # meshes), so scipy stays; scikit-fmm and scikit-image are declared in
+  # pyproject.toml as a core dependency and an extra respectively, so
+  # installing this list explicitly and then the package itself with
+  # --no-deps is what keeps pip from pulling them back in. Keep this list
+  # in sync with pyproject.toml's [project] dependencies (minus
+  # scikit-fmm) if that ever changes.
+  & $PythonExe -m pip install --no-warn-script-location --no-build-isolation `
+    numpy scipy pillow gdstk openpyxl pyyaml shapely trimesh
+  if ($LASTEXITCODE -ne 0) { throw "Installing process-studio's dependencies into the embeddable Python failed." }
+  & $PythonExe -m pip install --no-warn-script-location --no-build-isolation --no-deps .
+} else {
+  & $PythonExe -m pip install --no-warn-script-location --no-build-isolation ".[render]"
+}
 if ($LASTEXITCODE -ne 0) { throw "Installing process-studio into the embeddable Python failed." }
 
 # Which kernels this worker offers travels as a file, not just the
@@ -109,6 +128,30 @@ foreach ($Kernel in $Kernels.Split(",")) {
     throw "The packaged worker does not offer the $Kernel kernel."
   }
 }
+
+# Trim the bundle now that everything that runs on it has already run:
+# pip, setuptools and wheel exist only to have installed the rest and are
+# never imported by the worker itself; every package's own test suite
+# ships inside the wheel but nothing outside that package ever imports
+# it; __pycache__ is a cache the interpreter rebuilds on first import (or
+# runs fine without, just marginally slower) and only bloats the archive.
+# None of this touches process_studio, deviceflow or any package's actual
+# runtime code, only build tooling and dead weight beside it.
+Write-Host "Trimming build tooling, test suites and bytecode caches from the bundle"
+$SitePackages = Join-Path $PythonDir "Lib/site-packages"
+foreach ($Name in @("pip", "setuptools", "wheel", "pkg_resources", "_distutils_hack")) {
+  Get-ChildItem -Path $SitePackages -Directory -Filter "$Name*" -ErrorAction SilentlyContinue |
+    Remove-Item -Recurse -Force
+}
+foreach ($Name in @("pip*.exe", "wheel*.exe")) {
+  Get-ChildItem -Path (Join-Path $PythonDir "Scripts") -Filter $Name -ErrorAction SilentlyContinue |
+    Remove-Item -Force
+}
+Get-ChildItem -Path $SitePackages -Directory | ForEach-Object {
+  Get-ChildItem -Path $_.FullName -Recurse -Directory -Include "test", "tests" -ErrorAction SilentlyContinue
+} | Sort-Object FullName -Descending | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+Get-ChildItem -Path $PythonDir -Recurse -Directory -Filter "__pycache__" -ErrorAction SilentlyContinue |
+  Remove-Item -Recurse -Force
 
 Set-Location (Join-Path $ProjectRoot "desktop")
 npm ci

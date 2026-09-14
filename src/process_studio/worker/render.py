@@ -10,15 +10,33 @@ from __future__ import annotations
 
 import base64
 import io
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 import numpy as np
 from PIL import Image
-from scipy.ndimage import map_coordinates, zoom
 
-from ..kernel.material_state import MaterialState
 from ..visualization import height_levels, surface_heights, top_view_labels
 from .errors import InvalidRequest
+
+if TYPE_CHECKING:
+    # A type-only import: MaterialState (and the scipy it is built on) is
+    # the level-set kernel's own geometry, needed here only for annotations.
+    # A slab-only build never has scipy installed, and this module's own
+    # functions are unreachable there (only sketch_preview_image, which
+    # takes no MaterialState, is ever called outside the level-set kernel),
+    # so importing the class itself at runtime would force scipy into every
+    # build for a name nothing here actually uses at runtime.
+    from ..kernel.material_state import MaterialState
+
+try:
+    # scipy travels with the level-set kernel: every function below that
+    # needs it (all but sketch_preview_image) only ever runs on that
+    # kernel's own MaterialState, and the registry never even imports the
+    # level-set kernel when scipy is not installed (a slab-only build).
+    from scipy.ndimage import map_coordinates, zoom
+except ImportError:  # pragma: no cover - the slab-only build
+    map_coordinates = None  # type: ignore[assignment]
+    zoom = None  # type: ignore[assignment]
 
 try:  # scikit-image is the optional [render] extra
     from skimage.measure import marching_cubes
