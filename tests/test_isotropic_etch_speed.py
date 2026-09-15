@@ -17,7 +17,10 @@ looked, and its answer never settled as the resolution was refined.
 from __future__ import annotations
 
 import pytest
+import shapely
 from shapely.geometry import MultiPolygon, Point, box
+
+from deviceflow._internal.geometry import polygons as P
 
 from deviceflow import Device
 from deviceflow.process.conformal import _nearly_same, _sample_intervals
@@ -235,3 +238,69 @@ def test_barrier_free_reach_keeps_the_exact_fast_path():
     pieces = [(0.0, 0.2, region)]
 
     assert _accessible_reach(device._state, pieces, pieces, {}) is pieces
+
+
+def _ring(radius: float, quad: int, centre=(0.0, 0.0)):
+    return Point(*centre).buffer(radius, quad_segs=quad)
+
+
+def test_the_ribbon_test_never_says_two_outlines_match_when_they_do_not():
+    """The fast path in _nearly_same must only ever be right.
+
+    It asks whether a ribbon of width tol about one outline swallows the
+    other, which is the Hausdorff distance between the curves; the walk it
+    stands in for measures that vertex by vertex and can only come out
+    smaller. So a yes from the ribbon is a yes. A no is not an answer and
+    has to fall through, or a pair the walk would have merged stops being
+    merged.
+    """
+    from deviceflow.process.conformal import RIBBON_WORTH_IT, _nearly_same
+
+    tol = 0.01
+    big = 80  # quad segments: enough outline to take the ribbon path
+    cases = [
+        (_ring(1.0, big), _ring(1.0005, big)),                      # a hair apart
+        (_ring(1.0, big), _ring(1.05, big)),                        # clearly apart
+        (_ring(1.0, big), _ring(1.0, big, centre=(0.002, 0.0))),    # shifted a hair
+        (_ring(1.0, big), _ring(1.0, big, centre=(0.05, 0.0))),     # shifted clearly
+        # The trap: as sets these swallow each other, because a ribbon of
+        # width tol closes the little hole. Their outlines do not.
+        (_ring(1.0, big), _ring(1.0, big).difference(_ring(0.002, 8))),
+    ]
+    for a, b in cases:
+        a, b = P.as_multipolygon(a), P.as_multipolygon(b)
+        assert shapely.get_num_coordinates(a) + shapely.get_num_coordinates(b) >= RIBBON_WORTH_IT
+        walked = shapely.hausdorff_distance(a.boundary, b.boundary) <= tol
+        assert _nearly_same(a, b, tol) == walked, a.wkt[:40]
+
+
+def test_small_outlines_skip_the_ribbon_and_still_agree():
+    from deviceflow.process.conformal import RIBBON_WORTH_IT, _nearly_same
+
+    tol = 0.01
+    a, b = P.as_multipolygon(_ring(1.0, 4)), P.as_multipolygon(_ring(1.0005, 4))
+    assert shapely.get_num_coordinates(a) + shapely.get_num_coordinates(b) < RIBBON_WORTH_IT
+    assert _nearly_same(a, b, tol) == (shapely.hausdorff_distance(a.boundary, b.boundary) <= tol)
+
+
+def test_what_blocks_a_slab_is_worked_out_once_for_the_whole_etch():
+    """Only targets are cut back, so the impermeable regions never move.
+
+    Splitting a slab hands both halves the regions the whole had, so the
+    same union serves every step and every slab that still holds them.
+    """
+    from deviceflow.process.isotropic_etch import _blocker_union
+
+    first = P.as_multipolygon(box(0, 0, 1, 1))
+    second = P.as_multipolygon(box(2, 0, 3, 1))
+    cache: dict = {}
+
+    once = _blocker_union([first, second], cache)
+    assert _blocker_union([first, second], cache) is once, "the same regions, the same union"
+    assert once.area == pytest.approx(2.0)
+
+    # Different regions are worked out on their own.
+    third = P.as_multipolygon(box(4, 0, 5, 1))
+    other = _blocker_union([first, third], cache)
+    assert other is not once and other.area == pytest.approx(2.0)
+    assert _blocker_union([first, second], cache) is once

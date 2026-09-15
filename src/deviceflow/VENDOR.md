@@ -151,3 +151,20 @@ under the MIT license in `LICENSE`.
   GEOS stays as the fallback when the wheel is absent or ear clipping
   returns something that fails the checks, so nothing depends on the
   accelerator. A 5x5 hole stack's mesh went from 3.0 s to 1.4 s.
+- `process/conformal.py`, `process/isotropic_etch.py`: two costs taken out
+  of a wet etch, with the geometry unchanged to the bit. `_nearly_same`
+  asked the Hausdorff distance between two outlines, which walks every
+  vertex of one against every segment of the other and so costs the
+  product of the counts; in a stack etch, where a reach follows a whole
+  hole array, it was a third of the run and answered yes every single
+  time. It now first asks whether a ribbon of width `tol` about one
+  outline swallows the other -- the Hausdorff distance between the curves,
+  which the vertex walk can only come out smaller than, so a yes is a yes.
+  Drawn with straight segments inside the true round ribbon, it errs
+  towards no, never towards a wrong yes, and a no falls through to the
+  walk. It is used only above about 260 vertices between the two, where
+  the walk's quadratic has overtaken it. And the union of what blocks a
+  slab is worked out once for the whole etch rather than once per step:
+  only targets are cut back, so the impermeable regions never move, and
+  splitting a slab hands both halves the regions the whole had. A 5x5 hole
+  block's nitride pull-back went from 12.1 s to 5.7 s.

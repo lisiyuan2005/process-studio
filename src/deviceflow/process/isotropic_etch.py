@@ -128,11 +128,14 @@ def etch_isotropic(
     front = _merge_front(_live_void(state, _covered(state, opening)))
     per_step = {m: d / n_steps for m, d in depths.items()}
     mark = state.regions_mark()
+    blocker_cache: dict = {}
     for _ in range(n_steps):
         check_cancelled()
         if not front:
             break  # nothing was exposed last step, so nothing more can be reached
-        front = _step(state, per_step, resolution, front, xy, square=square)
+        front = _step(
+            state, per_step, resolution, front, xy, square=square, blocker_cache=blocker_cache
+        )
     _yield_to_barriers(state, depths)
     state.harmonize(state.changed_since(mark))
     state.consolidate()
@@ -466,6 +469,24 @@ def _apart(a: tuple[float, float, float, float], b: tuple[float, float, float, f
     return a[0] > b[2] or b[0] > a[2] or a[1] > b[3] or b[1] > a[3]
 
 
+def _blocker_union(parts: list[MultiPolygon], cache: dict) -> MultiPolygon:
+    """The union of a slab's impermeable regions, made once per set of them.
+
+    Keyed by the regions themselves rather than their ids: a freed
+    geometry's address is handed straight to the next one, which would
+    serve the wrong union.
+    """
+    key = tuple(id(part) for part in parts)
+    held = cache.get(key)
+    if held is not None and len(held[0]) == len(parts) and all(
+        a is b for a, b in zip(held[0], parts)
+    ):
+        return held[1]
+    union = P.as_multipolygon(shapely.unary_union(parts))
+    cache[key] = (tuple(parts), union)
+    return union
+
+
 def _step(
     state: ProcessState,
     depths: dict[Material, float],
@@ -474,12 +495,15 @@ def _step(
     xy: float,
     *,
     square: bool = False,
+    blocker_cache: dict | None = None,
 ) -> Front:
     """Advance the front by the (small) per-material depths from ``front``,
     the void to dilate; returns the void this step created, which is all
     the next step needs to dilate."""
     if state.floor is None or all(state.volume(m) == 0.0 for m in depths):
         return []
+    if blocker_cache is None:
+        blocker_cache = {}
     floor, top = state.floor, state.top
     d_max = max(depths.values())
     # Only heights within reach of the front can change, and the reach only
@@ -498,14 +522,17 @@ def _step(
     segs = {m: _quad_segs(d, xy) for m, d in depths.items()}
     merge_tol = resolution / 4
 
-    # Non-target materials are impermeable. Cache their cross-section once
-    # per state slab; every target and every reach sample uses the same
-    # blockers in this step.
+    # Non-target materials are impermeable. What blocks a slab never moves
+    # while the etch runs -- only targets are cut back, and splitting a
+    # slab hands both halves the regions the whole had -- so the union is
+    # made once for a given set of regions and reused for every step and
+    # every slab that still has those same regions. Recomputing it per
+    # step was the second most expensive thing in a stack etch.
     blockers: dict[tuple[float, float], MultiPolygon] = {}
     for slab in state.slabs:
         parts = [region for material, region in slab.regions.items() if material not in depths]
         if parts:
-            blockers[(slab.z0, slab.z1)] = P.as_multipolygon(shapely.unary_union(parts))
+            blockers[(slab.z0, slab.z1)] = _blocker_union(parts, blocker_cache)
 
     removed: dict[Material, list[tuple[float, float, MultiPolygon]]] = {m: [] for m in depths}
     previous: dict[Material, MultiPolygon | None] = {m: None for m in depths}

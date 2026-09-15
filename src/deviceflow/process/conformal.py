@@ -216,7 +216,29 @@ def _nearly_same(a: MultiPolygon, b: MultiPolygon, tol: float) -> bool:
     ba, bb = a.bounds, b.bounds
     if any(abs(x - y) > tol for x, y in zip(ba, bb)):
         return False
-    return shapely.hausdorff_distance(a.boundary, b.boundary) <= tol
+    edge_a, edge_b = a.boundary, b.boundary
+    # The distance below walks every vertex of one against every segment
+    # of the other, so it costs the product of the two vertex counts: in
+    # a stack etch, where a reach follows a whole hole array, it was a
+    # third of the entire run and answered yes every single time.
+    #
+    # A ribbon of width tol drawn about one boundary that swallows the
+    # other means every point of that one lies within tol of it -- the
+    # Hausdorff distance between the two curves, which the vertex-by-
+    # vertex distance can only be smaller than. So a yes here is a yes.
+    # It is drawn with straight segments inside the true round ribbon, so
+    # it errs towards saying no, never towards a wrong yes; a no is not an
+    # answer and falls through to the walk.
+    #
+    # Only worth it on big outlines. The ribbon is built in about linear
+    # time but with a constant the walk does not have, and below a couple
+    # of hundred vertices the walk simply wins.
+    if shapely.get_num_coordinates(a) + shapely.get_num_coordinates(b) >= RIBBON_WORTH_IT:
+        if shapely.covered_by(edge_a, edge_b.buffer(tol)) and shapely.covered_by(
+            edge_b, edge_a.buffer(tol)
+        ):
+            return True
+    return shapely.hausdorff_distance(edge_a, edge_b) <= tol
 
 
 def _sample_intervals(planes, lo, hi, t, h, offsets=None) -> list[tuple[float, float]]:
@@ -255,6 +277,12 @@ def _sample_intervals(planes, lo, hi, t, h, offsets=None) -> list[tuple[float, f
         )
     return out
 
+
+#: Vertices, both outlines together, above which the ribbon test below is
+#: cheaper than the quadratic walk it stands in for. Measured: the two
+#: cost the same at about 260 together, and the walk is four times dearer
+#: for every doubling after that while the ribbon is barely twice.
+RIBBON_WORTH_IT = 260
 
 MAX_QUAD_SEGS = 64
 
