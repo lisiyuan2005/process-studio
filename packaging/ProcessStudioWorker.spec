@@ -20,7 +20,7 @@ if not kernels:
 
 datas = []
 binaries = []
-hiddenimports = ["process_studio.worker", "process_studio.worker.protocol", "process_studio.cli", "process_studio.cli.flowfile", "process_studio.cli.session"]
+hiddenimports = ["process_studio.worker", "process_studio.worker.protocol", "process_studio.cli", "process_studio.cli.flowfile", "process_studio.cli.session", "certifi", "truststore"]
 # The CLI reads YAML flow files when pyyaml is installed; ship it if it is.
 try:
     import yaml  # noqa: F401
@@ -29,7 +29,13 @@ except ImportError:
 else:
     hiddenimports.append("yaml")
 excludes = ["pytest", "tkinter", "matplotlib"]
-packages = ["scipy", "skfmm", "gdstk", "openpyxl", "PIL"]
+# certifi and truststore are how the update check knows which certificate
+# authorities to trust. Both are reached through a guarded import inside a
+# function, and certifi's whole point is a data file (cacert.pem) that a
+# frozen build only carries if something collects it -- so they are named
+# here rather than left to static analysis. Without them the check dies
+# with "unable to get local issuer certificate" on every machine.
+packages = ["scipy", "skfmm", "gdstk", "openpyxl", "PIL", "certifi", "truststore"]
 # The registry imports kernel modules by name at start-up, which static
 # analysis cannot see, so each enabled kernel is named here.
 if "levelset" in kernels:

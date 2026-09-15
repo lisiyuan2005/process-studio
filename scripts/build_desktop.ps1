@@ -123,6 +123,15 @@ $Response = '{"kind":"request","id":1,"method":"describe"}' | & $PythonExe -m pr
 if ($LASTEXITCODE -ne 0 -or -not ($Response -match '"protocolVersion"')) {
   throw "The packaged worker failed its describe smoke test."
 }
+
+# The update check is the one thing that needs certificate authorities; a
+# build that cannot verify one has lost certifi and truststore. Both halves
+# are needed: a successful check carries the release notes, which carry
+# commit subjects, one of which is about certificates.
+$Update = '{"kind":"request","id":2,"method":"check_update"}' | & $PythonExe -m process_studio.worker
+if ($Update -match '"ok":false' -and $Update -match 'certificate') {
+  throw "The packaged worker cannot verify certificates: $Update"
+}
 foreach ($Kernel in $Kernels.Split(",")) {
   if (-not ($Response -replace '\s', '' -match [regex]::Escape("`"id`":`"$Kernel`""))) {
     throw "The packaged worker does not offer the $Kernel kernel."

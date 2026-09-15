@@ -67,6 +67,18 @@ for kernel in $(echo "$KERNELS" | tr ',' ' '); do
     echo "The packaged worker does not offer the $kernel kernel"; exit 1; }
 done
 
+# The update check is the one thing that needs certificate authorities, and a
+# frozen build has none of its own unless certifi and truststore were
+# collected. It shipped broken once, so a build that cannot verify a
+# certificate fails here. Both halves are needed: a successful check carries
+# the release notes, which carry commit subjects, one of which is about
+# certificates.
+UPDATE="$(echo '{"kind":"request","id":2,"method":"check_update"}' | "$WORKER" || true)"
+case "$UPDATE" in
+  *'"ok":false'*certificate*|*certificate*'"ok":false'*)
+    echo "The packaged worker cannot verify certificates: $UPDATE"; exit 1 ;;
+esac
+
 cd desktop
 npm ci
 npm run test
