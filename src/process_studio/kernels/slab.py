@@ -50,6 +50,20 @@ GEOMETRY_GRID_UM = 1e-6
 #: Conformal resolution used when a project does not name one.
 DEFAULT_RESOLUTION_UM = 0.01
 
+#: Segments per quarter circle when a Quick Sketch's round shape becomes a
+#: polygon: 32 segments round the whole circle. Every segment of a circle
+#: costs eight triangles of the display mesh -- two on each of the two
+#: walls it is part of and one on each of the four caps it wedges -- so a
+#: block with one circular recess and a pillar is 8N + 12 triangles, and
+#: this was 64 (256 segments, 2060 triangles) for a chord that misses the
+#: true circle by 26 picometres. At 32 segments that becomes 268 triangles
+#: and a chord error of r/600, which is a nanometre on a 340 nm radius:
+#: far under any resolution the kernel is asked to work at, and far under
+#: a pixel. A circle much larger than the features around it is the one
+#: case where this is coarse -- 32 segments of a 50 um radius miss by
+#: 240 nm -- so a big round shape is better drawn as a polygon.
+SKETCH_QUAD_SEGS = 8
+
 SUBSTRATE_MATERIAL = "Si"
 BACKGROUND_RGB = (247, 249, 252)
 #: Cut positions offered along an axis. The geometry is continuous; this is
@@ -382,7 +396,9 @@ def _primitive(shape: SketchShape, offset_x: float, offset_y: float):
         radius = float(parameters["radius"])
         if radius <= 0.0:
             raise SlabError("circle radius must be positive")
-        return Point(center_x + offset_x, center_y + offset_y).buffer(radius, quad_segs=64)
+        return Point(center_x + offset_x, center_y + offset_y).buffer(
+            radius, quad_segs=SKETCH_QUAD_SEGS
+        )
     points = np.asarray(parameters["points"], dtype=float) + [offset_x, offset_y]
     if shape.kind == "polygon":
         if len(points) < 3:
@@ -391,7 +407,9 @@ def _primitive(shape: SketchShape, offset_x: float, offset_y: float):
     width = float(parameters["width"])
     if width <= 0.0:
         raise SlabError("path width must be positive")
-    return LineString(points).buffer(width / 2.0, quad_segs=32, cap_style="round")
+    return LineString(points).buffer(
+        width / 2.0, quad_segs=SKETCH_QUAD_SEGS, cap_style="round"
+    )
 
 
 def sketch_geometry(sketch: QuickSketch, window):
