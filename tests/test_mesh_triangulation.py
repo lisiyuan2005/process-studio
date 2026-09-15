@@ -138,7 +138,7 @@ def test_the_kernel_keeps_a_mesh_per_triangulator(tmp_path):
     assert ears["triangulation"] == "ears"  # the default
     delaunay = kernel.surfaces(state, project=project, triangulation="delaunay")
     assert delaunay["triangulation"] == "delaunay"
-    assert set(state.display_meshes) == {"ears", "delaunay"}
+    assert set(state.display_meshes) == {("ears", False), ("delaunay", False)}
     # Same solid: the payloads agree on how much of it there is.
     by_name = {item["material"]: item for item in ears["surfaces"]}
     for item in delaunay["surfaces"]:
@@ -148,7 +148,7 @@ def test_the_kernel_keeps_a_mesh_per_triangulator(tmp_path):
     # Each engine remembers itself beside the snapshot, and neither file is
     # read back for the other engine.
     written = sorted(path.name for path in tmp_path.iterdir() if path.name != "step.dfz")
-    assert written == ["step.dfz.mesh-delaunay.npz", "step.dfz.mesh.npz"]
+    assert written == ["step.dfz.mesh-delaunay-free.npz", "step.dfz.mesh-ears-free.npz"]
     fresh = SlabState(device=_stack(), z_offset=0.0)
     fresh.path = state.path
     assert len(display_meshes(fresh, "delaunay")) == len(delaunay["surfaces"])
@@ -161,7 +161,7 @@ def test_a_sidecar_from_before_the_engine_was_recorded_is_rebuilt(tmp_path):
 
     state = SlabState(device=_stack(), z_offset=0.0)
     state.path = tmp_path / "step.dfz"
-    sidecar = tmp_path / "step.dfz.mesh.npz"
+    sidecar = tmp_path / "step.dfz.mesh-ears-free.npz"
     np.savez(sidecar, materials=np.array(["Nonsense"], dtype=str))
     meshes = display_meshes(state)
     assert "Nonsense" not in meshes and "SiN" in meshes
@@ -173,3 +173,90 @@ def test_an_unknown_triangulator_is_refused():
     with pytest.raises(MeshError, match="unknown triangulator"):
         with using("marching cubes"):
             pass
+
+
+def _stack_with_a_buried_layer() -> Device:
+    """An oxide sandwiched between two metals: it shows only its rim."""
+    device = Device("sandwich", (-0.4, -0.4, 0.4, 0.4), conformal_resolution=0.01, verbose=False)
+    for name in ("Si", "SiO2", "W"):
+        device.material(name)
+    device.deposit("Si", 0.1, mode="planar")
+    device.deposit("SiO2", 0.05, mode="planar")
+    device.deposit("W", 0.05, mode="planar")
+    return device
+
+
+def test_the_view_leaves_out_the_faces_nothing_can_see():
+    """The mesh the 3D view opens with is the free surface alone.
+
+    A face between two materials is in both meshes at the same place, and
+    the viewer draws neither while both are shown -- two copies fight for
+    the pixels. In a stack that is nearly the whole mesh, so building them
+    is most of the work for something nobody looks at until a material is
+    hidden.
+    """
+    from deviceflow._internal.mesh.builder import build_material_meshes
+
+    state = _stack_with_a_buried_layer()._state
+    state.validate()
+    free = build_material_meshes(state, manifold=False, buried=False)
+    full = build_material_meshes(state, manifold=False, buried=True)
+
+    assert free.keys() == full.keys()
+    for material, mesh in free.items():
+        other = full[material]
+        assert len(mesh.faces) < len(other.faces)
+        # What is left is exactly the faces that lie against nothing.
+        assert not mesh.metadata["interface_faces"].any()
+        assert len(mesh.faces) == int(np.count_nonzero(other.metadata["neighbour_faces"] < 0))
+    assert sum(len(m.faces) for m in free.values()) < sum(len(m.faces) for m in full.values())
+
+
+def test_a_material_with_no_free_surface_is_empty_rather_than_an_error():
+    """A layer buried on every side shows nothing until one is hidden."""
+    from deviceflow._internal.mesh.builder import build_material_meshes
+    from shapely.geometry import box
+
+    from deviceflow._internal.geometry import polygons as P
+
+    device = Device("buried", (-0.4, -0.4, 0.4, 0.4), conformal_resolution=0.01, verbose=False)
+    silicon, oxide = device.material("Si"), device.material("SiO2")
+    window = P.as_multipolygon(box(-0.4, -0.4, 0.4, 0.4))
+    inner = P.as_multipolygon(box(-0.2, -0.2, 0.2, 0.2))
+    state = device._state
+    state.add_slab(0.0, 0.1, {silicon: window})
+    state.add_slab(0.1, 0.2, {silicon: P.as_multipolygon(window.difference(inner)), oxide: inner})
+    state.add_slab(0.2, 0.3, {silicon: window})
+    state.harmonize()
+    state.validate()
+
+    free = build_material_meshes(state, manifold=False, buried=False)
+    assert len(free[oxide].faces) == 0  # sealed in on every side
+    assert len(free[silicon].faces) > 0
+    # With them it is a solid again, and a full one.
+    full = build_material_meshes(state, manifold=False, buried=True)
+    assert len(full[oxide].faces) > 0
+    assert full[oxide].metadata["interface_faces"].all()
+
+
+def test_the_kernel_keeps_the_free_and_the_full_mesh_apart(tmp_path):
+    from process_studio.defaults import default_grid
+    from process_studio.kernels import get_kernel
+    from process_studio.kernels.slab import SlabState
+    from process_studio.models import ProjectDefinition
+    from process_studio.worker.serialize import grid_dict
+
+    kernel = get_kernel("slab")
+    project = ProjectDefinition("mesh", grid_dict(default_grid()), kernel="slab", resolution_um=0.01)
+    state = SlabState(device=_stack_with_a_buried_layer(), z_offset=0.0)
+    state.path = tmp_path / "step.dfz"
+
+    opened = kernel.surfaces(state, project=project)
+    behind = kernel.surfaces(state, project=project, buried=True)
+    assert opened["buried"] is False and behind["buried"] is True
+    assert sum(s["triangleCount"] for s in opened["surfaces"]) < sum(
+        s["triangleCount"] for s in behind["surfaces"]
+    )
+    assert set(state.display_meshes) == {("ears", False), ("ears", True)}
+    written = sorted(path.name for path in tmp_path.iterdir() if path.suffix == ".npz")
+    assert written == ["step.dfz.mesh-ears-free.npz", "step.dfz.mesh-ears-full.npz"]

@@ -168,6 +168,11 @@ export default function App() {
   // Which triangulator builds the 3D mesh. Ear clipping is the default;
   // the other is there to compare against, and costs a rebuild.
   const [triangulation, setTriangulation] = useState<Triangulation>("ears");
+  // Build the faces that lie against another material. They are invisible
+  // while both materials are shown -- two copies of one face fighting for
+  // the same pixels -- and are most of a stack's mesh, so they are left
+  // out until something is hidden. This forces them on regardless.
+  const [alwaysBuried, setAlwaysBuried] = useState(false);
   const [sectionAxis, setSectionAxis] = useState<SectionAxis>("y");
   // Which of the project's saved AA–BB lines the section follows.
   const [activeLineId, setActiveLineId] = useState<string | null>(null);
@@ -843,7 +848,10 @@ export default function App() {
       // A stale step still has the result of the last run, so it is shown,
       // labelled out of date, instead of being refused.
       if (mode === "surfaces") {
-        const key = `surfaces:${target}:${interpolation}:${triangulation}`;
+        // Hiding a material is asking to see the cavity it leaves, which is
+        // made of the faces around it: they have to be fetched then.
+        const buried = alwaysBuried || hiddenMaterials.length > 0;
+        const key = `surfaces:${target}:${interpolation}:${triangulation}:${buried}`;
         const hit = cached<SurfaceDocument>(key);
         if (hit) {
           setSurfaces(hit);
@@ -851,7 +859,7 @@ export default function App() {
           return;
         }
         setViewLoading(true);
-        const next = await bridge.getSurfaces(root, { ...request, triangulation });
+        const next = await bridge.getSurfaces(root, { ...request, triangulation, buried });
         if (token !== viewToken.current) return;
         setSurfaces(remember(key, next));
       } else if (mode === "section") {
@@ -911,6 +919,8 @@ export default function App() {
     interpolation,
     topShading,
     triangulation,
+    alwaysBuried,
+    hiddenMaterials,
     sectionAxis,
     sectionIndex,
     sectionLine,
@@ -1310,6 +1320,43 @@ export default function App() {
         { label: "Worker log", action: () => setShowLog((value) => !value), checked: showLog, separated: true },
       ],
     },
+    // How the 3D mesh is built, as opposed to what is being shown. Both
+    // cost a rebuild of the mesh, so they live in a menu rather than under
+    // the pointer; the footer keeps the triangulator too, for comparing.
+    ...(projectKernel?.id === "slab"
+      ? [
+          {
+            label: "Display",
+            items: [
+              {
+                label: "Ear clipping (fast)",
+                heading: "3D mesh triangulation",
+                action: () => setTriangulation("ears"),
+                checked: triangulation === "ears",
+              },
+              {
+                label: "Delaunay",
+                action: () => setTriangulation("delaunay"),
+                checked: triangulation === "delaunay",
+              },
+              {
+                label: "Build the faces between materials",
+                heading: "Buried faces",
+                separated: true,
+                action: () => setAlwaysBuried((value) => !value),
+                checked: alwaysBuried,
+              },
+              {
+                label: hiddenMaterials.length
+                  ? `Built now: a material is hidden (${hiddenMaterials.length})`
+                  : "Built when a material is hidden",
+                action: () => {},
+                disabled: true,
+              },
+            ],
+          },
+        ]
+      : []),
     {
       label: "Run",
       items: [

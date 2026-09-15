@@ -39,6 +39,10 @@ def write_mesh(
     payload = kernel.surfaces(
         state, project=project, interpolation=interpolation,
         materials=None if materials is None else [str(name) for name in materials],
+        # A file to open elsewhere is a solid, not a view: the faces
+        # between two materials belong in it even though the 3D view
+        # leaves them out while both are shown.
+        buried=True,
     )
     scene = trimesh.Scene()
     counts: dict[str, int] = {}

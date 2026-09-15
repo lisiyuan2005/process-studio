@@ -131,6 +131,9 @@ class Kernel(Protocol):
         #: Which triangulator built the mesh; only the slab kernel
         #: has a choice, and the level-set kernel marches cubes.
         triangulation: str | None = None,
+        #: Include the faces that lie against another material.
+        #: Only the slab kernel can leave them out.
+        buried: bool = False,
     ) -> dict[str, Any]:
         """Triangles for the 3D view, one entry per material."""
 

@@ -167,7 +167,7 @@ class SlabState:
         #: (vertices, triangles, one flag per triangle saying it lies
         #: against another material, and which one: its index in the mesh
         #: order, -1 for none).
-        self.display_meshes: dict[str, DisplayMeshes] = {}
+        self.display_meshes: dict[tuple[str, bool], DisplayMeshes] = {}
         #: Held while the mesh is being built, so a view asked for during
         #: the background build waits for it instead of building a second one.
         self.mesh_lock = threading.Lock()
@@ -232,8 +232,6 @@ class SlabState:
         return state
 
 
-MESH_SIDECAR = ".mesh.npz"
-
 #: Triangulators the 3D view can be built with; see mesh/triangulate.py.
 MESH_ENGINES = ENGINES
 
@@ -241,7 +239,9 @@ MESH_ENGINES = ENGINES
 DisplayMeshes = dict[str, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]
 
 
-def display_meshes(state: SlabState, engine: str | None = None) -> DisplayMeshes:
+def display_meshes(
+    state: SlabState, engine: str | None = None, buried: bool = False
+) -> DisplayMeshes:
     """The 3D view's triangles for each material, built once per stored state.
 
     Building the mesh is the slow part of the slab kernel: seconds for a few
@@ -257,27 +257,42 @@ def display_meshes(state: SlabState, engine: str | None = None) -> DisplayMeshes
     describe the same solid, so this is a comparison switch rather than a
     setting that changes an answer; each is kept on its own, because a mesh
     built one way is not what the other asked to look at.
+
+    ``buried`` asks for the faces that lie against another material as
+    well. The view leaves them out while both materials are shown -- two
+    copies of one face fight for the same pixels -- so they are worth
+    nothing until one is hidden, and in a stack they are almost the whole
+    mesh: a 5x5 hole block is 90,644 triangles with them and 6,572
+    without, 1.98 s against 0.70 s. They are built when something asks to
+    see behind a material, and kept separately once built.
     """
     engine = engine or DEFAULT_ENGINE
-    built = state.display_meshes.get(engine)
+    key = (engine, bool(buried))
+    built = state.display_meshes.get(key)
     if built is not None:
         return built
     with state.mesh_lock:
-        if engine not in state.display_meshes:
-            state.display_meshes[engine] = _load_or_build_meshes(state, engine)
-        return state.display_meshes[engine]
+        if key not in state.display_meshes:
+            state.display_meshes[key] = _load_or_build_meshes(state, engine, bool(buried))
+        return state.display_meshes[key]
 
 
-def _sidecar_path(state: SlabState, engine: str) -> Path | None:
-    """Where this engine's mesh is remembered beside the snapshot."""
+def _sidecar_path(state: SlabState, engine: str, buried: bool) -> Path | None:
+    """Where this mesh is remembered beside the snapshot.
+
+    The name carries both choices: a mesh without its buried faces is not
+    the one an export or a peek behind a material needs, and neither is a
+    mesh the other triangulator built.
+    """
     if state.path is None:
         return None
-    suffix = MESH_SIDECAR if engine == DEFAULT_ENGINE else f".mesh-{engine}.npz"
-    return state.path.with_name(state.path.name + suffix)
+    return state.path.with_name(
+        f"{state.path.name}.mesh-{engine}-{'full' if buried else 'free'}.npz"
+    )
 
 
-def _load_or_build_meshes(state: SlabState, engine: str) -> DisplayMeshes:
-    sidecar = _sidecar_path(state, engine)
+def _load_or_build_meshes(state: SlabState, engine: str, buried: bool) -> DisplayMeshes:
+    sidecar = _sidecar_path(state, engine, buried)
     meshes: DisplayMeshes | None = None
     if sidecar is not None and sidecar.is_file():
         try:
@@ -285,7 +300,7 @@ def _load_or_build_meshes(state: SlabState, engine: str) -> DisplayMeshes:
                 # A file from before the engine was recorded, or from the
                 # other one, describes the same solid but not the triangles
                 # that were asked for.
-                if str(stored["engine"]) != engine:
+                if str(stored["engine"]) != engine or bool(stored["buried"]) != buried:
                     raise KeyError("engine")
                 names = [str(name) for name in stored["materials"]]
                 meshes = {
@@ -305,11 +320,13 @@ def _load_or_build_meshes(state: SlabState, engine: str) -> DisplayMeshes:
 
         state.device._state.validate()
         with using(engine):
-            built = build_material_meshes(state.device._state, manifold=False)
+            built = build_material_meshes(state.device._state, manifold=False, buried=buried)
         meshes = {
             material.name: (
-                np.ascontiguousarray(mesh.vertices, dtype=np.float32),
-                np.ascontiguousarray(mesh.faces, dtype=np.uint32),
+                # A material with no free surface has an empty mesh, whose
+                # arrays come back flat; the view wants (n, 3) either way.
+                np.ascontiguousarray(mesh.vertices, dtype=np.float32).reshape(-1, 3),
+                np.ascontiguousarray(mesh.faces, dtype=np.uint32).reshape(-1, 3),
                 # A face against another material is the same face in that
                 # material's mesh. The viewer leaves such faces out while
                 # that other material is shown, so two copies never fight for
@@ -324,6 +341,7 @@ def _load_or_build_meshes(state: SlabState, engine: str) -> DisplayMeshes:
             arrays: dict[str, np.ndarray] = {
                 "materials": np.array(list(meshes), dtype=str),
                 "engine": np.array(engine),
+                "buried": np.array(buried),
             }
             for index, (vertices, faces, interface, neighbour) in enumerate(meshes.values()):
                 arrays[f"{index}.vertices"] = vertices
@@ -906,7 +924,12 @@ class SlabKernel:
         return state.priority
 
     def warm_views(self, state: SlabState) -> None:
-        """Build the display mesh now, so the 3D view does not have to."""
+        """Build the display mesh now, so the 3D view does not have to.
+
+        Only what the view opens with: the free surface. The buried faces
+        cost several times as much and are worth nothing until someone
+        hides a material to look behind it.
+        """
         display_meshes(state)
 
     def state_bytes(self, state: SlabState) -> int:
@@ -934,10 +957,11 @@ class SlabKernel:
         interpolation: int = 1,
         materials: Sequence[str] | None = None,
         triangulation: str | None = None,
+        buried: bool = False,
     ) -> dict[str, Any]:
         device = state.device
         engine = triangulation or DEFAULT_ENGINE
-        meshes = display_meshes(state, engine)
+        meshes = display_meshes(state, engine, buried)
         selected = [
             name
             for name in state.priority
@@ -979,6 +1003,7 @@ class SlabKernel:
             "interpolation": 1,
             "exact": True,
             "triangulation": engine,
+            "buried": bool(buried),
             "bounds": {
                 "xMin": x_min,
                 "xMax": x_max,

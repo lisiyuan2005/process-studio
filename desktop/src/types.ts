@@ -263,6 +263,8 @@ export interface SurfaceDocument {
   exact?: boolean;
   /** Which triangulator built these meshes; absent from other kernels. */
   triangulation?: Triangulation;
+  /** True when the faces against other materials are in here as well. */
+  buried?: boolean;
   bounds: {
     xMin: number;
     xMax: number;

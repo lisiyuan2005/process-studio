@@ -431,7 +431,12 @@ def test_repeated_conformal_films_of_one_material_mesh_as_one_solid(kernel, proj
     assert report.materials["W"].components == 1
     # Where the metal lies against the wafer, both meshes carry that face and
     # both mark it as an interface, which is what lets the viewer draw it once.
-    payload = {s["material"]: s for s in kernel.surfaces(state, project=project)["surfaces"]}
+    # The view leaves such faces out until a material is hidden, so this asks
+    # for them.
+    payload = {
+        s["material"]: s
+        for s in kernel.surfaces(state, project=project, buried=True)["surfaces"]
+    }
     flags = {
         name: np.frombuffer(base64.b64decode(s["interfaceFaces"]), dtype=np.uint8)
         for name, s in payload.items()
@@ -488,7 +493,7 @@ def test_the_3d_view_is_built_once_and_kept_beside_the_snapshot(tmp_path, kernel
     # Heights are the project's: the wafer top sits at z = 0.
     assert positions[:, 2].max() == pytest.approx(0.0)
 
-    sidecar = path.with_name(path.name + slab_module.MESH_SIDECAR)
+    sidecar = path.with_name(path.name + ".mesh-ears-free.npz")
     assert sidecar.is_file()
 
     # A fresh load must not build again: the builder is made to fail.
@@ -675,7 +680,9 @@ def test_each_face_names_the_material_it_lies_against(kernel):
     up = wafer.face_normals[:, 2] > 0.999
     assert set(np.unique(wafer.metadata["neighbour_faces"][up])) == {order.index("W"), order.index("Al2O3")}
 
-    payload = kernel.surfaces(state, project=project)
+    # Asking for the buried faces, since naming what a face lies against is
+    # only interesting for the faces that lie against something.
+    payload = kernel.surfaces(state, project=project, buried=True)
     surface = next(item for item in payload["surfaces"] if item["material"] == "Al2O3")
     faces = np.frombuffer(base64.b64decode(surface["neighbourFaces"]), dtype=np.uint8)
     assert len(faces) == surface["triangleCount"]

@@ -37,6 +37,12 @@ export interface ViewRequest {
   shading?: TopShading;
   /** 3D view only: which triangulator builds the mesh. */
   triangulation?: Triangulation;
+  /**
+   * 3D view only: also build the faces that lie against another material.
+   * They are invisible while both materials are shown and are most of a
+   * stack's mesh, so they are asked for only when something is hidden.
+   */
+  buried?: boolean;
 }
 
 

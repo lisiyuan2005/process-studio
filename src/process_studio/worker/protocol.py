@@ -714,6 +714,7 @@ def dispatch(
             interpolation=parameters.get("interpolation", 1),
             materials=None if materials is None else [str(name) for name in materials],
             triangulation=triangulation,
+            buried=bool(parameters.get("buried", False)),
         )
         colors = _material_colors(repository)
         for surface in payload["surfaces"]:

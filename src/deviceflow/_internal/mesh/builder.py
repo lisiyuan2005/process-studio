@@ -73,7 +73,7 @@ class _MeshAccumulator:
 
 
 def build_material_meshes(
-    state: ProcessState, *, manifold: bool = True
+    state: ProcessState, *, manifold: bool = True, buried: bool = True
 ) -> "OrderedDict[Material, trimesh.Trimesh]":
     """One mesh per material that owns any volume, in first-appearance order.
 
@@ -81,13 +81,22 @@ def build_material_meshes(
     single fan. A renderer that shades each face on its own never shares
     vertices anyway, and the split is a third of the build time.
 
+    ``buried=False`` leaves out every face that lies against another
+    material, keeping only the free surface -- what the solid shows to the
+    outside. The meshes are then not closed, so it is for looking at, not
+    for exporting or measuring: a stack is nearly all buried interfaces,
+    and leaving them out is most of the work. A material with no free
+    surface at all comes back with an empty mesh rather than an error.
+
     Each mesh records, per face, which of the materials (by position in this
     order) the face lies against, in ``metadata["neighbour_faces"]``.
     """
     materials = _materials_in_order(state)
     out: "OrderedDict[Material, trimesh.Trimesh]" = OrderedDict()
     for m in materials:
-        out[m] = build_one_material(state, m, manifold=manifold, materials=materials)
+        out[m] = build_one_material(
+            state, m, manifold=manifold, materials=materials, buried=buried
+        )
     return out
 
 
@@ -106,6 +115,7 @@ def build_one_material(
     *,
     manifold: bool = True,
     materials: list[Material] | None = None,
+    buried: bool = True,
 ) -> trimesh.Trimesh:
     """Caps and walls of one material from a single planar arrangement.
 
@@ -192,6 +202,8 @@ def build_one_material(
                 continue
             other = neighbour_above if up else neighbour_below
             for who in np.unique(other[sel_dir]):
+                if not buried and who >= 0:
+                    continue  # this cap is an interface; nothing sees it
                 sel = np.nonzero(sel_dir & (other == who))[0]
                 for poly in _merge_faces(faces2d, edges_of_face, sel).geoms:
                     for a, b, c in triangulate(poly):
@@ -215,11 +227,15 @@ def build_one_material(
             else:
                 p, q, other = b, a, left
             who = int(neighbour[k][other]) if other is not None else -1
+            if not buried and who >= 0:
+                continue  # this wall is an interface; nothing sees it
             strips[(p[0], p[1], q[0], q[1], who)].append((z[k], z[k + 1]))
     _emit_walls(acc, strips)
 
     mesh = acc.to_trimesh()
-    if len(mesh.faces) == 0:
+    if len(mesh.faces) == 0 and buried:
+        # Without the buried faces an enclosed material really has nothing
+        # to show, which is an answer rather than a failure.
         raise MeshError(f"{material.name}: empty mesh")
     if manifold:
         mesh, n_split = split_nonmanifold(mesh)  # keeps face order
