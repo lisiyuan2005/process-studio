@@ -265,12 +265,31 @@ def _canonical(value: Any) -> str:
     return json.dumps(_plain_numbers(value), sort_keys=True, separators=(",", ":"), default=str)
 
 
+def layout_fingerprint(gds_path: str | None) -> list[Any] | None:
+    """What identifies the layout a step's mask is cut from.
+
+    The file itself, not the path alone: importing the same GDS again
+    copies it under a new name, and editing one in place keeps the name.
+    Its size and modification time say both, and cost one stat -- a real
+    layout runs to hundreds of megabytes, and this is read again every
+    time the flow's status is refreshed, so reading the bytes is not on.
+    """
+    if not gds_path:
+        return None
+    try:
+        stat = Path(gds_path).stat()
+    except OSError:
+        return [gds_path, None, None]  # gone: not the layout that ran
+    return [gds_path, stat.st_size, stat.st_mtime_ns]
+
+
 def step_digest(
     previous: str,
     step: ProcessStep,
     recipe: Recipe | None,
     sketch: QuickSketch | None,
     grid: Mapping[str, Any],
+    layout: list[Any] | None = None,
 ) -> str:
     """Hash everything a step's result depends on, including its history."""
     payload = {
@@ -294,6 +313,9 @@ def step_digest(
                 for name, response in recipe.material_responses.items()
             },
         },
+        # Only for a step that cuts its mask from the layout: everything
+        # else is unaffected by which layout the project carries.
+        "layout": layout if step.mask_source == "gds" else None,
         "sketch": None
         if sketch is None
         else [
@@ -309,6 +331,7 @@ def branch_digests(
     recipes: Mapping[str, Recipe],
     sketches: Mapping[str, QuickSketch],
     grid: Mapping[str, Any],
+    layout: list[Any] | None = None,
 ) -> list[str]:
     """Return one chained digest per step, in flow order."""
     digests: list[str] = []
@@ -322,6 +345,7 @@ def branch_digests(
             recipe,
             sketches.get(sketch_id) if step.mask_source == "quick_sketch" else None,
             grid,
+            layout,
         )
         digests.append(previous)
     return digests

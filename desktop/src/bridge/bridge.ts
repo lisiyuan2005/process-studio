@@ -26,6 +26,12 @@ export interface RunOptions {
   branchId?: string;
   throughStepId?: string;
   force?: boolean;
+  /**
+   * Run this step again even though its digest says it is up to date, and
+   * every step after it, which starts from what it leaves. What a step
+   * depends on is not all visible to the digest.
+   */
+  fromStepId?: string;
 }
 
 export interface ViewRequest {

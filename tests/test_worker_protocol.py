@@ -1093,3 +1093,103 @@ def test_the_protocol_and_the_mesh_code_agree_on_the_triangulators():
     from process_studio.worker.protocol import MESH_ENGINES
 
     assert MESH_ENGINES == ENGINES
+
+
+def test_changing_the_layout_makes_the_steps_that_cut_from_it_stale(tmp_path):
+    """A step masked from the layout has to notice when the layout changes.
+
+    Importing a GDS copies it into the workspace under a new name, and a
+    layout can also be edited where it lies. Neither moved the digest,
+    which records the layer and datatype but said nothing about the file,
+    so the flow went on reporting every step up to date and refused to run
+    them again.
+    """
+    from process_studio.models import ProcessStep, ProcessType, Recipe
+    from process_studio.worker.workspace import layout_fingerprint, step_digest
+
+    gds = tmp_path / "layout.gds"
+    gds.write_bytes(b"first")
+
+    def digest(source: str, path) -> str:
+        step = ProcessStep(
+            "Etch", process_type=ProcessType.ETCH, mask_source=source, layer=1, datatype=0,
+            parameters={"target": 0.3},
+        )
+        recipe = Recipe("r", ProcessType.ETCH, parameters=dict(step.parameters))
+        return step_digest(
+            "genesis", step, recipe, None, {"nx": 10, "spacingUm": 0.01},
+            layout_fingerprint(None if path is None else str(path)),
+        )
+
+    before = digest("gds", gds)
+    assert digest("gds", gds) == before  # nothing changed, nothing to redo
+
+    gds.write_bytes(b"second, and longer")
+    assert digest("gds", gds) != before, "an edited layout is a different layout"
+
+    other = tmp_path / "1700000000000-layout.gds"
+    other.write_bytes(b"second, and longer")
+    assert digest("gds", other) != digest("gds", gds), "re-importing copies it under a new name"
+
+    # A step that does not read the layout is unaffected by it.
+    assert digest("none", gds) == digest("none", other)
+    assert digest("none", gds) == digest("none", None)
+
+
+def test_a_layout_that_is_gone_is_not_the_layout_that_ran(tmp_path):
+    from process_studio.worker.workspace import layout_fingerprint
+
+    gds = tmp_path / "layout.gds"
+    gds.write_bytes(b"x")
+    present = layout_fingerprint(str(gds))
+    gds.unlink()
+    assert layout_fingerprint(str(gds)) != present
+    assert layout_fingerprint(None) is None
+
+
+def test_a_step_can_be_run_again_although_it_says_it_is_up_to_date(tmp_path):
+    """Not everything a step depends on is something the digest can see.
+
+    Running one step again reuses everything before it and recomputes it
+    and everything after, because each step starts from the state the one
+    before left.
+    """
+    root = str(tmp_path / "redo")
+    document = call("create_workspace", root=root, name="Redo", kernel="slab")
+    steps = document["branches"][0]["steps"]
+    assert len(steps) >= 3, "the starter flow is what this runs"
+
+    first = call("run_flow", root=root)
+    assert first["executedStepIds"] == [step["id"] for step in steps]
+
+    # Nothing changed: everything is reused.
+    again = call("run_flow", root=root)
+    assert again["executedStepIds"] == []
+    assert again["cachedStepIds"] == [step["id"] for step in steps]
+
+    # The middle step again: the one before it is still cached, it and the
+    # one after it run.
+    target = steps[1]["id"]
+    redone = call("run_flow", root=root, fromStepId=target)
+    assert redone["cachedStepIds"] == [steps[0]["id"]]
+    assert redone["executedStepIds"] == [step["id"] for step in steps[1:]]
+
+    # And it is up to date again afterwards.
+    settled = call("run_flow", root=root)
+    assert settled["executedStepIds"] == []
+
+
+def test_running_a_step_again_leaves_the_rest_of_the_flow_alone(tmp_path):
+    root = str(tmp_path / "redo-last")
+    document = call("create_workspace", root=root, name="Redo last", kernel="slab")
+    steps = document["branches"][0]["steps"]
+    call("run_flow", root=root)
+
+    last = steps[-1]["id"]
+    redone = call("run_flow", root=root, fromStepId=last)
+    assert redone["executedStepIds"] == [last]
+    assert redone["cachedStepIds"] == [step["id"] for step in steps[:-1]]
+
+    # An id that is not in the flow changes nothing.
+    unknown = call("run_flow", root=root, fromStepId="no-such-step")
+    assert unknown["executedStepIds"] == []

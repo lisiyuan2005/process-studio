@@ -27,6 +27,7 @@ from .workspace import (
     result_keys,
     DigestCache,
     branch_digests,
+    layout_fingerprint,
     load_project,
     load_sketches,
     open_repository,
@@ -105,7 +106,9 @@ def step_statuses(
     views can show. ``dirty`` is a step that has never run and has nothing.
     """
     by_id = {recipe.id: recipe for recipe in recipes}
-    digests = branch_digests(branch, by_id, sketches, project.grid)
+    digests = branch_digests(
+        branch, by_id, sketches, project.grid, layout_fingerprint(project.gds_path)
+    )
     stored = DigestCache(repository).load(branch.id)
     with repository.connect() as connection:
         rows = connection.execute(
@@ -133,6 +136,7 @@ def run_flow(
     project_id: str | None = None,
     through_step_id: str | None = None,
     force: bool = False,
+    from_step_id: str | None = None,
     progress: ProgressCallback | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
@@ -153,7 +157,9 @@ def run_flow(
     recipes = repository.load_recipes()
     by_id = {recipe.id: recipe for recipe in recipes}
     sketches = load_sketches(root)
-    digests = branch_digests(branch, by_id, sketches, project.grid)
+    digests = branch_digests(
+        branch, by_id, sketches, project.grid, layout_fingerprint(project.gds_path)
+    )
     cache = DigestCache(repository)
     stored = cache.load(branch.id)
     kernel = project_kernel(project)
@@ -172,6 +178,16 @@ def run_flow(
     executed: list[str] = []
     cached: list[str] = []
     reusable = not force
+    # Run one step again although its digest says nothing changed. A step's
+    # inputs are not all things the digest can see -- a tool the recipe
+    # names, a file beside the project -- and sometimes the answer is
+    # simply wanted afresh. Everything before it is still reused; every
+    # step after it has to follow, because each one starts from the state
+    # the one before left.
+    redo_from = next(
+        (index for index, step in enumerate(branch.steps) if step.id == from_step_id),
+        None,
+    ) if from_step_id else None
     started = time.perf_counter()
     for index, (step, digest) in enumerate(zip(branch.steps, digests)):
         if index >= total:
@@ -181,6 +197,8 @@ def run_flow(
                 f"Stopped before {step.name}; {len(executed)} step(s) ran and are kept."
             )
         key = result_key(step.id, project.fidelity)
+        if redo_from is not None and index >= redo_from:
+            reusable = False
         if reusable and stored.get(key) == digest:
             try:
                 state = _load_state(kernel, repository.snapshot_path(branch.id, key))

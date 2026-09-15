@@ -142,7 +142,14 @@ export default function App() {
   const [showCli, setShowCli] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   // A short message with an optional action, for menu commands that answer something.
-  const [notice, setNotice] = useState<{ title: string; text: string; action?: { label: string; run: () => void } } | null>(null);
+  const [notice, setNotice] = useState<{
+    title: string;
+    text: string;
+    action?: { label: string; run: () => void };
+    // A second button, for when the notice offers a thing to do as
+    // well as a thing to read: installing an update, and its notes.
+    primary?: { label: string; run: () => void };
+  } | null>(null);
   // Every selected step (the focused `selectedStepId` included) and the
   // anchor a Shift-click extends from, the way a file list selects.
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -753,7 +760,22 @@ export default function App() {
           info.isNewer
             ? {
                 title: `Version ${info.latestVersion} is available`,
-                text: `This is ${info.currentVersion}. Go back to the home page to install it, or read the release notes.`,
+                text: info.asset
+                  ? `This is ${info.currentVersion}. Installing downloads ${
+                      info.asset.sizeBytes ? `${Math.round(info.asset.sizeBytes / 1_048_576)} MB and ` : ""
+                    }restarts the application.`
+                  : `This is ${info.currentVersion}. There is no packaged build for this platform, so install it from the release page.`,
+                primary: info.asset
+                  ? {
+                      label: "Install now",
+                      run: () => {
+                        const url = info.asset?.url;
+                        if (url) void installUpdate(url).catch((reason) =>
+                          setNotice({ title: "Could not install the update", text: errorMessage(reason) }),
+                        );
+                      },
+                    }
+                  : undefined,
                 action: { label: "Release notes", run: () => void bridge.openUrl(info.releaseUrl) },
               }
             : { title: "Up to date", text: `${info.currentVersion} is the newest release.` },
@@ -776,7 +798,14 @@ export default function App() {
         void saveNow();
       } else if (event.key === "F5") {
         event.preventDefault();
-        if (!busy) void runFlow(event.shiftKey ? selectedStepId || undefined : undefined);
+        if (busy) return;
+        // Ctrl runs the selected step again although it is up to date;
+        // Shift runs the flow up to it.
+        if (mod) {
+          if (selectedStepId) void runFlow(undefined, false, selectedStepId);
+        } else {
+          void runFlow(event.shiftKey ? selectedStepId || undefined : undefined);
+        }
       } else if (typing) {
         return;
       } else if (mod && key === "z" && !event.shiftKey) {
@@ -934,7 +963,7 @@ export default function App() {
     selectedStepRef.current = selectedStepId;
   }, [selectedStepId]);
 
-  const runFlow = async (throughStepId?: string, force = false) => {
+  const runFlow = async (throughStepId?: string, force = false, fromStepId?: string) => {
     if (!document || !branch || busy) return;
     setBusy(true);
     runningStepId.current = undefined;
@@ -952,7 +981,7 @@ export default function App() {
       setSaveState("saved");
       const result = await bridge.runFlow(
         saved.root,
-        { branchId: branch.id, throughStepId, force },
+        { branchId: branch.id, throughStepId, force, fromStepId },
         requestId,
       );
       skipNextAutosave.current = true;
@@ -1361,6 +1390,12 @@ export default function App() {
       label: "Run",
       items: [
         { label: "Run the flow", action: () => void runFlow(), shortcut: "F5", disabled: busy },
+        {
+          label: "Run the selected step again",
+          action: () => selectedStepId && void runFlow(undefined, false, selectedStepId),
+          shortcut: "Ctrl+F5",
+          disabled: busy || !selectedStepId,
+        },
         { label: "Run to the selected step", action: () => void runFlow(selectedStepId || undefined), shortcut: "Shift+F5", disabled: busy || !selectedStepId },
         { label: stopping ? "Stopping…" : "Stop", action: stopRun, disabled: stopping || !(busy && runRequestId.current) },
         { label: "Discard results and run everything again…", action: forceRerun, disabled: busy, separated: true },
@@ -1836,6 +1871,11 @@ export default function App() {
             </header>
             <p className="notice-text">{notice.text}</p>
             <div className="modal-actions">
+              {notice.primary && (
+                <button type="button" className="primary-button" onClick={() => { notice.primary?.run(); setNotice(null); }}>
+                  {notice.primary.label}
+                </button>
+              )}
               {notice.action && (
                 <button type="button" className="secondary-button" onClick={() => { notice.action?.run(); setNotice(null); }}>
                   {notice.action.label}

@@ -695,6 +695,7 @@ def dispatch(
             project_id=parameters.get("projectId"),
             through_step_id=parameters.get("throughStepId"),
             force=bool(parameters.get("force", False)),
+            from_step_id=parameters.get("fromStepId"),
             progress=progress,
             should_cancel=(lambda: False) if cancel is None else cancel.is_set,
         )
