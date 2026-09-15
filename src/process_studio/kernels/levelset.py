@@ -88,7 +88,7 @@ class LevelSetKernel:
     def state_materials(self, state: MaterialState) -> list[str]:
         return list(state.priority)
 
-    def warm_views(self, state: MaterialState) -> None:
+    def warm_views(self, state: MaterialState, buried: bool = False) -> None:
         """Marching cubes is fast enough to run when asked."""
 
     def state_bytes(self, state: MaterialState) -> int:

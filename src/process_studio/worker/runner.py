@@ -268,19 +268,27 @@ def _warm_views_later(kernel: Kernel, paths: list[Path]) -> None:
     The last step is what the user opens first, so it goes first. A state
     that has already left the cache is skipped rather than reloaded: the
     warming is a courtesy, and the view builds what it needs on demand.
+
+    Two passes. The first gives every step the mesh the 3D view opens
+    with, which is the one anyone is waiting for. Only then does the
+    second build the heavier mesh that looking behind a hidden material
+    needs -- several times the work for something most runs never ask
+    for, so it may not come first, and it is worth having ready for the
+    one run in ten that does.
     """
     if not paths:
         return
 
     def work() -> None:
-        for path in reversed(paths):
-            state = STATE_CACHE.get(path)
-            if state is None:
-                continue
-            try:
-                kernel.warm_views(state)
-            except Exception:  # noqa: BLE001 - a warm-up must never surface as an error
-                continue
+        for buried in (False, True):
+            for path in reversed(paths):
+                state = STATE_CACHE.get(path)
+                if state is None:
+                    continue
+                try:
+                    kernel.warm_views(state, buried=buried)
+                except Exception:  # noqa: BLE001 - a warm-up must never surface as an error
+                    continue
 
     threading.Thread(target=work, name="warm-views", daemon=True).start()
 

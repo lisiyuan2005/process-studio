@@ -168,9 +168,14 @@ class SlabState:
         #: against another material, and which one: its index in the mesh
         #: order, -1 for none).
         self.display_meshes: dict[tuple[str, bool], DisplayMeshes] = {}
-        #: Held while the mesh is being built, so a view asked for during
-        #: the background build waits for it instead of building a second one.
+        #: Guards the map below; held only long enough to look in it.
         self.mesh_lock = threading.Lock()
+        #: One lock per kind of mesh, so a view waiting for the free
+        #: surface is not held up by the background build of the buried
+        #: faces, which takes several times as long. A view asked for
+        #: while its own kind is being built waits for that build rather
+        #: than starting a second one.
+        self.mesh_building: dict[tuple[str, bool], threading.Lock] = {}
 
     @property
     def priority(self) -> list[str]:
@@ -272,6 +277,8 @@ def display_meshes(
     if built is not None:
         return built
     with state.mesh_lock:
+        building = state.mesh_building.setdefault(key, threading.Lock())
+    with building:
         if key not in state.display_meshes:
             state.display_meshes[key] = _load_or_build_meshes(state, engine, bool(buried))
         return state.display_meshes[key]
@@ -923,14 +930,16 @@ class SlabKernel:
     def state_materials(self, state: SlabState) -> list[str]:
         return state.priority
 
-    def warm_views(self, state: SlabState) -> None:
-        """Build the display mesh now, so the 3D view does not have to.
+    def warm_views(self, state: SlabState, buried: bool = False) -> None:
+        """Build a display mesh now, so the 3D view does not have to.
 
-        Only what the view opens with: the free surface. The buried faces
-        cost several times as much and are worth nothing until someone
-        hides a material to look behind it.
+        The free surface is what the view opens with and is warmed first
+        for every step. The buried faces cost several times as much and
+        are worth nothing until someone hides a material, so they are a
+        second pass: by the time anyone gets round to looking behind a
+        material, the mesh for it is usually already there.
         """
-        display_meshes(state)
+        display_meshes(state, buried=buried)
 
     def state_bytes(self, state: SlabState) -> int:
         # Polygons are the bulk of a slab state: two doubles per coordinate

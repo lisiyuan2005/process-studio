@@ -325,3 +325,45 @@ def test_hiding_the_shell_reveals_the_material_sealed_inside(tmp_path):
         opened["surfaces"][0]["neighbourMaterials"]
         == behind["surfaces"][0]["neighbourMaterials"]
     )
+
+
+def test_the_free_surface_does_not_wait_for_the_buried_faces_being_built():
+    """The warming builds the heavy mesh in the background, and a view
+    asked for meanwhile must not queue behind it.
+
+    Both used to share one lock, so opening the 3D view while the buried
+    faces were being built would have waited out the whole build -- which
+    is several times the one the view actually wanted.
+    """
+    import threading
+
+    from process_studio.kernels import slab as slab_module
+    from process_studio.kernels.slab import SlabState, display_meshes
+
+    state = SlabState(device=_stack_with_a_buried_layer(), z_offset=0.0)
+    display_meshes(state, buried=False)  # as the first warming pass does
+
+    started, release = threading.Event(), threading.Event()
+    real = slab_module._load_or_build_meshes
+
+    def slow(state_, engine, buried):
+        if buried:
+            started.set()
+            assert release.wait(30), "the free surface never came back"
+        return real(state_, engine, buried)
+
+    slab_module._load_or_build_meshes = slow
+    try:
+        background = threading.Thread(
+            target=lambda: display_meshes(state, buried=True), daemon=True
+        )
+        background.start()
+        assert started.wait(30)
+        # The build of the buried faces is now wedged open; this must not
+        # be, because it is a different mesh and has its own lock.
+        assert display_meshes(state, buried=False) is state.display_meshes[("ears", False)]
+        release.set()
+        background.join(30)
+    finally:
+        slab_module._load_or_build_meshes = real
+    assert ("ears", True) in state.display_meshes
