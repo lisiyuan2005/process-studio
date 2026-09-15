@@ -260,3 +260,68 @@ def test_the_kernel_keeps_the_free_and_the_full_mesh_apart(tmp_path):
     assert set(state.display_meshes) == {("ears", False), ("ears", True)}
     written = sorted(path.name for path in tmp_path.iterdir() if path.suffix == ".npz")
     assert written == ["step.dfz.mesh-ears-free.npz", "step.dfz.mesh-ears-full.npz"]
+
+
+def test_hiding_the_shell_reveals_the_material_sealed_inside(tmp_path):
+    """The whole point of fetching the buried faces when something is hidden.
+
+    A material enclosed on every side sends nothing while the shell is
+    shown -- there is nothing of it to see. Hiding the shell is asking to
+    look inside, so the view refetches with the buried faces, and the
+    sealed material is then made entirely of faces whose neighbour is
+    hidden, which is exactly what the viewer draws.
+
+    The two payloads must also agree on the order of the materials: a face
+    says what it lies against by index into that list, so a list that
+    shifted between them would colour the cavity by the wrong material.
+    """
+    import base64
+
+    from shapely.geometry import box
+
+    from deviceflow._internal.geometry import polygons as P
+    from process_studio.defaults import default_grid
+    from process_studio.kernels import get_kernel
+    from process_studio.kernels.slab import SlabState
+    from process_studio.models import ProjectDefinition
+    from process_studio.worker.serialize import grid_dict
+
+    device = Device("sealed", (-0.4, -0.4, 0.4, 0.4), conformal_resolution=0.01, verbose=False)
+    silicon, oxide = device.material("Si"), device.material("SiO2")
+    window = P.as_multipolygon(box(-0.4, -0.4, 0.4, 0.4))
+    inner = P.as_multipolygon(box(-0.2, -0.2, 0.2, 0.2))
+    state = device._state
+    state.add_slab(0.0, 0.1, {silicon: window})
+    state.add_slab(0.1, 0.2, {silicon: P.as_multipolygon(window.difference(inner)), oxide: inner})
+    state.add_slab(0.2, 0.3, {silicon: window})
+    state.harmonize()
+    state.validate()
+
+    def drawn(payload, hidden):
+        """The viewer's own rule: a face against a shown material is left out."""
+        counts = {}
+        for surface in payload["surfaces"]:
+            if surface["material"] in hidden:
+                continue
+            against = np.frombuffer(base64.b64decode(surface["neighbourFaces"]), dtype=np.uint8)
+            names = surface["neighbourMaterials"]
+            keep = [not (index != 255 and names[index] not in hidden) for index in against]
+            counts[surface["material"]] = int(sum(keep))
+        return counts
+
+    kernel = get_kernel("slab")
+    project = ProjectDefinition("m", grid_dict(default_grid()), kernel="slab", resolution_um=0.01)
+    slab_state = SlabState(device=device, z_offset=0.0)
+
+    opened = kernel.surfaces(slab_state, project=project)
+    assert drawn(opened, set())["SiO2"] == 0  # sealed in, and nothing sent for it
+    behind = kernel.surfaces(slab_state, project=project, buried=True)
+    assert drawn(behind, {"Si"})["SiO2"] > 0  # every face of it, once the shell is gone
+
+    assert [s["material"] for s in opened["surfaces"]] == [
+        s["material"] for s in behind["surfaces"]
+    ]
+    assert (
+        opened["surfaces"][0]["neighbourMaterials"]
+        == behind["surfaces"][0]["neighbourMaterials"]
+    )
