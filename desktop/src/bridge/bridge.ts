@@ -32,6 +32,12 @@ export interface RunOptions {
    * depends on is not all visible to the digest.
    */
   fromStepId?: string;
+  /**
+   * Also prepare, for every step of the run, the faces between materials
+   * that hiding one needs. Opening a step's 3D view prepares its own, so
+   * this is only for walking a whole flow without ever waiting.
+   */
+  prepareBuried?: boolean;
 }
 
 export interface ViewRequest {

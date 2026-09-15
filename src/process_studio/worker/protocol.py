@@ -590,6 +590,23 @@ def _import_recipes(parameters: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _prepare_buried_faces_later(kernel: Any, state: Any, project: Any) -> None:
+    """Build the mesh a peek behind a hidden material needs, in the background.
+
+    The view that was just answered does not wait for it, and neither does
+    the next request: each kind of mesh has its own lock, so this never
+    holds up the one the 3D view opens with.
+    """
+
+    def work() -> None:
+        try:
+            kernel.warm_views(state, buried=True)
+        except Exception:  # noqa: BLE001 - a warm-up must never surface as an error
+            pass
+
+    threading.Thread(target=work, name="warm-buried", daemon=True).start()
+
+
 def dispatch(
     request: Mapping[str, Any],
     output: IO[str],
@@ -696,12 +713,14 @@ def dispatch(
             through_step_id=parameters.get("throughStepId"),
             force=bool(parameters.get("force", False)),
             from_step_id=parameters.get("fromStepId"),
+            prepare_buried=bool(parameters.get("prepareBuried", False)),
             progress=progress,
             should_cancel=(lambda: False) if cancel is None else cancel.is_set,
         )
     if method == "get_surfaces":
         state, repository, project, kernel = _view_state(parameters)
         materials = parameters.get("materials")
+        buried = bool(parameters.get("buried", False))
         triangulation = parameters.get("triangulation")
         if triangulation is not None:
             triangulation = str(triangulation)
@@ -715,8 +734,16 @@ def dispatch(
             interpolation=parameters.get("interpolation", 1),
             materials=None if materials is None else [str(name) for name in materials],
             triangulation=triangulation,
-            buried=bool(parameters.get("buried", False)),
+            buried=buried,
         )
+        if not buried:
+            # Looking at a step is the best guess there is that its buried
+            # faces will be wanted: hiding a material is the next thing
+            # anyone does, and that mesh costs several times the one just
+            # sent. Prepared now, in the background, for this step alone --
+            # preparing every step of a run took half a minute of a flow's
+            # worth of them, most never looked at.
+            _prepare_buried_faces_later(kernel, state, project)
         colors = _material_colors(repository)
         for surface in payload["surfaces"]:
             surface["color"] = colors.get(surface["material"], "#7c83a0")

@@ -137,6 +137,7 @@ def run_flow(
     through_step_id: str | None = None,
     force: bool = False,
     from_step_id: str | None = None,
+    prepare_buried: bool = False,
     progress: ProgressCallback | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
@@ -269,6 +270,7 @@ def run_flow(
             repository.snapshot_path(branch.id, result_key(step_id, project.fidelity))
             for step_id in executed
         ],
+        buried=prepare_buried,
     )
     return {
         "branchId": branch.id,
@@ -280,31 +282,38 @@ def run_flow(
     }
 
 
-def _warm_views_later(kernel: Kernel, paths: list[Path]) -> None:
+def _warm_views_later(kernel: Kernel, paths: list[Path], buried: bool = False) -> None:
     """Prepare the views of freshly stored states while the user looks at the log.
 
-    The last step is what the user opens first, so it goes first. A state
-    that has already left the cache is skipped rather than reloaded: the
-    warming is a courtesy, and the view builds what it needs on demand.
+    Every step that ran gets the mesh the 3D view opens with, newest
+    first, because any of them may be the one that gets opened and that
+    mesh is the cheap one. The heavier mesh -- the faces between materials,
+    which a peek behind a hidden one needs -- is not built here: opening a
+    step's 3D view starts it for that step, which is the first good
+    evidence that it will be wanted. Building it for every step of a run
+    was half a minute of background work after a flow of twenty-odd,
+    almost all of it for steps nobody opens.
 
-    Two passes. The first gives every step the mesh the 3D view opens
-    with, which is the one anyone is waiting for. Only then does the
-    second build the heavier mesh that looking behind a hidden material
-    needs -- several times the work for something most runs never ask
-    for, so it may not come first, and it is worth having ready for the
-    one run in ten that does.
+    ``buried`` asks for it anyway, for someone who walks a whole flow
+    hiding materials as they go and would rather the machine did the work
+    up front.
+
+    A state that has already left the cache is skipped rather than
+    reloaded: the warming is a courtesy, and the view builds what it needs
+    on demand.
     """
     if not paths:
         return
+    kinds = (False, True) if buried else (False,)
 
     def work() -> None:
-        for buried in (False, True):
+        for kind in kinds:
             for path in reversed(paths):
                 state = STATE_CACHE.get(path)
                 if state is None:
                     continue
                 try:
-                    kernel.warm_views(state, buried=buried)
+                    kernel.warm_views(state, buried=kind)
                 except Exception:  # noqa: BLE001 - a warm-up must never surface as an error
                     continue
 

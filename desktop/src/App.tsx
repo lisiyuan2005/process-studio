@@ -180,6 +180,10 @@ export default function App() {
   // the same pixels -- and are most of a stack's mesh, so they are left
   // out until something is hidden. This forces them on regardless.
   const [alwaysBuried, setAlwaysBuried] = useState(false);
+  // Prepare every step's buried faces when a flow finishes, rather than
+  // each step's when its 3D view is opened. Off: it is the heavy mesh,
+  // and a flow of twenty-odd steps is half a minute of it.
+  const [prepareBuried, setPrepareBuried] = useState(false);
   const [sectionAxis, setSectionAxis] = useState<SectionAxis>("y");
   // Which of the project's saved AA–BB lines the section follows.
   const [activeLineId, setActiveLineId] = useState<string | null>(null);
@@ -981,7 +985,7 @@ export default function App() {
       setSaveState("saved");
       const result = await bridge.runFlow(
         saved.root,
-        { branchId: branch.id, throughStepId, force, fromStepId },
+        { branchId: branch.id, throughStepId, force, fromStepId, prepareBuried },
         requestId,
       );
       skipNextAutosave.current = true;
@@ -1379,6 +1383,17 @@ export default function App() {
                 label: hiddenMaterials.length
                   ? `Built now: a material is hidden (${hiddenMaterials.length})`
                   : "Built when a material is hidden",
+                action: () => {},
+                disabled: true,
+              },
+              {
+                label: "Prepare them for every step after a run",
+                separated: true,
+                action: () => setPrepareBuried((value) => !value),
+                checked: prepareBuried,
+              },
+              {
+                label: "Otherwise prepared when a step's 3D view is opened",
                 action: () => {},
                 disabled: true,
               },

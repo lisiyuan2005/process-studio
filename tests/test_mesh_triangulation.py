@@ -367,3 +367,82 @@ def test_the_free_surface_does_not_wait_for_the_buried_faces_being_built():
     finally:
         slab_module._load_or_build_meshes = real
     assert ("ears", True) in state.display_meshes
+
+
+def test_looking_at_a_step_prepares_what_hiding_a_material_will_need(tmp_path):
+    """Opening a step's 3D view is the first good evidence that its buried
+    faces will be wanted: hiding a material is the next thing anyone does,
+    and that mesh costs several times the one just sent.
+
+    It must not be built in front of the answer, though -- the view is
+    waiting on that one.
+    """
+    import threading
+    import time
+
+    from process_studio.defaults import default_grid
+    from process_studio.kernels import get_kernel
+    from process_studio.kernels.slab import SlabState
+    from process_studio.models import ProjectDefinition
+    from process_studio.worker import protocol
+    from process_studio.worker.serialize import grid_dict
+
+    kernel = get_kernel("slab")
+    project = ProjectDefinition("m", grid_dict(default_grid()), kernel="slab", resolution_um=0.01)
+    state = SlabState(device=_stack_with_a_buried_layer(), z_offset=0.0)
+
+    # Wedge the build open, so "it did not block" is a fact rather than a
+    # race that a fast machine would win anyway.
+    from process_studio.kernels import slab as slab_module
+
+    started, release = threading.Event(), threading.Event()
+    real = slab_module._load_or_build_meshes
+
+    def slow(state_, engine, buried):
+        if buried:
+            started.set()
+            assert release.wait(30)
+        return real(state_, engine, buried)
+
+    slab_module._load_or_build_meshes = slow
+    try:
+        protocol._prepare_buried_faces_later(kernel, state, project)
+        assert started.wait(30), "the buried faces were never started"
+        # The request's own thread is here, not inside that build.
+        assert ("ears", True) not in state.display_meshes
+        release.set()
+        deadline = time.monotonic() + 30
+        while ("ears", True) not in state.display_meshes and time.monotonic() < deadline:
+            time.sleep(0.01)
+    finally:
+        slab_module._load_or_build_meshes = real
+        release.set()
+    assert ("ears", True) in state.display_meshes, "the buried faces were never prepared"
+
+
+def test_a_run_prepares_every_step_for_the_3d_view_but_not_the_hidden_faces(monkeypatch):
+    """The cheap mesh for all of them, because any could be the one opened;
+    the heavy one for none, because opening a step starts its own."""
+    from process_studio.worker import runner
+
+    asked: list[tuple[str, bool]] = []
+
+    class Spy:
+        def warm_views(self, state, buried=False):
+            asked.append((state, buried))
+
+    paths = [f"step-{index}" for index in range(4)]
+    monkeypatch.setattr(runner.STATE_CACHE, "get", lambda path: path)
+    runner._warm_views_later(Spy(), paths)
+    deadline = __import__("time").monotonic() + 30
+    while len(asked) < len(paths) and __import__("time").monotonic() < deadline:
+        __import__("time").sleep(0.01)
+    assert [path for path, _ in asked] == list(reversed(paths)), "newest first"
+    assert not any(buried for _, buried in asked), "no buried faces until something asks"
+
+    asked.clear()
+    runner._warm_views_later(Spy(), paths, buried=True)
+    deadline = __import__("time").monotonic() + 30
+    while len(asked) < 2 * len(paths) and __import__("time").monotonic() < deadline:
+        __import__("time").sleep(0.01)
+    assert [buried for _, buried in asked] == [False] * len(paths) + [True] * len(paths)
