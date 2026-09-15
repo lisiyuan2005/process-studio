@@ -44,7 +44,7 @@ Windows 产物必须整个目录一起用：exe 会在自己同级的 `resources
 **`v0.9.0` 起 Windows 包不再用 PyInstaller**，改用官方的 embeddable Python 加普通 PyPI wheel（`python.exe` 是签名的官方解释器，装进去的包都是正式发行的 wheel），不再是杀毒软件常见的误报对象。`v0.8.x` 及更早版本仍可能解压后报 `The packaged process worker was not found`（PyInstaller 打的 `process-studio-worker.exe` 被隔离了）；要么升级到 `v0.9.0`，要么到保护历史记录里恢复并把目录加入排除项，要么不用打包的 worker，改装 Python 包（需要 Python 3.11 以上）：
 
 ```powershell
-py -m pip install "process-studio[render] @ git+https://github.com/lisiyuan2005/process-studio@v0.9.3"
+py -m pip install "process-studio[render] @ git+https://github.com/lisiyuan2005/process-studio@v0.9.4"
 ```
 
 之后照常双击 `ProcessStudio.exe`：找不到打包的 worker 时它会自动用 pip 装出来的 `process-studio-worker`（在 PATH 或 Python 的 Scripts 目录里找；也可以用环境变量 `PROCESS_STUDIO_WORKER` 指定路径）。这个 worker 是普通的 Python 启动器，杀毒软件不会动它，代码和打包版完全一样。
