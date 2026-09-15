@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import sys
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import IO, Any, Mapping
@@ -32,6 +33,16 @@ COALESCED_METHODS = frozenset({"get_surfaces", "get_section", "get_top_view", "p
 #: Methods that only read stored results, run beside whatever else is going on.
 VIEW_METHODS = frozenset({"get_surfaces", "get_section", "get_top_view"})
 LANES = ("main", "views")
+
+#: How long to wait, once the input has closed, for work that is still
+#: running to notice and put its answer down. Then the worker leaves
+#: regardless: the executors are daemon threads, so the process ends with
+#: the main thread. Waiting without a limit meant a worker outliving the
+#: shell for as long as whatever it was doing took -- and a running
+#: interpreter holds the directory it lives in open on Windows, so the
+#: application's folder could not be deleted. Not every long computation
+#: is interruptible: a display mesh has no cancellation check at all.
+SHUTDOWN_GRACE_SECONDS = 2.0
 
 
 @dataclass
@@ -116,8 +127,9 @@ class Server:
                     if pending is not None:
                         pending.cancel.set()
                 self._condition.notify_all()
+            deadline = time.monotonic() + SHUTDOWN_GRACE_SECONDS
             for executor in executors:
-                executor.join()
+                executor.join(max(0.0, deadline - time.monotonic()))
         return 0
 
     def _accept(self, raw_line: str) -> None:

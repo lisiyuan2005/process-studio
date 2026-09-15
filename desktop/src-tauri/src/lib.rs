@@ -6,7 +6,12 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
+
+/// How long the worker is given to finish writing and leave on its own
+/// once its input has closed, before it is ended outright.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 
 /// RPC methods the window is allowed to reach. The worker speaks more than
 /// this over stdin, but only these are exposed to page code.
@@ -288,7 +293,7 @@ const STDERR_TAIL_LINES: usize = 40;
 /// answered with the failure, and the next request starts a fresh process.
 struct Worker {
     child: Mutex<Child>,
-    stdin: Mutex<ChildStdin>,
+    stdin: Mutex<Option<ChildStdin>>,
     pending: Mutex<HashMap<String, mpsc::Sender<Reply>>>,
     alive: AtomicBool,
     stderr_tail: Mutex<VecDeque<String>>,
@@ -318,7 +323,7 @@ impl Worker {
         let stderr = child.stderr.take().ok_or("Worker stderr is unavailable.")?;
         let worker = Arc::new(Worker {
             child: Mutex::new(child),
-            stdin: Mutex::new(stdin),
+            stdin: Mutex::new(Some(stdin)),
             pending: Mutex::new(HashMap::new()),
             alive: AtomicBool::new(true),
             stderr_tail: Mutex::new(VecDeque::new()),
@@ -428,12 +433,42 @@ impl Worker {
     }
 
     fn write_line(&self, line: &str) -> Result<(), String> {
-        let mut stdin = self.stdin.lock().unwrap();
+        let mut held = self.stdin.lock().unwrap();
+        let stdin = held
+            .as_mut()
+            .ok_or("The process worker is shutting down.")?;
         stdin
             .write_all(line.as_bytes())
             .and_then(|_| stdin.write_all(b"\n"))
             .and_then(|_| stdin.flush())
             .map_err(|error| format!("Cannot send the request to the worker: {error}"))
+    }
+
+    /// Close the worker's input so it can finish what it is writing, and
+    /// end it if it does not go by itself.
+    ///
+    /// The polite half matters: a worker killed in the middle of storing a
+    /// step's snapshot leaves a half-written file. The blunt half matters
+    /// too, because not everything it does is interruptible -- building a
+    /// display mesh has no cancellation check -- and a worker still
+    /// running holds the directory it was started from.
+    fn shutdown(&self) {
+        drop(self.stdin.lock().unwrap().take());
+        let deadline = Instant::now() + SHUTDOWN_GRACE;
+        loop {
+            let mut child = self.child.lock().unwrap();
+            match child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) if Instant::now() < deadline => {}
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return;
+                }
+            }
+            drop(child);
+            thread::sleep(Duration::from_millis(25));
+        }
     }
 
     fn request(&self, id: String, method: String, params: Value) -> Reply {
@@ -473,6 +508,16 @@ struct WorkerHost {
 }
 
 impl WorkerHost {
+    /// End the worker, if one is running. Called when the application is
+    /// on its way out; after this nothing of ours holds the install
+    /// directory open.
+    fn shutdown(&self) {
+        let worker = self.current.lock().unwrap().take();
+        if let Some(worker) = worker {
+            worker.shutdown();
+        }
+    }
+
     fn worker(&self, app: &AppHandle) -> Result<Arc<Worker>, String> {
         let mut current = self.current.lock().unwrap();
         if let Some(worker) = current.as_ref() {
@@ -563,8 +608,22 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(WorkerHost::default())
         .invoke_handler(tauri::generate_handler![worker_invoke, worker_cancel, quit_for_update])
-        .run(tauri::generate_context!())
-        .expect("error while running Process Studio");
+        .build(tauri::generate_context!())
+        .expect("error while running Process Studio")
+        .run(|app, event| {
+            // Nothing else ends the worker. Closing its stdin asks it to
+            // stop, but it only notices between requests, and some of what
+            // it does -- building a display mesh -- cannot be interrupted
+            // at all. A worker left running holds the directory it was
+            // started from, so on Windows the application's own folder
+            // cannot be deleted, and a stale one can outlive several
+            // sessions. So the shell ends it on the way out.
+            if matches!(event, tauri::RunEvent::Exit) {
+                if let Some(host) = app.try_state::<WorkerHost>() {
+                    host.shutdown();
+                }
+            }
+        });
 }
 
 #[cfg(test)]
@@ -693,6 +752,32 @@ mod tests {
         assert!(worker.alive.load(Ordering::SeqCst));
         worker.request("after".into(), "ping".into(), json!({})).unwrap();
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn shutdown_ends_the_worker_so_nothing_holds_the_install_folder() {
+        // Nothing else ends it. Closing its input asks it to stop, but it
+        // only notices between requests and some of what it does cannot be
+        // interrupted, and a worker still running holds the directory it
+        // was started from -- which is why the application's folder could
+        // not be deleted.
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let worker = spawn_test_worker(Arc::clone(&events), Arc::new(AtomicUsize::new(0)));
+        worker.request("warm".into(), "ping".into(), json!({})).unwrap();
+        assert!(worker.alive.load(Ordering::SeqCst));
+
+        worker.shutdown();
+
+        // Gone, and within the grace rather than after it: closing the
+        // input is enough for a worker that is not busy.
+        let started = Instant::now();
+        assert!(
+            worker.child.lock().unwrap().try_wait().unwrap().is_some(),
+            "the worker is still running after shutdown"
+        );
+        assert!(started.elapsed() < SHUTDOWN_GRACE);
+        // And it takes no more requests, rather than writing into a closed pipe.
+        assert!(worker.request("after".into(), "ping".into(), json!({})).is_err());
     }
 
     #[test]
