@@ -25,6 +25,15 @@ dependencies = [
   "mapbox-earcut>=1.0",
   # Flow files and the File menu's YAML export.
   "pyyaml>=6",
+  # Checking for a new release over https. A packaged worker's OpenSSL was
+  # built elsewhere and its compiled-in path to a CA bundle points at
+  # nothing on the user's machine, so without these every check fails with
+  # "unable to get local issuer certificate". truststore reads the
+  # operating system's own store, which is the right answer and the only
+  # one that knows about a company's inspecting proxy; certifi is the
+  # fallback where it cannot.
+  "truststore>=0.9",
+  "certifi>=2024.2.2",
 ]
 
 [project.scripts]

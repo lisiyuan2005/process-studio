@@ -8,8 +8,10 @@ public release feed is read, and only its own pages are ever opened.
 
 from __future__ import annotations
 
+import functools
 import json
 import re
+import ssl
 import sys
 import urllib.error
 import urllib.request
@@ -79,6 +81,54 @@ def describe_release(release: Mapping[str, Any], *, current: str = __version__) 
     }
 
 
+@functools.lru_cache(maxsize=1)
+def verifier() -> ssl.SSLContext:
+    """Where to look for the authorities GitHub's certificate chain ends at.
+
+    A packaged worker carries its own Python, and its OpenSSL was built on
+    a machine that is not this one: the path to a CA bundle compiled into
+    it points at nothing here, so every https request dies with "unable to
+    get local issuer certificate". Nothing is wrong with the network and
+    nothing is wrong with GitHub; the interpreter simply has no idea who
+    to trust.
+
+    Asking the operating system is the best answer: it is the same set of
+    authorities the machine's browser trusts, so a root that the user's IT
+    put there for an inspecting proxy is included, which no bundle we ship
+    could know about. Where that is unavailable, the bundle we ship is the
+    fallback, and the interpreter's own idea is the last resort.
+    """
+    try:
+        import truststore
+
+        return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    except Exception:  # noqa: BLE001 - any failure here falls through to a bundle
+        pass
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:  # noqa: BLE001 - and then to whatever Python was built with
+        return ssl.create_default_context()
+
+
+def _unreachable(error: Exception) -> WorkerError:
+    """The message for a request that never got an answer."""
+    if isinstance(error, urllib.error.URLError):
+        error = error.reason if isinstance(error.reason, Exception) else error
+    if isinstance(error, ssl.SSLCertVerificationError):
+        return WorkerError(
+            "Could not verify GitHub's certificate, so the check was refused: "
+            f"{error}. This is about which certificate authorities this "
+            "machine trusts, not about the network. On a company network "
+            "that inspects https, the root certificate your IT installs has "
+            "to be in the system's own store; the update check reads that "
+            "store. Downloading the release from the project's page in a "
+            "browser always works."
+        )
+    return WorkerError(f"Could not reach GitHub: {error}")
+
+
 def fetch_latest_release() -> dict[str, Any]:
     request = urllib.request.Request(
         RELEASES_API,
@@ -88,14 +138,16 @@ def fetch_latest_release() -> dict[str, Any]:
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+        with urllib.request.urlopen(
+            request, timeout=TIMEOUT_SECONDS, context=verifier()
+        ) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         if error.code == 404:
             raise WorkerError("No release has been published yet.") from error
         raise WorkerError(f"GitHub answered {error.code} to the release check.") from error
     except (urllib.error.URLError, TimeoutError, OSError) as error:
-        raise WorkerError(f"Could not reach GitHub: {error}") from error
+        raise _unreachable(error) from error
 
 
 def check_update() -> dict[str, Any]:
@@ -158,7 +210,9 @@ def download(url: str, destination: Path, report: Callable[[int, int], None] | N
         raise InvalidRequest("Only the application's own release files are downloaded.")
     request = urllib.request.Request(url, headers={"User-Agent": f"process-studio/{__version__}"})
     try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response, destination.open("wb") as out:
+        with urllib.request.urlopen(
+            request, timeout=TIMEOUT_SECONDS, context=verifier()
+        ) as response, destination.open("wb") as out:
             total = int(response.headers.get("Content-Length") or 0)
             received = 0
             while True:
@@ -170,7 +224,7 @@ def download(url: str, destination: Path, report: Callable[[int, int], None] | N
                 if report:
                     report(received, total)
     except (urllib.error.URLError, TimeoutError, OSError) as error:
-        raise WorkerError(f"The download failed: {error}") from error
+        raise WorkerError(f"The download failed: {_unreachable(error)}") from error
 
 
 def stage_update(archive: Path, staging: Path) -> Path:

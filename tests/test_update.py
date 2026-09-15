@@ -143,3 +143,58 @@ def test_a_failed_update_leaves_a_folder_that_the_next_one_clears(tmp_path):
     keep.mkdir()
     update.clear_stale_staging(tmp_path)
     assert not wreck.exists() and keep.exists() and app.exists()
+
+
+def test_the_update_check_verifies_against_the_system_trust_store():
+    """A packaged worker has no CA bundle of its own.
+
+    Its OpenSSL was built on a machine that is not the user's, so the path
+    to a bundle compiled into it points at nothing and every check dies
+    with "unable to get local issuer certificate". The operating system's
+    store is the right place to look: it is what the machine's browser
+    trusts, including the root a company's inspecting proxy needs.
+    """
+    import ssl
+
+    context = update.verifier()
+    assert isinstance(context, ssl.SSLContext)
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname
+    # The same context every time; building one reads a certificate store.
+    assert update.verifier() is context
+
+
+def test_the_bundle_is_the_fallback_when_the_system_store_is_unreachable(monkeypatch):
+    import builtins
+    import ssl
+
+    real_import = builtins.__import__
+
+    def without_truststore(name, *args, **kwargs):
+        if name == "truststore":
+            raise ImportError("no truststore here")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", without_truststore)
+    update.verifier.cache_clear()
+    try:
+        context = update.verifier()
+        assert isinstance(context, ssl.SSLContext) and context.check_hostname
+        assert context.get_ca_certs(), "the fallback has to carry authorities of its own"
+    finally:
+        monkeypatch.undo()
+        update.verifier.cache_clear()
+
+
+def test_a_certificate_failure_says_what_it_is_about():
+    """The raw OpenSSL line tells a user nothing they can act on."""
+    import ssl
+    import urllib.error
+
+    verify = urllib.error.URLError(
+        ssl.SSLCertVerificationError(1, "unable to get local issuer certificate")
+    )
+    message = str(update._unreachable(verify))
+    assert "certificate" in message and "not about the network" in message
+    # Anything else keeps the plain wording.
+    assert "Could not reach GitHub" in str(update._unreachable(urllib.error.URLError("refused")))
