@@ -35,6 +35,7 @@ from deviceflow.cancellation import Cancelled as DeviceFlowCancelled, cancelling
 from deviceflow.exceptions import DeviceFlowError
 from deviceflow.mask import Mask
 from deviceflow.state_io import decode_state, encode_state
+from deviceflow._internal.mesh.triangulate import DEFAULT_ENGINE, ENGINES
 
 from ..layout.quick_sketch import QuickSketch, SketchShape
 from ..visualization import height_levels
@@ -148,10 +149,11 @@ class SlabState:
         self.z_offset = float(z_offset)
         #: Where this state was stored, so its display mesh can live beside it.
         self.path: Path | None = None
-        #: The display mesh, once built: material -> (vertices, triangles,
-        #: one flag per triangle saying it lies against another material,
-        #: and which one: its index in the mesh order, -1 for none).
-        self.display_meshes: DisplayMeshes | None = None
+        #: The display mesh, once built, per triangulator: material ->
+        #: (vertices, triangles, one flag per triangle saying it lies
+        #: against another material, and which one: its index in the mesh
+        #: order, -1 for none).
+        self.display_meshes: dict[str, DisplayMeshes] = {}
         #: Held while the mesh is being built, so a view asked for during
         #: the background build waits for it instead of building a second one.
         self.mesh_lock = threading.Lock()
@@ -218,11 +220,14 @@ class SlabState:
 
 MESH_SIDECAR = ".mesh.npz"
 
+#: Triangulators the 3D view can be built with; see mesh/triangulate.py.
+MESH_ENGINES = ENGINES
+
 
 DisplayMeshes = dict[str, tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]
 
 
-def display_meshes(state: SlabState) -> DisplayMeshes:
+def display_meshes(state: SlabState, engine: str | None = None) -> DisplayMeshes:
     """The 3D view's triangles for each material, built once per stored state.
 
     Building the mesh is the slow part of the slab kernel: seconds for a few
@@ -233,21 +238,41 @@ def display_meshes(state: SlabState) -> DisplayMeshes:
     for it again. The vertices are welded and the triangles indexed, which
     is a third of the size of one vertex per corner; the viewer shades each
     face on its own from the indexed form.
+
+    ``engine`` picks the triangulator (see ``mesh.triangulate``). The two
+    describe the same solid, so this is a comparison switch rather than a
+    setting that changes an answer; each is kept on its own, because a mesh
+    built one way is not what the other asked to look at.
     """
-    if state.display_meshes is not None:
-        return state.display_meshes
+    engine = engine or DEFAULT_ENGINE
+    built = state.display_meshes.get(engine)
+    if built is not None:
+        return built
     with state.mesh_lock:
-        if state.display_meshes is None:
-            state.display_meshes = _load_or_build_meshes(state)
-        return state.display_meshes
+        if engine not in state.display_meshes:
+            state.display_meshes[engine] = _load_or_build_meshes(state, engine)
+        return state.display_meshes[engine]
 
 
-def _load_or_build_meshes(state: SlabState) -> DisplayMeshes:
-    sidecar = None if state.path is None else state.path.with_name(state.path.name + MESH_SIDECAR)
+def _sidecar_path(state: SlabState, engine: str) -> Path | None:
+    """Where this engine's mesh is remembered beside the snapshot."""
+    if state.path is None:
+        return None
+    suffix = MESH_SIDECAR if engine == DEFAULT_ENGINE else f".mesh-{engine}.npz"
+    return state.path.with_name(state.path.name + suffix)
+
+
+def _load_or_build_meshes(state: SlabState, engine: str) -> DisplayMeshes:
+    sidecar = _sidecar_path(state, engine)
     meshes: DisplayMeshes | None = None
     if sidecar is not None and sidecar.is_file():
         try:
             with np.load(sidecar) as stored:
+                # A file from before the engine was recorded, or from the
+                # other one, describes the same solid but not the triangles
+                # that were asked for.
+                if str(stored["engine"]) != engine:
+                    raise KeyError("engine")
                 names = [str(name) for name in stored["materials"]]
                 meshes = {
                     name: (
@@ -262,9 +287,11 @@ def _load_or_build_meshes(state: SlabState) -> DisplayMeshes:
             meshes = None  # an unreadable or older sidecar is simply rebuilt
     if meshes is None:
         from deviceflow._internal.mesh.builder import build_material_meshes
+        from deviceflow._internal.mesh.triangulate import using
 
         state.device._state.validate()
-        built = build_material_meshes(state.device._state, manifold=False)
+        with using(engine):
+            built = build_material_meshes(state.device._state, manifold=False)
         meshes = {
             material.name: (
                 np.ascontiguousarray(mesh.vertices, dtype=np.float32),
@@ -280,7 +307,10 @@ def _load_or_build_meshes(state: SlabState) -> DisplayMeshes:
             for material, mesh in built.items()
         }
         if sidecar is not None:
-            arrays: dict[str, np.ndarray] = {"materials": np.array(list(meshes), dtype=str)}
+            arrays: dict[str, np.ndarray] = {
+                "materials": np.array(list(meshes), dtype=str),
+                "engine": np.array(engine),
+            }
             for index, (vertices, faces, interface, neighbour) in enumerate(meshes.values()):
                 arrays[f"{index}.vertices"] = vertices
                 arrays[f"{index}.faces"] = faces
@@ -869,10 +899,10 @@ class SlabKernel:
             for slab in state.device._state.slabs
             for region in slab.regions.values()
         )
-        if state.display_meshes is not None:
+        for meshes in state.display_meshes.values():
             coordinates += sum(
                 (vertices.nbytes + faces.nbytes) // 8
-                for vertices, faces, _interface, _neighbour in state.display_meshes.values()
+                for vertices, faces, _interface, _neighbour in meshes.values()
             )
         return 64 * 1024 + coordinates * 4 * 16
 
@@ -885,9 +915,11 @@ class SlabKernel:
         project: ProjectDefinition,
         interpolation: int = 1,
         materials: Sequence[str] | None = None,
+        triangulation: str | None = None,
     ) -> dict[str, Any]:
         device = state.device
-        meshes = display_meshes(state)
+        engine = triangulation or DEFAULT_ENGINE
+        meshes = display_meshes(state, engine)
         selected = [
             name
             for name in state.priority
@@ -928,6 +960,7 @@ class SlabKernel:
         return {
             "interpolation": 1,
             "exact": True,
+            "triangulation": engine,
             "bounds": {
                 "xMin": x_min,
                 "xMax": x_max,

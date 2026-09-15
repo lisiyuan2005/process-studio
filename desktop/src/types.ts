@@ -261,6 +261,8 @@ export interface SurfaceDocument {
   sampledSpacingUm?: number;
   /** True when the surfaces are the geometry itself, not an isosurface. */
   exact?: boolean;
+  /** Which triangulator built these meshes; absent from other kernels. */
+  triangulation?: Triangulation;
   bounds: {
     xMin: number;
     xMax: number;
@@ -319,6 +321,15 @@ export interface MaskPreview {
 }
 
 export type TopShading = "material" | "height";
+
+/**
+ * How the slab kernel's display mesh is triangulated. The two describe the
+ * same solid -- same vertices, same triangle count, same area and volume --
+ * and differ only in which diagonals cut a flat cap, so this compares them
+ * rather than changing an answer. Ear clipping is the default and is about
+ * thirty times faster over a cap with a hole array.
+ */
+export type Triangulation = "ears" | "delaunay";
 
 export interface TopViewDocument {
   image: string;

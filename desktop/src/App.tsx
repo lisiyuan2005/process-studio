@@ -79,6 +79,7 @@ import type {
   ProcessStep,
   ProcessType,
   TopShading,
+  Triangulation,
   ParameterValue,
   QuickSketch,
   SectionAxis,
@@ -164,6 +165,9 @@ export default function App() {
   const [interpolation, setInterpolation] = useState(1);
   // Top view coloured by the topmost material, or by surface height.
   const [topShading, setTopShading] = useState<TopShading>("material");
+  // Which triangulator builds the 3D mesh. Ear clipping is the default;
+  // the other is there to compare against, and costs a rebuild.
+  const [triangulation, setTriangulation] = useState<Triangulation>("ears");
   const [sectionAxis, setSectionAxis] = useState<SectionAxis>("y");
   // Which of the project's saved AA–BB lines the section follows.
   const [activeLineId, setActiveLineId] = useState<string | null>(null);
@@ -839,7 +843,7 @@ export default function App() {
       // A stale step still has the result of the last run, so it is shown,
       // labelled out of date, instead of being refused.
       if (mode === "surfaces") {
-        const key = `surfaces:${target}:${interpolation}`;
+        const key = `surfaces:${target}:${interpolation}:${triangulation}`;
         const hit = cached<SurfaceDocument>(key);
         if (hit) {
           setSurfaces(hit);
@@ -847,7 +851,7 @@ export default function App() {
           return;
         }
         setViewLoading(true);
-        const next = await bridge.getSurfaces(root, request);
+        const next = await bridge.getSurfaces(root, { ...request, triangulation });
         if (token !== viewToken.current) return;
         setSurfaces(remember(key, next));
       } else if (mode === "section") {
@@ -906,6 +910,7 @@ export default function App() {
     mode,
     interpolation,
     topShading,
+    triangulation,
     sectionAxis,
     sectionIndex,
     sectionLine,
@@ -1575,6 +1580,8 @@ export default function App() {
           onInterpolationChange={setInterpolation}
           topShading={topShading}
           onTopShadingChange={setTopShading}
+          triangulation={triangulation}
+          onTriangulationChange={setTriangulation}
           sectionAxis={sectionAxis}
           onSectionAxisChange={(axis) => {
             setSectionAxis(axis);

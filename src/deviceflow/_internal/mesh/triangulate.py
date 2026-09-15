@@ -19,6 +19,10 @@ checks, so nothing depends on the accelerator being there.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Iterator
+
 import numpy as np
 import shapely
 from shapely.geometry import Polygon
@@ -33,13 +37,39 @@ except ImportError:  # pragma: no cover - exercised by the fallback test
 XY = tuple[float, float]
 Triangle = tuple[XY, XY, XY]
 
+#: Ear clipping where it is available; the name is what a caller asks for.
+EARS = "ears"
+DELAUNAY = "delaunay"
+ENGINES = (EARS, DELAUNAY)
+DEFAULT_ENGINE = EARS
+
+#: Set for the duration of one mesh build; None means the default. It is a
+#: context variable rather than an argument because the triangulator is
+#: reached three levels down through the mesh builder and belongs to "this
+#: build", not to any one function's contract -- the same reason the
+#: cancellation check is one.
+_engine: ContextVar[str | None] = ContextVar("deviceflow_triangulator", default=None)
+
+
+@contextmanager
+def using(engine: str | None) -> Iterator[None]:
+    """Build with ``engine`` ("ears", "delaunay", or None for the default)."""
+    if engine is not None and engine not in ENGINES:
+        raise MeshError(f"unknown triangulator {engine!r}; expected one of {ENGINES}")
+    token = _engine.set(engine)
+    try:
+        yield
+    finally:
+        _engine.reset(token)
+
 
 def triangulate(face: Polygon) -> list[Triangle]:
     """CCW triangles covering ``face``; vertices are exactly the face's vertices."""
     if face.is_empty or face.area <= 0:
         return []
+    wanted = _engine.get() or DEFAULT_ENGINE
     corners = None
-    if mapbox_earcut is not None:
+    if wanted == EARS and mapbox_earcut is not None:
         corners = _by_ears(face)
     if corners is None:
         corners = _by_delaunay(face)

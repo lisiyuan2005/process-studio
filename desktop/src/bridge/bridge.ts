@@ -13,6 +13,7 @@ import type {
   SectionLine,
   SurfaceDocument,
   TopShading,
+  Triangulation,
   UpdateInfo,
   TopViewDocument,
   WindowBounds,
@@ -34,7 +35,10 @@ export interface ViewRequest {
   interpolation?: number;
   /** Top view only: colour by topmost material (default) or by surface height. */
   shading?: TopShading;
+  /** 3D view only: which triangulator builds the mesh. */
+  triangulation?: Triangulation;
 }
+
 
 export interface DesktopBridge {
   readonly runtime: "tauri" | "browser";

@@ -101,6 +101,9 @@ class LevelSetKernel:
         project: ProjectDefinition,
         interpolation: int = 1,
         materials: Sequence[str] | None = None,
+        #: Which triangulator built the mesh; only the slab kernel
+        #: has a choice, and the level-set kernel marches cubes.
+        triangulation: str | None = None,
     ) -> dict[str, Any]:
         return material_surfaces(
             state,

@@ -25,6 +25,12 @@ from ..libraries import RecipeLibrary
 from ..models import ProcessType
 from ..simulation_settings import MAXIMUM_NODES, estimate_grid, grid_for_target_spacing
 from .errors import InvalidRequest, WorkerError, WorkspaceError
+
+#: Triangulators the slab kernel's 3D view can be built with. Spelt out
+#: rather than imported: this module is the entry point of every build,
+#: and the list lives in deviceflow's mesh code, which a level-set-only
+#: package has no shapely for. A test keeps the two the same.
+MESH_ENGINES = ("ears", "delaunay")
 from .export import write_image, write_mesh
 from .render import MAXIMUM_INTERPOLATION, MESHES_AVAILABLE, sketch_preview_image
 from .files import copy_workspace, export_flow, export_library, import_flow, import_library, reveal_path
@@ -695,11 +701,19 @@ def dispatch(
     if method == "get_surfaces":
         state, repository, project, kernel = _view_state(parameters)
         materials = parameters.get("materials")
+        triangulation = parameters.get("triangulation")
+        if triangulation is not None:
+            triangulation = str(triangulation)
+            if triangulation not in MESH_ENGINES:
+                raise InvalidRequest(
+                    f"get_surfaces triangulation must be one of {', '.join(MESH_ENGINES)}."
+                )
         payload = kernel.surfaces(
             state,
             project=project,
             interpolation=parameters.get("interpolation", 1),
             materials=None if materials is None else [str(name) for name in materials],
+            triangulation=triangulation,
         )
         colors = _material_colors(repository)
         for surface in payload["surfaces"]:

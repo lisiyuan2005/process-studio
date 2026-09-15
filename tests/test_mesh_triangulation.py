@@ -113,3 +113,63 @@ def test_the_display_mesh_is_the_same_solid_either_way(monkeypatch):
         assert len(mesh.faces) == len(other.faces)
         assert mesh.area == pytest.approx(other.area, rel=1e-9)
         assert mesh.volume == pytest.approx(other.volume, rel=1e-9)
+
+
+def test_the_kernel_keeps_a_mesh_per_triangulator(tmp_path):
+    """The 3D view can be asked for either, and each is cached on its own.
+
+    They describe the same solid, so this is a comparison switch; but a
+    mesh built one way is not the triangles the other asked to look at, so
+    neither the in-memory cache nor the file beside the snapshot may hand
+    back the wrong one.
+    """
+    from process_studio.defaults import default_grid
+    from process_studio.kernels import get_kernel
+    from process_studio.kernels.slab import SlabState, display_meshes
+    from process_studio.models import ProjectDefinition
+    from process_studio.worker.serialize import grid_dict
+
+    kernel = get_kernel("slab")
+    project = ProjectDefinition("mesh", grid_dict(default_grid()), kernel="slab", resolution_um=0.01)
+    state = SlabState(device=_stack(), z_offset=0.0)
+    state.path = tmp_path / "step.dfz"
+
+    ears = kernel.surfaces(state, project=project)
+    assert ears["triangulation"] == "ears"  # the default
+    delaunay = kernel.surfaces(state, project=project, triangulation="delaunay")
+    assert delaunay["triangulation"] == "delaunay"
+    assert set(state.display_meshes) == {"ears", "delaunay"}
+    # Same solid: the payloads agree on how much of it there is.
+    by_name = {item["material"]: item for item in ears["surfaces"]}
+    for item in delaunay["surfaces"]:
+        assert item["triangleCount"] == by_name[item["material"]]["triangleCount"]
+        assert item["vertexCount"] == by_name[item["material"]]["vertexCount"]
+
+    # Each engine remembers itself beside the snapshot, and neither file is
+    # read back for the other engine.
+    written = sorted(path.name for path in tmp_path.iterdir() if path.name != "step.dfz")
+    assert written == ["step.dfz.mesh-delaunay.npz", "step.dfz.mesh.npz"]
+    fresh = SlabState(device=_stack(), z_offset=0.0)
+    fresh.path = state.path
+    assert len(display_meshes(fresh, "delaunay")) == len(delaunay["surfaces"])
+
+
+def test_a_sidecar_from_before_the_engine_was_recorded_is_rebuilt(tmp_path):
+    import numpy as np
+
+    from process_studio.kernels.slab import SlabState, display_meshes
+
+    state = SlabState(device=_stack(), z_offset=0.0)
+    state.path = tmp_path / "step.dfz"
+    sidecar = tmp_path / "step.dfz.mesh.npz"
+    np.savez(sidecar, materials=np.array(["Nonsense"], dtype=str))
+    meshes = display_meshes(state)
+    assert "Nonsense" not in meshes and "SiN" in meshes
+
+
+def test_an_unknown_triangulator_is_refused():
+    from deviceflow._internal.mesh.triangulate import using
+
+    with pytest.raises(MeshError, match="unknown triangulator"):
+        with using("marching cubes"):
+            pass

@@ -32,6 +32,7 @@ import type {
   SurfacePayload,
   TopShading,
   TopViewDocument,
+  Triangulation,
 } from "../types";
 
 export type ViewMode = "surfaces" | "section" | "top";
@@ -76,6 +77,9 @@ interface ViewportProps {
   topView?: TopViewDocument;
   topShading: TopShading;
   onTopShadingChange: (shading: TopShading) => void;
+  /** 3D view: which triangulator builds the mesh. */
+  triangulation: Triangulation;
+  onTriangulationChange: (triangulation: Triangulation) => void;
 }
 
 /** A temporary colour or opacity for one material in the 3D view; nothing is saved. */
@@ -746,6 +750,8 @@ export function Viewport({
   topView,
   topShading,
   onTopShadingChange,
+  triangulation,
+  onTriangulationChange,
 }: ViewportProps) {
   // The 3D clipping plane and the material whose look is being edited.
   const [clip, setClip] = useState<ClipState>({ axis: null, fraction: 0.5, flip: false });
@@ -1182,6 +1188,22 @@ export function Viewport({
             >
               <option value="material">Topmost material</option>
               <option value="height">Surface height</option>
+            </select>
+          </label>
+        )}
+        {mode === "surfaces" && (
+          <label>
+            Mesh
+            <select
+              value={triangulation}
+              title={
+                "How the flat faces are cut into triangles. Both describe the same "
+                + "solid; ear clipping builds it about twice as fast."
+              }
+              onChange={(event) => onTriangulationChange(event.target.value as Triangulation)}
+            >
+              <option value="ears">Ear clipping</option>
+              <option value="delaunay">Delaunay</option>
             </select>
           </label>
         )}

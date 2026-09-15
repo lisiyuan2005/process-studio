@@ -1083,3 +1083,13 @@ def test_the_file_menu_methods_export_import_and_copy(tmp_path):
         call("copy_workspace", root=root, destination=root)
     with pytest.raises(InvalidRequest):
         call("export_library", root=root, kind="sketches", destination=str(tmp_path / "x.xlsx"))
+
+
+def test_the_protocol_and_the_mesh_code_agree_on_the_triangulators():
+    """protocol.py spells the list out rather than importing it, because a
+    level-set-only package has no shapely for deviceflow's mesh code."""
+    from deviceflow._internal.mesh.triangulate import ENGINES
+
+    from process_studio.worker.protocol import MESH_ENGINES
+
+    assert MESH_ENGINES == ENGINES

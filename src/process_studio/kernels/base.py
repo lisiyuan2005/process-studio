@@ -128,6 +128,9 @@ class Kernel(Protocol):
         project: ProjectDefinition,
         interpolation: int = 1,
         materials: Sequence[str] | None = None,
+        #: Which triangulator built the mesh; only the slab kernel
+        #: has a choice, and the level-set kernel marches cubes.
+        triangulation: str | None = None,
     ) -> dict[str, Any]:
         """Triangles for the 3D view, one entry per material."""
 
