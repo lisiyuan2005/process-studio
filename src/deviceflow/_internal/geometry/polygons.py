@@ -75,7 +75,11 @@ def equals(a, b, area_eps: float = 1e-18) -> bool:
         return True
     if a.is_empty != b.is_empty:
         return False
-    if shapely.to_wkb(a) == shapely.to_wkb(b):  # the same rings: no predicate needed
+    # The same rings in the same order: no predicate needed. Asked
+    # structurally rather than by comparing serialisations, which for the
+    # thousands of these an isotropic etch asks meant serialising megabytes
+    # of coordinates to throw away.
+    if shapely.equals_exact(a, b, 0.0):
         return True
     # Equal regions have equal areas, so a difference in area settles it
     # without building a geometry. It is the common answer here -- callers

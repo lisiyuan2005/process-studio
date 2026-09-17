@@ -393,7 +393,7 @@ class ProcessState:
                 # sampling slabs of one film mostly carry the same region,
                 # and a wall meets a cap along a point at most. Only pairs
                 # whose boundaries share a line pay for the two overlays.
-                if shapely.to_wkb(rb) == shapely.to_wkb(ra):
+                if shapely.equals_exact(rb, ra, 0.0):
                     continue
                 # A polygon's boundary is closed, so every point of it is
                 # interior in the DE-9IM sense: the two meeting in a

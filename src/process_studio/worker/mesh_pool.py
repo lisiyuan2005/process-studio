@@ -28,6 +28,7 @@ view, and once it has refused once we stop asking.
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import multiprocessing
 import os
@@ -77,6 +78,7 @@ _starting: threading.Thread | None = None
 _reaper: threading.Thread | None = None
 _in_flight = 0
 _last_used = 0.0
+_registered = False
 #: why we stopped trying, once we have
 refused: str | None = None
 
@@ -217,7 +219,26 @@ def start() -> ProcessPoolExecutor | None:
         _pool = pool
         _touch()
         _watch()
+        _end_with_the_interpreter()
         return pool
+
+
+def _end_with_the_interpreter() -> None:
+    """End the children before multiprocessing tears its own plumbing down.
+
+    A command-line run starts the pool for the meshes it is about to warm
+    and then exits, and a child still coming up would try to rebuild the
+    call queue's semaphore after the file behind it was unlinked --
+    FileNotFoundError, printed at the end of an otherwise clean run.
+    ``atexit`` runs its handlers newest first, and multiprocessing's were
+    registered when the first child was created, so registering here (and
+    not at import) is what puts this one ahead of them.
+    """
+    global _registered
+    if _registered:
+        return
+    _registered = True
+    atexit.register(shutdown, final=True)
 
 
 def prewarm() -> None:

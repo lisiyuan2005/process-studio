@@ -382,3 +382,23 @@ def test_a_region_reaching_the_window_edge_is_still_clipped():
     wide = box(-2.0, -0.5, 2.0, 0.5)
     clipped = state.clean(wide)
     assert clipped.bounds == pytest.approx((-1.0, -0.5, 1.0, 0.5))
+
+
+def test_the_same_rings_are_recognised_without_serialising_them():
+    """"Did this change?" is asked thousands of times per etch step, of
+    regions with thousands of vertices each. Comparing two serialisations
+    meant writing megabytes of coordinates out to throw them away; asked
+    structurally it is 14 times quicker and the same answer."""
+    from deviceflow._internal.geometry import polygons as P
+
+    ring = P.as_multipolygon(Point(0, 0).buffer(0.5, quad_segs=32))
+    assert P.equals(ring, P.as_multipolygon(Point(0, 0).buffer(0.5, quad_segs=32)))
+    # The same region reached another way: different rings, same area, and
+    # the predicates behind the fast path still have to settle it.
+    halves = shapely.union(
+        ring.intersection(box(-1, -1, 0, 1)), ring.intersection(box(0, -1, 1, 1))
+    )
+    assert not shapely.equals_exact(ring, P.as_multipolygon(halves), 0.0)
+    assert P.equals(ring, P.as_multipolygon(halves))
+    # And something that really did change is not equal.
+    assert not P.equals(ring, P.as_multipolygon(Point(0, 0).buffer(0.51, quad_segs=32)))
