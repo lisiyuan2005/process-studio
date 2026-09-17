@@ -24,6 +24,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import IO, Any, Mapping
 
+from . import mesh_pool
 from .errors import Cancelled, InvalidRequest, WorkerError
 
 #: Methods where only the newest pending request per key is worth running:
@@ -130,6 +131,10 @@ class Server:
             deadline = time.monotonic() + SHUTDOWN_GRACE_SECONDS
             for executor in executors:
                 executor.join(max(0.0, deadline - time.monotonic()))
+        # The mesh pool's children are interpreters of their own, and one of
+        # them still running holds the installation folder open just as this
+        # process would.
+        mesh_pool.shutdown(final=True)
         return 0
 
     def _accept(self, raw_line: str) -> None:

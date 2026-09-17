@@ -12,6 +12,7 @@ from ..kernels import Kernel, get_kernel
 from ..layout.quick_sketch import QuickSketch
 from ..models import FlowBranch, ProjectDefinition, Recipe
 from ..storage import ProjectRepository
+from . import mesh_pool
 from .errors import Cancelled, InvalidRequest, WorkspaceError
 from .state_cache import STATE_CACHE
 from .serialize import (
@@ -305,6 +306,10 @@ def _warm_views_later(kernel: Kernel, paths: list[Path], buried: bool = False) -
     if not paths:
         return
     kinds = (False, True) if buried else (False,)
+    # A run's worth of meshes is the one moment worth starting the cores
+    # for: the first of them is built here while the pool comes up behind
+    # it, and every one after that is spread over the machine.
+    mesh_pool.prewarm()
 
     def work() -> None:
         for kind in kinds:

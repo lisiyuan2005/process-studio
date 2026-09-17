@@ -33,6 +33,7 @@ cd ~/devices/dram
 | --- | --- |
 | `new DIR [--name N] [--kernel slab\|levelset]` | 新建工作目录；内核只能在这里选 |
 | `kernels` | 这份构建带的内核 |
+| `cores` | 3D 网格能用几个核；池起不来时说明原因（见桌面文档「网格建在几个核上」）|
 | `info` | 工程、内核、窗口、精度、步骤数、材料 |
 | `status` | 每步的状态 |
 | `steps list` / `steps show STEP` | 步骤列表 / 一步的全部设置 |

@@ -91,7 +91,7 @@ def build_material_meshes(
     Each mesh records, per face, which of the materials (by position in this
     order) the face lies against, in ``metadata["neighbour_faces"]``.
     """
-    materials = _materials_in_order(state)
+    materials = materials_in_order(state)
     out: "OrderedDict[Material, trimesh.Trimesh]" = OrderedDict()
     for m in materials:
         out[m] = build_one_material(
@@ -100,7 +100,13 @@ def build_material_meshes(
     return out
 
 
-def _materials_in_order(state: ProcessState) -> list[Material]:
+def materials_in_order(state: ProcessState) -> list[Material]:
+    """The materials that own volume, in first-appearance order.
+
+    Every mesh a build hands out is keyed by this order, and a face records
+    the material it lies against by its place in it, so anything that builds
+    one material on its own has to agree with it.
+    """
     materials: list[Material] = []
     for slab in state.slabs:
         for m in slab.regions:
@@ -139,7 +145,7 @@ def build_one_material(
     same as a boolean.
     """
     if materials is None:
-        materials = _materials_in_order(state)
+        materials = materials_in_order(state)
     index_of = {m: i for i, m in enumerate(materials)}
     slabs = state.slabs
     n = len(slabs)

@@ -203,6 +203,44 @@ def cmd_kernels(session: Session, args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_cores(session: Session, args: argparse.Namespace) -> int:
+    """Whether this build can spread the 3D view's mesh over the machine.
+
+    The mesh pool is an accelerator that turns itself off rather than fail,
+    so a build that lost the ability to start child processes -- which a
+    packaged one can, since a frozen binary has to start *itself* to make a
+    child -- would only be slow, never broken. This is how a build says so
+    out loud, and it is what the packaging script checks.
+    """
+    import time
+
+    from ..worker import mesh_pool
+
+    started = time.perf_counter()
+    pool = mesh_pool.start()
+    seconds = time.perf_counter() - started
+    workers = mesh_pool.worker_count()
+    refused = mesh_pool.refused
+    mesh_pool.shutdown()
+    session.emit(
+        {
+            "workers": workers,
+            "pool": pool is not None,
+            "startSeconds": round(seconds, 3),
+            "refused": refused,
+        },
+        lambda: [
+            f"Cores for the 3D mesh: {workers}",
+            (
+                f"Pool: up in {seconds:.2f} s"
+                if pool is not None
+                else f"Pool: not available ({refused}); meshes are built one material at a time"
+            ),
+        ],
+    )
+    return EXIT_OK
+
+
 def cmd_info(session: Session, args: argparse.Namespace) -> int:
     document = session.document()
     session.emit(document, lambda: summarize_project(document))
@@ -897,6 +935,9 @@ def build_parser() -> argparse.ArgumentParser:
     new.set_defaults(handler=cmd_new, needs_root=False)
 
     commands.add_parser("kernels", help="the kernels this build offers").set_defaults(handler=cmd_kernels, needs_root=False)
+    commands.add_parser(
+        "cores", help="how many cores the 3D mesh is built on"
+    ).set_defaults(handler=cmd_cores, needs_root=False)
     commands.add_parser("info", help="the project, its window and its steps").set_defaults(handler=cmd_info)
     commands.add_parser("status", help="each step and whether its result is current").set_defaults(handler=cmd_status)
 

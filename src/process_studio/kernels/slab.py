@@ -322,28 +322,12 @@ def _load_or_build_meshes(state: SlabState, engine: str, buried: bool) -> Displa
         except (OSError, KeyError, ValueError):
             meshes = None  # an unreadable or older sidecar is simply rebuilt
     if meshes is None:
-        from deviceflow._internal.mesh.builder import build_material_meshes
-        from deviceflow._internal.mesh.triangulate import using
+        from ..worker import mesh_pool
 
         state.device._state.validate()
-        with using(engine):
-            built = build_material_meshes(state.device._state, manifold=False, buried=buried)
-        meshes = {
-            material.name: (
-                # A material with no free surface has an empty mesh, whose
-                # arrays come back flat; the view wants (n, 3) either way.
-                np.ascontiguousarray(mesh.vertices, dtype=np.float32).reshape(-1, 3),
-                np.ascontiguousarray(mesh.faces, dtype=np.uint32).reshape(-1, 3),
-                # A face against another material is the same face in that
-                # material's mesh. The viewer leaves such faces out while
-                # that other material is shown, so two copies never fight for
-                # the same pixels, and draws them once it is hidden; so each
-                # face also says which material, by its place in this order.
-                np.ascontiguousarray(mesh.metadata["interface_faces"], dtype=np.uint8),
-                np.ascontiguousarray(mesh.metadata["neighbour_faces"], dtype=np.int16),
-            )
-            for material, mesh in built.items()
-        }
+        # One material at a time is the whole of the work and none of it is
+        # shared, so this goes out to the other cores when they are there.
+        meshes = mesh_pool.build(state.device._state, engine=engine, buried=buried)
         if sidecar is not None:
             arrays: dict[str, np.ndarray] = {
                 "materials": np.array(list(meshes), dtype=str),

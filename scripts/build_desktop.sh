@@ -79,6 +79,18 @@ case "$UPDATE" in
     echo "The packaged worker cannot verify certificates: $UPDATE"; exit 1 ;;
 esac
 
+# The 3D view's mesh is built on several cores, and a frozen binary makes a
+# child process by starting *itself* -- so this is the one thing that can be
+# right in the source tree and lost in the packaging. It only costs speed, so
+# a one-core machine is not a failure; a machine with cores that cannot use
+# them is.
+CORES="$("$WORKER" --json cores || true)"
+echo "Mesh pool: $CORES"
+case "$(echo "$CORES" | tr -d ' \n')" in
+  *'"workers":1,'*) : ;;                       # nothing to spread over anyway
+  *'"pool":false'*) echo "The packaged worker cannot build meshes on more than one core"; exit 1 ;;
+esac
+
 cd desktop
 npm ci
 npm run test

@@ -138,6 +138,18 @@ foreach ($Kernel in $Kernels.Split(",")) {
   }
 }
 
+# The 3D view's mesh is built on several cores, which means the worker has to
+# be able to start a second copy of this interpreter -- an embeddable Python
+# restricts its own import path, so that is worth finding out here rather than
+# on a user's machine. It only costs speed, so a one-core builder is not a
+# failure; a machine with cores that cannot use them is.
+$Cores = & $PythonExe -m process_studio.worker --json cores
+Write-Host "Mesh pool: $Cores"
+$CoreReport = ($Cores -join "") -replace '\s', ''
+if ($CoreReport -notmatch '"workers":1,' -and $CoreReport -match '"pool":false') {
+  throw "The packaged worker cannot build meshes on more than one core: $Cores"
+}
+
 # Trim the bundle now that everything that runs on it has already run:
 # pip, setuptools and wheel exist only to have installed the rest and are
 # never imported by the worker itself; every package's own test suite
