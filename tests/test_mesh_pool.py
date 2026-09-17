@@ -11,6 +11,8 @@ in the same mesh built here.
 
 from __future__ import annotations
 
+import pathlib
+
 import numpy as np
 import pytest
 from shapely.geometry import box
@@ -115,12 +117,23 @@ def test_the_first_build_starts_the_pool_but_does_not_wait_for_it(monkeypatch):
     assert asked == [True]
 
 
-def test_a_state_too_big_to_hand_over_stays_here(monkeypatch):
-    monkeypatch.setenv("PROCESS_STUDIO_MESH_WORKERS", "4")
-    monkeypatch.setattr(mesh_pool, "refused", None)
-    monkeypatch.setattr(mesh_pool, "MAX_INLINE_STATE", 1)
-    monkeypatch.setattr(mesh_pool, "_pool", _Wedged())
-    assert mesh_pool.build(_stack(), engine="ears", buried=False)
+def test_any_state_goes_over_however_big(cores):
+    """The first real project met was 22.7 MB, and a size ceiling would
+    have turned the pool off on exactly the build that needed it."""
+    assert mesh_pool.start() is not None, mesh_pool.refused
+    state = _stack()
+    with mesh_pool._handed_over(state) as path:
+        handed = pathlib.Path(path)
+        assert handed.is_file() and handed.stat().st_size > 0
+    assert not handed.exists(), "the handover file is not left behind"
+
+
+def test_the_handover_file_goes_even_if_the_build_does_not(cores):
+    with pytest.raises(RuntimeError):
+        with mesh_pool._handed_over(_stack()) as path:
+            handed = pathlib.Path(path)
+            raise RuntimeError("the build failed")
+    assert not handed.exists()
 
 
 def test_a_pool_that_breaks_is_not_asked_again(monkeypatch):

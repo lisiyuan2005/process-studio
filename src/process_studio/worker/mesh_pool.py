@@ -28,14 +28,16 @@ view, and once it has refused once we stop asking.
 
 from __future__ import annotations
 
+import contextlib
 import multiprocessing
 import os
 import pickle
 import sys
+import tempfile
 import threading
 import time
 from concurrent.futures import ProcessPoolExecutor
-from typing import Any
+from typing import Any, Iterator
 
 import numpy as np
 
@@ -47,10 +49,6 @@ MeshArrays = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 #: number of materials in the stack, which is a handful, and every child
 #: costs ~105 MB and ~0.2 s to start.
 MAX_WORKERS = 4
-
-#: Handing the state over costs one pickle per task. Past this the handover
-#: would cost more than the cores save, so such a build stays here.
-MAX_INLINE_STATE = 8 * 1024 * 1024
 
 #: A pool nothing has asked for in this long is given back to the machine.
 IDLE_SECONDS = 180.0
@@ -85,9 +83,11 @@ refused: str | None = None
 
 # -- the child side --------------------------------------------------------
 
-#: the state this child last unpickled, kept so the other materials of the
-#: same build do not each pay for it again
-_held: tuple[bytes, Any] | None = None
+#: the state this child last read, kept so the other materials of the same
+#: build do not each pay for it again. Keyed by the file's identity rather
+#: than its name: a temporary name can be handed out again once we have
+#: deleted it, and that would serve the wrong state.
+_held: tuple[tuple[str, int, int], Any] | None = None
 
 
 def _child_setup() -> None:
@@ -128,12 +128,15 @@ def _ready(_index: int) -> int:
     return 1
 
 
-def _build_material(job: tuple[bytes, int, str, bool, bool]) -> tuple[str, ...]:
+def _build_material(job: tuple[str, int, str, bool, bool]) -> tuple[str, ...]:
     global _held
-    blob, index, engine, buried, manifold = job
+    path, index, engine, buried, manifold = job
+    stat = os.stat(path)
+    key = (path, stat.st_size, stat.st_mtime_ns)
     held = _held
-    if held is None or held[0] != blob:
-        _held = held = (blob, pickle.loads(blob))
+    if held is None or held[0] != key:
+        with open(path, "rb") as handle:
+            _held = held = (key, pickle.loads(handle.read()))
     state = held[1]
 
     from deviceflow._internal.mesh.builder import build_one_material, materials_in_order
@@ -308,19 +311,45 @@ def build(
 
     names = [material.name for material in materials_in_order(state)]
     if len(names) > 1 and worker_count() > 1 and refused is None:
-        blob = pickle.dumps(state, protocol=pickle.HIGHEST_PROTOCOL)
-        if len(blob) <= MAX_INLINE_STATE:
-            pool = _lease()
-            if pool is None:
-                prewarm()
-            else:
-                try:
-                    return _gather(pool, blob, len(names), engine, buried, manifold)
-                except Exception as error:  # noqa: BLE001
-                    _refuse(error)
-                finally:
-                    _release()
+        pool = _lease()
+        if pool is None:
+            prewarm()
+        else:
+            try:
+                with _handed_over(state) as path:
+                    return _gather(pool, path, len(names), engine, buried, manifold)
+            except Exception as error:  # noqa: BLE001
+                _refuse(error)
+            finally:
+                _release()
     return build_here(state, engine=engine, buried=buried, manifold=manifold)
+
+
+@contextlib.contextmanager
+def _handed_over(state: Any) -> Iterator[str]:
+    """The state on disk, for each child to read once.
+
+    One task per material is what keeps the cores busy -- the materials are
+    wildly uneven, 19.4 s against 0.4 s on the project this was measured on
+    -- but a task carries its arguments to the child, so a state passed
+    inline crosses the wire once per material: 159 MB for a 22.7 MB state
+    and seven materials. A file is written once and read from the page
+    cache, and measured exactly as fast (25.3 s against 25.9 s), so it is
+    what lets any state through. That matters more than it sounds: the size
+    ceiling this replaces silently turned the pool off on the first real
+    project it met.
+    """
+    handle = tempfile.NamedTemporaryFile(
+        prefix="process-studio-mesh-", suffix=".state", delete=False
+    )
+    try:
+        handle.write(pickle.dumps(state, protocol=pickle.HIGHEST_PROTOCOL))
+        handle.close()
+        yield handle.name
+    finally:
+        handle.close()
+        with contextlib.suppress(OSError):
+            os.unlink(handle.name)
 
 
 def _lease() -> ProcessPoolExecutor | None:
@@ -342,13 +371,13 @@ def _release() -> None:
 
 def _gather(
     pool: ProcessPoolExecutor,
-    blob: bytes,
+    path: str,
     count: int,
     engine: str,
     buried: bool,
     manifold: bool,
 ) -> dict[str, MeshArrays]:
-    jobs = [(blob, index, engine, buried, manifold) for index in range(count)]
+    jobs = [(path, index, engine, buried, manifold) for index in range(count)]
     built: dict[str, MeshArrays] = {}
     for name, vertices, faces, interface, neighbour in pool.map(_build_material, jobs):
         built[name] = (vertices, faces, interface, neighbour)
