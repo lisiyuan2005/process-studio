@@ -391,6 +391,10 @@ def _connected_to_sources(pieces: Front, sources: Front, area_eps: float) -> Fro
                     union(offsets[index] + ia, offsets[index + 1] + ib)
 
     seeded: set[int] = set()
+    # Neighbouring layers see the same sources, and the sources do not move
+    # while this runs, so their union is made once per set of them. Keyed
+    # by identity, which ``sources`` keeps alive for the whole call.
+    merged: dict[tuple[int, ...], MultiPolygon] = {}
     for index, (za, zb, _region, components) in enumerate(layers):
         touching = [
             region
@@ -399,7 +403,11 @@ def _connected_to_sources(pieces: Front, sources: Front, area_eps: float) -> Fro
         ]
         if not touching:
             continue
-        source = touching[0] if len(touching) == 1 else shapely.unary_union(touching)
+        key = tuple(id(region) for region in touching)
+        source = merged.get(key)
+        if source is None:
+            source = touching[0] if len(touching) == 1 else shapely.unary_union(touching)
+            merged[key] = source
         for component_index, component in enumerate(components):
             if _open_overlap(component, source, area_eps):
                 seeded.add(find(offsets[index] + component_index))
@@ -495,6 +503,19 @@ def _blocker_union(parts: list[MultiPolygon], cache: dict) -> MultiPolygon:
     return union
 
 
+def _dilate(region: MultiPolygon, radius: float, segs: int, *, square: bool):
+    """Grow a front piece sideways by ``radius``.
+
+    Round in XY whichever front this is. ``square`` means the *vertical*
+    profile is a box rather than a ball; squaring the XY corners as well
+    looked tempting -- a mitred buffer adds no vertices at all, so the
+    front would stop compounding -- and it over-etched the target of a
+    real step by 37%: a mitred corner runs out 0.41 r beyond the true
+    front, every step, and six steps of that is not a simplification.
+    """
+    return region.buffer(radius, quad_segs=segs, join_style="round")
+
+
 def _step(
     state: ProcessState,
     depths: dict[Material, float],
@@ -576,7 +597,7 @@ def _step(
                     continue
                 grown = dilated.get((id(v), r))
                 if grown is None:
-                    grown = v.buffer(r, quad_segs=segs[m], join_style="round")
+                    grown = _dilate(v, r, segs[m], square=square)
                     dilated[(id(v), r)] = grown
                 parts.append(grown)
             if not parts:
@@ -585,6 +606,14 @@ def _step(
             shape = tuple(id(part) for part in parts)
             reach = unions.get(shape)
             if reach is None:
+                # Not simplified, though the front does compound -- each
+                # step's arcs sit on the last one's, and a real step went
+                # from 205 to 2,994 vertices over six steps. Dropping them
+                # at any tolerance from 2% to 20% of the step made the
+                # state *bigger* (11,896 to 15,230 vertices) as well as
+                # wrong: a simplified reach no longer matches its
+                # neighbours ring for ring, so the samples stop sharing one
+                # and every one of them becomes a slab of its own.
                 reach = P.as_multipolygon(shapely.unary_union(parts))
                 unions[shape] = reach
             prev = previous[m]

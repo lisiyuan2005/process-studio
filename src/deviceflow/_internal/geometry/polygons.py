@@ -47,8 +47,16 @@ def clean(geom, grid: float, area_eps: float | None = None) -> MultiPolygon:
         area_eps = grid * grid
     if geom is None or geom.is_empty:
         return EMPTY
-    valid = shapely.make_valid(geom)
-    merged = shapely.unary_union(as_multipolygon(valid))
+    # A valid MultiPolygon is already what the repair and the union would
+    # make of it: validity *is* "the parts' interiors are disjoint and they
+    # meet in at most finitely many points", so nothing can be merged and
+    # nothing is self-intersecting. Most callers hand over the result of a
+    # GEOS overlay, which is exactly that; an isotropic etch step came
+    # through here 12,000 times, and the union alone was a third of it.
+    if isinstance(geom, MultiPolygon) and shapely.is_valid(geom):
+        merged = geom
+    else:
+        merged = shapely.unary_union(as_multipolygon(shapely.make_valid(geom)))
     snapped = snap(merged, grid)
     parts = []
     for poly in snapped.geoms:

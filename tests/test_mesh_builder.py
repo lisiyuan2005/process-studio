@@ -118,3 +118,39 @@ def test_two_materials_in_one_place_is_an_error_not_a_mesh():
 
     with pytest.raises(MeshError, match="overlaps another material"):
         arrange(state)
+
+
+def test_the_edge_index_names_the_same_boundary_in_the_same_order():
+    """What ``harmonise`` used a dictionary of coordinate pairs for.
+
+    Which edges bound a set of arrangement faces is "the ones used by
+    exactly one of them". Counting that with tuples was 50 s of the 94 s
+    harmonise spent on a real stack; as interned integers it is a
+    bincount. The order has to survive too: polygonize reads it and hands
+    the pieces back in it, so a different order would reshuffle the parts
+    of every region in the state.
+    """
+    from collections import Counter
+
+    from deviceflow._internal.geometry.state import _Boundaries, _directed_edges
+
+    state = _stack()
+    figure = arrange(state)
+    edges_of_face = [_directed_edges(f) for f in figure.faces]
+    index = _Boundaries(edges_of_face)
+
+    total = len(figure.faces)
+    assert total >= 2, "the fixture has to have something to choose from"
+    choices = [[0], list(range(total)), list(reversed(range(total)))]
+    if total >= 3:
+        choices.append([2, 0, 1])
+    for selected in choices:
+        count: Counter = Counter()
+        for fi in selected:
+            for a, b in edges_of_face[fi]:
+                count[(a, b) if a < b else (b, a)] += 1
+        expected = [ends for ends, times in count.items() if times == 1]
+        got = [tuple(map(tuple, ends)) for ends in index.ends[index.around(selected)]]
+        assert got == [tuple(map(tuple, ends)) for ends in expected]
+
+    assert list(index.around([])) == []

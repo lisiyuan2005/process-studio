@@ -342,3 +342,43 @@ def test_a_dilation_is_made_once_per_piece_and_radius(monkeypatch):
     assert len(once) == len(asked), (
         f"{len(asked)} dilations for {len(once)} distinct (piece, radius) pairs"
     )
+
+
+def test_cleaning_a_valid_region_does_not_go_round_the_houses():
+    """What an overlay hands back is already valid, unioned and inside the
+    window, and repairing, re-unioning and re-clipping it is three GEOS
+    calls for nothing -- an isotropic etch step made 12,000 of each. The
+    region that comes out has to be the same one either way.
+    """
+    from deviceflow._internal.geometry import polygons as P
+
+    device = Device("clean", (-1.0, -1.0, 1.0, 1.0), conformal_resolution=0.01, verbose=False)
+    state = device._state
+    ring = P.as_multipolygon(
+        Point(0, 0).buffer(0.8, quad_segs=16).difference(Point(0, 0).buffer(0.4, quad_segs=16))
+    )
+    cut = P.as_multipolygon(box(-0.2, -1.0, 0.2, 1.0))
+    overlay = ring.difference(cut)
+    assert shapely.is_valid(overlay) and isinstance(overlay, MultiPolygon)
+
+    quick = state.clean(overlay)
+    # The long way round, as it was: repair, union, then clip to the window.
+    slow = P.clean(
+        shapely.intersection(
+            shapely.unary_union(P.as_multipolygon(shapely.make_valid(overlay))), state._box
+        ),
+        state.grid,
+    )
+    assert quick.area == pytest.approx(slow.area, rel=1e-12)
+    assert quick.symmetric_difference(slow).area < state.grid * state.grid
+    assert len(quick.geoms) == len(slow.geoms)
+
+
+def test_a_region_reaching_the_window_edge_is_still_clipped():
+    """The clip is skipped by looking at the bounds, so anything that
+    really does leave the window must still be cut back."""
+    device = Device("clip", (-1.0, -1.0, 1.0, 1.0), conformal_resolution=0.01, verbose=False)
+    state = device._state
+    wide = box(-2.0, -0.5, 2.0, 0.5)
+    clipped = state.clean(wide)
+    assert clipped.bounds == pytest.approx((-1.0, -0.5, 1.0, 0.5))

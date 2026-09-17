@@ -151,7 +151,14 @@ class ProcessState:
             return P.EMPTY
         if not geom.is_valid:  # e.g. after shapely.snap; an overlay on invalid input can throw
             geom = shapely.make_valid(geom)
-        return P.clean(shapely.intersection(geom, self._box), self.grid)
+        # Most of what comes here was cut out of something already inside
+        # the window, and clipping such a thing is an overlay that returns
+        # its input. The bounds settle it in arithmetic.
+        x0, y0, x1, y1 = self.bounds
+        bx0, by0, bx1, by1 = geom.bounds
+        if not (x0 <= bx0 and y0 <= by0 and bx1 <= x1 and by1 <= y1):
+            geom = shapely.intersection(geom, self._box)
+        return P.clean(geom, self.grid)
 
     def _clean_regions(self, regions) -> dict[Material, MultiPolygon]:
         out: dict[Material, MultiPolygon] = {}
@@ -274,7 +281,7 @@ class ProcessState:
         if not faces:
             return
         reps = shapely.points(np.array([[p.x, p.y] for p in (f.representative_point() for f in faces)]))
-        edges_of_face = [_directed_edges(f) for f in faces]
+        boundaries = _Boundaries([_directed_edges(f) for f in faces])
         # Identical regions classify identically against one arrangement, so
         # each distinct one is classified and reassembled once. The cache
         # lives only for this call, and the shared result is immutable, as
@@ -296,13 +303,13 @@ class ProcessState:
             if contested.any():
                 inside = inside[~contested]
                 claimed[inside] = True
-                rebuilt = _assemble(faces, edges_of_face, inside, region) if len(inside) else None
+                rebuilt = _assemble(boundaries, inside, region) if len(inside) else None
             else:
                 claimed[inside] = True
                 if shape in rebuilt_by_shape:
                     rebuilt = rebuilt_by_shape[shape]
                 else:
-                    rebuilt = _assemble(faces, edges_of_face, inside, region) if len(inside) else None
+                    rebuilt = _assemble(boundaries, inside, region) if len(inside) else None
                     rebuilt_by_shape[shape] = rebuilt
             if rebuilt is None:
                 # thinner than the grid everywhere: it vanishes
@@ -388,10 +395,13 @@ class ProcessState:
                 # whose boundaries share a line pay for the two overlays.
                 if shapely.to_wkb(rb) == shapely.to_wkb(ra):
                     continue
-                shared = rb.boundary.intersection(ra.boundary)
-                if not any(
-                    g.geom_type == "LineString" and g.length > 0 for g in shapely.get_parts(shared)
-                ):
+                # A polygon's boundary is closed, so every point of it is
+                # interior in the DE-9IM sense: the two meeting in a
+                # 1-dimensional set is exactly "they run along a shared
+                # edge", and the pattern settles it without building the
+                # shared linework. That overlay, on every slab pair of
+                # every material, was 50 s of a real stack's harmonise.
+                if not shapely.relate_pattern(rb.boundary, ra.boundary, "1********"):
                     continue
                 up_cap = rb.difference(ra)
                 down_cap = ra.difference(rb)
@@ -466,23 +476,59 @@ def _directed_edges(face) -> list[tuple[tuple, tuple]]:
     return out
 
 
-def _assemble(faces, edges_of_face, selected, original) -> MultiPolygon:
+class _Boundaries:
+    """The arrangement's edges, interned once, so a region's outline is arithmetic.
+
+    Which edges bound a set of faces is "the ones used by exactly one of
+    them", and counting that with a dictionary of coordinate pairs was 50 s
+    of the 94 s harmonise spent reassembling regions on a real 253-slab
+    stack -- the same 190,000 tuples hashed again for every region. As
+    integers it is a ``bincount``.
+
+    The first-seen order is kept: ``polygonize`` reads this order and hands
+    the pieces back in it, so changing it would reorder the parts of every
+    region in the state for no reason.
+    """
+
+    def __init__(self, edges_of_face: list) -> None:
+        interned: dict[tuple, int] = {}
+        ends: list[tuple] = []
+        self.per_face: list[np.ndarray] = []
+        for edges in edges_of_face:
+            row = np.empty(len(edges), dtype=np.int64)
+            for position, (a, b) in enumerate(edges):
+                key = (a, b) if a < b else (b, a)
+                index = interned.get(key)
+                if index is None:
+                    index = len(ends)
+                    interned[key] = index
+                    ends.append(key)
+                row[position] = index
+            self.per_face.append(row)
+        #: (edges, 2 endpoints, xy), in the canonical a < b order
+        self.ends = np.asarray(ends, dtype=float).reshape(-1, 2, 2)
+
+    def around(self, selected) -> np.ndarray:
+        """The edges used by exactly one of ``selected``, first-seen first."""
+        if len(selected) == 0:
+            return np.empty(0, dtype=np.int64)
+        used = np.concatenate([self.per_face[fi] for fi in selected])
+        times = np.bincount(used, minlength=len(self.ends))
+        distinct, first = np.unique(used, return_index=True)
+        return used[np.sort(first[times[distinct] == 1])]
+
+
+def _assemble(boundaries: _Boundaries, selected, original) -> MultiPolygon:
     """Union of arrangement faces, keeping every node: boundary edges are
     those used by exactly one selected face; polygonize them and keep the
     pieces whose interior lies in the original region."""
-    from collections import Counter
-
-    count: Counter = Counter()
-    for fi in selected:
-        for a, b in edges_of_face[fi]:
-            count[(a, b) if a < b else (b, a)] += 1
-    edges = [ends for ends, n in count.items() if n == 1]
-    if not edges:
+    edges = boundaries.around(selected)
+    if len(edges) == 0:
         return P.EMPTY
     # One call, not one per edge. A real stack's harmonise came through here
     # 1,502 times and built 5.6 million LineStrings one at a time, 20 s of
     # the 50 s this function cost.
-    ends = np.asarray(edges, dtype=float)  # (edges, 2 endpoints, xy)
+    ends = boundaries.ends[edges]
     boundary = shapely.linestrings(
         ends.reshape(-1, 2), indices=np.repeat(np.arange(len(edges)), 2)
     )

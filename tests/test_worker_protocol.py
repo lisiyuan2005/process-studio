@@ -13,6 +13,7 @@ import pytest
 from pathlib import Path
 from PIL import Image
 
+from process_studio.models import ProjectDefinition
 from process_studio.worker.errors import InvalidRequest, WorkspaceError
 from process_studio.worker.protocol import dispatch, serve
 from process_studio.worker.workspace import DigestCache, initialize_workspace, load_project, open_repository
@@ -1193,3 +1194,62 @@ def test_running_a_step_again_leaves_the_rest_of_the_flow_alone(tmp_path):
     # An id that is not in the flow changes nothing.
     unknown = call("run_flow", root=root, fromStepId="no-such-step")
     assert unknown["executedStepIds"] == []
+
+
+def test_a_workspace_carries_its_layout_when_it_moves(tmp_path):
+    """The layout path is stored relative to the workspace.
+
+    A workspace written with an absolute path stops finding its layout the
+    moment it is copied anywhere -- another machine, another user's home,
+    a zip and back -- and every step that cuts from that layout then
+    cannot run. Importing a layout copies the file into the workspace, so
+    where it sits in the workspace is what gets stored.
+    """
+    import shutil
+
+    from process_studio.storage import ProjectRepository
+
+    here = tmp_path / "here"
+    (here / "layouts").mkdir(parents=True)
+    (here / "layouts" / "wafer.gds").write_bytes(b"not really a gds")
+    repository = ProjectRepository(here / "process_studio.sqlite3")
+    project = ProjectDefinition(
+        id="p", name="p", grid={}, gds_path=str(here / "layouts" / "wafer.gds")
+    )
+    repository.save_project(project)
+
+    with repository.connect() as connection:
+        stored = connection.execute("SELECT gds_path FROM projects").fetchone()[0]
+    assert stored == "layouts/wafer.gds", "stored where it sits, not where it was"
+
+    there = tmp_path / "there"
+    shutil.copytree(here, there)
+    moved = ProjectRepository(there / "process_studio.sqlite3")
+    assert moved.load_project("p").gds_path == str(there / "layouts" / "wafer.gds")
+
+
+def test_an_old_absolute_layout_path_is_adopted(tmp_path):
+    """What the workspaces written before that look like: a path from the
+    machine they were made on, Windows separators and all. The file is in
+    the workspace's ``layouts``, which is where importing put it."""
+    from process_studio.storage import ProjectRepository
+
+    root = tmp_path / "workspace"
+    (root / "layouts").mkdir(parents=True)
+    (root / "layouts" / "1789494000968-3D DRAM.gds").write_bytes(b"gds")
+    repository = ProjectRepository(root / "process_studio.sqlite3")
+    repository.save_project(ProjectDefinition(id="p", name="p", grid={}))
+    with repository.connect() as connection:
+        connection.execute(
+            "UPDATE projects SET gds_path = ?",
+            (r"\\?\C:\Users\someone\Project\layouts\1789494000968-3D DRAM.gds",),
+        )
+
+    found = repository.load_project("p").gds_path
+    assert found == str(root / "layouts" / "1789494000968-3D DRAM.gds")
+
+    # One that names a file this workspace does not have is left alone, so
+    # the error the user sees still names the path they chose.
+    with repository.connect() as connection:
+        connection.execute("UPDATE projects SET gds_path = ?", (r"C:\elsewhere\other.gds",))
+    assert repository.load_project("p").gds_path == r"C:\elsewhere\other.gds"

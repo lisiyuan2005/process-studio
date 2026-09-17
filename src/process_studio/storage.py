@@ -36,6 +36,56 @@ class ProjectRepository:
         self.snapshot_directory.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
+    @property
+    def workspace(self) -> Path:
+        """The directory this workspace's files live in."""
+        return self.database_path.parent
+
+    def layout_as_stored(self, resolved: str | None) -> str | None:
+        """A layout path as it goes into the database: relative to here.
+
+        An absolute path is the machine it was written on. A workspace with
+        one in it stops finding its layout the moment it is copied anywhere
+        -- to another machine, another user's home, or a zip and back -- and
+        the steps that cut from that layout then cannot run at all. The
+        file is inside the workspace (importing one copies it into
+        ``layouts``), so what is stored is where it sits in the workspace.
+        """
+        if not resolved:
+            return resolved
+        path = Path(resolved)
+        try:
+            return path.relative_to(self.workspace).as_posix()
+        except ValueError:
+            return resolved  # someone pointed at a file outside the workspace
+
+    def layout_on_disk(self, stored: str | None) -> str | None:
+        """Where the stored layout path actually is, now, on this machine.
+
+        A path written before they were stored relative -- absolute, from
+        another machine, Windows separators and all -- is adopted when the
+        file it names is in this workspace's ``layouts``, which is where
+        importing a layout puts it.
+        """
+        if not stored:
+            return stored
+        # "Absolute" has to mean absolute on the machine it was written on,
+        # not on this one: to a POSIX Path, ``\\?\C:\Users\...`` is a
+        # relative file whose name happens to contain backslashes.
+        absolute_somewhere = (
+            Path(stored).is_absolute()
+            or stored.startswith(("/", "\\"))
+            or (len(stored) > 1 and stored[1] == ":")
+        )
+        if not absolute_somewhere:
+            # Written as a POSIX relative path; a Windows one is read too.
+            return str(self.workspace.joinpath(*stored.replace("\\", "/").split("/")))
+        if Path(stored).exists():
+            return stored
+        name = stored.replace("\\", "/").rsplit("/", 1)[-1]
+        moved = self.workspace / "layouts" / name
+        return str(moved) if moved.is_file() else stored
+
     def connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path)
         connection.row_factory = sqlite3.Row
@@ -158,7 +208,7 @@ class ProjectRepository:
                     project.id,
                     project.name,
                     json.dumps(project.grid),
-                    project.gds_path,
+                    self.layout_as_stored(project.gds_path),
                     project.active_branch_id,
                     project.kernel,
                     project.resolution_um,
@@ -179,7 +229,7 @@ class ProjectRepository:
             id=row["id"],
             name=row["name"],
             grid=json.loads(row["grid_json"]),
-            gds_path=row["gds_path"],
+            gds_path=self.layout_on_disk(row["gds_path"]),
             active_branch_id=row["active_branch_id"],
             kernel=row["kernel"] or "levelset",
             resolution_um=row["resolution_um"],
