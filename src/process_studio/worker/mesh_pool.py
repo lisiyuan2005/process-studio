@@ -180,9 +180,12 @@ def display_arrays(mesh: Any) -> MeshArrays:
 def start() -> ProcessPoolExecutor | None:
     """Bring the pool up, here and now. Returns None if it will not come.
 
-    One task per child is submitted before returning: a
-    ``ProcessPoolExecutor`` starts a child per submitted task, so this is
-    what makes "the pool is up" true rather than "the pool exists".
+    One task per child is submitted before returning, because an executor
+    with nothing to do has no children at all: each submission starts one,
+    unless a child has already gone idle by then. So this warms whatever
+    children it starts and a real build brings out the rest -- what it
+    guarantees is that the machine *will* give us processes, which is the
+    thing a caller cannot afford to find out in the middle of a build.
     """
     global _pool, refused
     with _lock:

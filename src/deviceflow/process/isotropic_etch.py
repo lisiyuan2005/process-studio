@@ -35,6 +35,14 @@ The slabs are only harmonised (rings noded across slabs, seams removed)
 once, after the last step: between steps each slab is a clean polygon
 set of its own, which is all the next step reads.
 
+A dilation depends on the piece and the radius and on nothing else, and
+those repeat: the box front only ever grows a piece by the depth or not
+at all, and the round one gives every sample at the same distance from a
+piece the same radius. So a step makes each dilation once and the union
+of a given set of them once -- on a 253-slab stack it was asking for
+3,295 dilations where a few dozen exist, 127 s of the 318 s ten steps
+cost.
+
 What a step passes on is the *void* it created, folded back to regions:
 it cuts the stack at every z sample it takes, so the pieces arrive one
 per slab and the same region comes back dozens of times over. A piece
@@ -534,6 +542,20 @@ def _step(
         if parts:
             blockers[(slab.z0, slab.z1)] = _blocker_union(parts, blocker_cache)
 
+    # A dilation depends on the piece and the radius and on nothing else,
+    # and the radii repeat: the box front only ever grows a piece by d or
+    # not at all, and the round one gives every sample at the same distance
+    # from a piece the same radius. So each is made once, and the union of
+    # a given set of them once. These were 127 s and 95 s of the 318 s that
+    # ten steps took on a 253-slab stack -- 32,948 buffers where only a few
+    # hundred distinct ones exist.
+    #
+    # Keyed by identity, which is sound because the pieces are held by
+    # ``front`` and the dilations by ``dilated`` for as long as the keys
+    # live: a freed geometry's address is handed straight to the next one.
+    dilated: dict[tuple[int, float], MultiPolygon] = {}
+    unions: dict[tuple[int, ...], MultiPolygon] = {}
+
     removed: dict[Material, list[tuple[float, float, MultiPolygon]]] = {m: [] for m in depths}
     previous: dict[Material, MultiPolygon | None] = {m: None for m in depths}
     for za, zb in samples:
@@ -549,13 +571,23 @@ def _step(
                     r = d if dz < d else 0.0
                 else:
                     r = math.sqrt(max(d * d - dz * dz, 0.0))
-                parts.append(v.buffer(r, quad_segs=segs[m], join_style="round") if r > 0 else v)
+                if r <= 0:
+                    parts.append(v)
+                    continue
+                grown = dilated.get((id(v), r))
+                if grown is None:
+                    grown = v.buffer(r, quad_segs=segs[m], join_style="round")
+                    dilated[(id(v), r)] = grown
+                parts.append(grown)
             if not parts:
                 previous[m] = None
                 continue
-            reach = shapely.unary_union(parts)
+            shape = tuple(id(part) for part in parts)
+            reach = unions.get(shape)
+            if reach is None:
+                reach = P.as_multipolygon(shapely.unary_union(parts))
+                unions[shape] = reach
             prev = previous[m]
-            reach = P.as_multipolygon(reach)
             if prev is not None and not reach.is_empty:
                 # Consecutive samples within tolerance share one ring (no
                 # slivers). The box front is exact per interval: only an

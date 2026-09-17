@@ -476,14 +476,32 @@ def _assemble(faces, edges_of_face, selected, original) -> MultiPolygon:
     for fi in selected:
         for a, b in edges_of_face[fi]:
             count[(a, b) if a < b else (b, a)] += 1
-    boundary = [shapely.linestrings([a, b]) for (a, b), n in count.items() if n == 1]
-    if not boundary:
+    edges = [ends for ends, n in count.items() if n == 1]
+    if not edges:
+        return P.EMPTY
+    # One call, not one per edge. A real stack's harmonise came through here
+    # 1,502 times and built 5.6 million LineStrings one at a time, 20 s of
+    # the 50 s this function cost.
+    ends = np.asarray(edges, dtype=float)  # (edges, 2 endpoints, xy)
+    boundary = shapely.linestrings(
+        ends.reshape(-1, 2), indices=np.repeat(np.arange(len(edges)), 2)
+    )
+    rings = shapely.get_parts(shapely.polygonize(boundary))
+    if len(rings) == 0:
         return P.EMPTY
     pieces = []
-    for g in shapely.get_parts(shapely.polygonize(boundary)):
-        # a ring that touches itself at a node (pinch) is split into valid parts
-        pieces.extend(q for q in P._iter_polygons(shapely.make_valid(g)) if q.area > 0)
-    keep = [g for g in pieces if original.contains(g.representative_point())]
+    # a ring that touches itself at a node (pinch) is split into valid parts
+    for g in shapely.make_valid(rings):
+        pieces.extend(q for q in P._iter_polygons(g) if q.area > 0)
+    if not pieces:
+        return P.EMPTY
+    shapely.prepare(original)
+    parts = np.asarray(pieces, dtype=object)
+    keep = [
+        g
+        for g, inside in zip(pieces, shapely.contains(original, shapely.point_on_surface(parts)))
+        if inside
+    ]
     from shapely.geometry.polygon import orient
 
     mp = MultiPolygon([Polygon(g.exterior, g.interiors) for g in keep])

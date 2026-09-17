@@ -83,8 +83,12 @@ def test_shutdown_ends_the_children(cores):
     """A child outliving the worker holds the installation folder open."""
     pool = mesh_pool.start()
     assert pool is not None, mesh_pool.refused
+    # However many it settled on: an executor whose warm-up tasks finish as
+    # fast as they are handed out keeps one child busy instead of starting
+    # a second, and a real build starts the rest.
     children = list(pool._processes.values())
-    assert len(children) == cores and all(child.is_alive() for child in children)
+    assert children and len(children) <= cores
+    assert all(child.is_alive() for child in children)
 
     mesh_pool.shutdown()
     for child in children:

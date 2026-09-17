@@ -357,17 +357,28 @@ def _merge_faces(faces, edges_of_face, selected) -> MultiPolygon:
     for fi in selected:
         for a, b in edges_of_face[fi]:
             count[(a, b) if a < b else (b, a)] += 1
-    boundary = [shapely.linestrings([a, b]) for (a, b), c in count.items() if c == 1]
+    edges = [ends for ends, c in count.items() if c == 1]
+    if not edges:
+        return P.EMPTY
+    ends = np.asarray(edges, dtype=float)  # (edges, 2 endpoints, xy)
+    boundary = shapely.linestrings(
+        ends.reshape(-1, 2), indices=np.repeat(np.arange(len(edges)), 2)
+    )
+    rings = shapely.get_parts(shapely.polygonize(boundary))
     pieces = []
-    for g in shapely.get_parts(shapely.polygonize(boundary)):
-        pieces.extend(q for q in P._iter_polygons(shapely.make_valid(g)) if q.area > 0)
+    for g in shapely.make_valid(rings):
+        pieces.extend(q for q in P._iter_polygons(g) if q.area > 0)
+    if not pieces:
+        return P.EMPTY
     # polygonize also returns the holes as pieces: keep the ones that are (mostly) selected area
     selected_union = shapely.unary_union([faces[i] for i in selected])
-    shapely.prepare(selected_union)
-    keep = []
-    for piece in pieces:
-        if selected_union.intersection(piece).area > 0.5 * piece.area:
-            keep.append(orient(piece, sign=1.0))
+    parts = np.asarray(pieces, dtype=object)
+    overlap = shapely.area(shapely.intersection(selected_union, parts))
+    keep = [
+        orient(piece, sign=1.0)
+        for piece, over, area in zip(pieces, overlap, shapely.area(parts))
+        if over > 0.5 * area
+    ]
     return MultiPolygon(keep) if keep else P.EMPTY
 
 

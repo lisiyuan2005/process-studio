@@ -304,3 +304,41 @@ def test_what_blocks_a_slab_is_worked_out_once_for_the_whole_etch():
     other = _blocker_union([first, third], cache)
     assert other is not once and other.area == pytest.approx(2.0)
     assert _blocker_union([first, second], cache) is once
+
+
+def test_a_dilation_is_made_once_per_piece_and_radius(monkeypatch):
+    """A step asked for the same dilation over and over.
+
+    A dilation depends on the front piece and the radius and on nothing
+    else. The radii repeat by construction: the box front only ever grows
+    a piece by the depth or not at all, and the round one gives every
+    sample at the same distance from a piece the same radius. On a real
+    253-slab stack a step asked for 3,295 of them where a few dozen exist,
+    and they were 127 s of the 318 s ten steps cost.
+    """
+    asked: list[tuple[object, float]] = []
+    dilate = MultiPolygon.buffer
+
+    def counted(self, distance, *args, **kwargs):
+        # The piece is kept, not just its id: a freed geometry's address is
+        # handed to the next one, which would read as a repeat.
+        asked.append((self, float(distance)))
+        return dilate(self, distance, *args, **kwargs)
+
+    monkeypatch.setattr(MultiPolygon, "buffer", counted)
+
+    device = Device("stack", (-0.8, -0.8, 0.8, 0.8), conformal_resolution=0.01, verbose=False)
+    for name in ("Si", "SiO2", "SiN"):
+        device.material(name)
+    device.deposit("Si", 0.3, mode="planar")
+    for _ in range(4):
+        device.deposit("SiO2", 0.12, mode="planar")
+        device.deposit("SiN", 0.12, mode="planar")
+    device.etch(device.masks.circle((0, 0), 0.44), target=["SiO2", "SiN"], depth=0.96)
+    device.wet_etch(target="SiN", depth=0.25)
+
+    assert asked, "the etch did dilate something"
+    once = {(id(piece), radius) for piece, radius in asked}
+    assert len(once) == len(asked), (
+        f"{len(asked)} dilations for {len(once)} distinct (piece, radius) pairs"
+    )
