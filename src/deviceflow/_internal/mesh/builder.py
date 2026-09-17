@@ -26,6 +26,7 @@ Vertices are welded by exact (x, y, z) key; no tolerance is involved.
 from __future__ import annotations
 
 from collections import Counter, OrderedDict, defaultdict
+from dataclasses import dataclass
 
 import numpy as np
 import shapely
@@ -41,6 +42,11 @@ from .manifold import split_nonmanifold
 from .triangulate import triangulate
 
 XYZ = tuple[float, float, float]
+
+#: How many arrangement edges the wall pass compares at a time. The arrays
+#: are (slabs x chunk), so this is what keeps them megabytes rather than the
+#: hundreds of megabytes the whole edge list would need.
+WALL_CHUNK = 4096
 
 
 class _MeshAccumulator:
@@ -72,6 +78,90 @@ class _MeshAccumulator:
         )
 
 
+@dataclass(frozen=True)
+class Arrangement:
+    """The planar figure every material's mesh is cut out of.
+
+    Nothing in here depends on which material is being built: the linework
+    is every material's rings noded together, so each atomic face is
+    uniformly inside or outside every material in every slab. That is what
+    makes a face's neighbour exact without probing -- and it is also why
+    building it once per material was most of the cost. On a 253-slab, 7
+    material stack it takes 6.6 s and the whole mesh took 88 s; 46 s of
+    that was this figure, built seven times over.
+    """
+
+    #: the atomic faces, each oriented counter-clockwise
+    faces: list[Polygon]
+    #: per face, its ring edges with the face on their left
+    edges_of_face: list[list[tuple[tuple, tuple]]]
+    #: undirected edge -> the faces on its two sides, with which way round
+    adjacent: dict[tuple, list[tuple[int, bool]]]
+    #: per slab, per face: which material holds it, -1 for none. A slab's
+    #: regions are disjoint, so one number says everything -- a face is
+    #: this material's where it names this material, and lies against
+    #: whatever else it names.
+    owner: np.ndarray
+    materials: list[Material]
+    index_of: dict[Material, int]
+
+    def member(self, index: int) -> np.ndarray:
+        """Per slab, per face: is this material there?"""
+        return self.owner == np.int16(index)
+
+    def against(self, index: int) -> np.ndarray:
+        """Per slab, per face: which *other* material is there, -1 for none."""
+        return np.where(self.owner == np.int16(index), np.int16(-1), self.owner)
+
+
+def arrange(state: ProcessState, materials: list[Material] | None = None) -> Arrangement:
+    """Node every material's rings together and label the faces that fall out.
+
+    A slab's regions are disjoint (``ProcessState.validate`` says so), so
+    an overlap here means the state was never valid; that is an error
+    rather than a mesh with two materials in one place.
+    """
+    if materials is None:
+        materials = materials_in_order(state)
+    index_of = {m: i for i, m in enumerate(materials)}
+    slabs = state.slabs
+    segments = P.unique_segments(g for s in slabs for g in s.regions.values())
+    master = shapely.unary_union(segments) if segments is not None else P.EMPTY
+    faces = [
+        orient(f, sign=1.0)
+        for f in shapely.get_parts(shapely.polygonize(shapely.get_parts(master)))
+        if f.area > 0
+    ]
+    if not faces:
+        raise MeshError("no faces to mesh")
+    reps = shapely.points(
+        np.array([[p.x, p.y] for p in (f.representative_point() for f in faces)])
+    )
+
+    owner = np.full((len(slabs), len(faces)), -1, dtype=np.int16)
+    for k, slab in enumerate(slabs):
+        for material, region in slab.regions.items():
+            if region.is_empty:
+                continue
+            shapely.prepare(region)
+            held = shapely.contains(region, reps)
+            if np.any(held & (owner[k] >= 0)):
+                raise MeshError(
+                    f"{material.name} overlaps another material in the slab at z={slab.z0}"
+                )
+            owner[k][held] = index_of[material]
+
+    edges_of_face = [_directed_edges(f) for f in faces]
+    adjacent: dict[tuple, list[tuple[int, bool]]] = defaultdict(list)
+    for fi, edges in enumerate(edges_of_face):
+        for a, b in edges:
+            if a < b:
+                adjacent[(a, b)].append((fi, True))
+            else:
+                adjacent[(b, a)].append((fi, False))
+    return Arrangement(faces, edges_of_face, dict(adjacent), owner, list(materials), index_of)
+
+
 def build_material_meshes(
     state: ProcessState, *, manifold: bool = True, buried: bool = True
 ) -> "OrderedDict[Material, trimesh.Trimesh]":
@@ -92,10 +182,11 @@ def build_material_meshes(
     order) the face lies against, in ``metadata["neighbour_faces"]``.
     """
     materials = materials_in_order(state)
+    figure = arrange(state, materials)
     out: "OrderedDict[Material, trimesh.Trimesh]" = OrderedDict()
     for m in materials:
         out[m] = build_one_material(
-            state, m, manifold=manifold, materials=materials, buried=buried
+            state, m, manifold=manifold, materials=materials, buried=buried, arrangement=figure
         )
     return out
 
@@ -122,6 +213,7 @@ def build_one_material(
     manifold: bool = True,
     materials: list[Material] | None = None,
     buried: bool = True,
+    arrangement: Arrangement | None = None,
 ) -> trimesh.Trimesh:
     """Caps and walls of one material from a single planar arrangement.
 
@@ -144,9 +236,6 @@ def build_one_material(
     ``metadata["neighbour_faces"]``; ``metadata["interface_faces"]`` is the
     same as a boolean.
     """
-    if materials is None:
-        materials = materials_in_order(state)
-    index_of = {m: i for i, m in enumerate(materials)}
     slabs = state.slabs
     n = len(slabs)
     regions: list[MultiPolygon] = [s.regions.get(material, P.EMPTY) for s in slabs]
@@ -154,42 +243,17 @@ def build_one_material(
 
     if all(r.is_empty for r in regions):
         raise MeshError(f"{material.name}: no geometry")
-    # the arrangement of *all* materials' rings: every face is then uniformly
-    # inside/outside every material in every slab, so the neighbour of a
-    # face is exact and needs no probing
-    segments = P.unique_segments(g for s in slabs for g in s.regions.values())
-    master = shapely.unary_union(segments) if segments is not None else P.EMPTY
-    faces2d = [
-        orient(f, sign=1.0)
-        for f in shapely.get_parts(shapely.polygonize(shapely.get_parts(master)))
-        if f.area > 0
-    ]
-    if not faces2d:
-        raise MeshError(f"{material.name}: no faces to mesh")
-    reps = shapely.points(np.array([[p.x, p.y] for p in (f.representative_point() for f in faces2d)]))
-
-    member = np.zeros((n, len(faces2d)), dtype=bool)
-    neighbour = np.full((n, len(faces2d)), -1, dtype=np.int16)  # which other material holds a face
-    for k, slab in enumerate(slabs):
-        r = regions[k]
-        if not r.is_empty:
-            shapely.prepare(r)
-            member[k] = shapely.contains(r, reps)
-        for m, g in slab.regions.items():
-            if m is material or g.is_empty:
-                continue
-            shapely.prepare(g)
-            neighbour[k][shapely.contains(g, reps)] = index_of[m]
-
-    # directed edges of every face (face on the left) and edge -> adjacent faces
-    edges_of_face = [_directed_edges(f) for f in faces2d]
-    adjacent: dict[tuple, list[tuple[int, bool]]] = defaultdict(list)  # (a<b) -> [(face, forward)]
-    for fi, edges in enumerate(edges_of_face):
-        for a, b in edges:
-            if a < b:
-                adjacent[(a, b)].append((fi, True))
-            else:
-                adjacent[(b, a)].append((fi, False))
+    # The figure the faces come from says nothing about this material in
+    # particular, so a caller building every material hands over one for
+    # all of them (see ``arrange``).
+    if arrangement is None:
+        arrangement = arrange(state, materials)
+    faces2d = arrangement.faces
+    edges_of_face = arrangement.edges_of_face
+    adjacent = arrangement.adjacent
+    mine = arrangement.index_of[material]
+    member = arrangement.member(mine)
+    neighbour = arrangement.against(mine)
 
     acc = _MeshAccumulator()
     empty = np.zeros(len(faces2d), dtype=bool)
@@ -218,24 +282,48 @@ def build_one_material(
                         else:
                             acc.triangle((*a, zk), (*c, zk), (*b, zk), int(who))
 
-    # walls: an arrangement edge bounds the solid in slab k where membership differs across it
+    # walls: an arrangement edge bounds the solid in slab k where membership
+    # differs across it. Asking that edge by edge and slab by slab was
+    # 95,586 x 253 = 24 million Python steps on the stack this was measured
+    # on -- and the same 24 million whether the material ended up with
+    # 277,000 triangles or 68. So the question is asked of numpy, in chunks
+    # of edges to keep the arrays small, and only the strips that exist are
+    # walked. The chunks go in edge order and each chunk in slab order,
+    # which is the order the columns used to be met in.
+    edges = list(adjacent.items())
+    nowhere = len(faces2d)  # a column standing for "no face on that side"
+    left_of = np.full(len(edges), nowhere, dtype=np.int32)
+    right_of = np.full(len(edges), nowhere, dtype=np.int32)
+    for ei, (_ends, adj) in enumerate(edges):
+        for fi, forward in adj:
+            side = left_of if forward else right_of
+            if side[ei] == nowhere:
+                side[ei] = fi
+    member_at = np.zeros((n, nowhere + 1), dtype=bool)  # not a member of nowhere
+    member_at[:, :nowhere] = member
+    against_at = np.full((n, nowhere + 1), -1, dtype=np.int16)  # nothing against nowhere
+    against_at[:, :nowhere] = neighbour
+
     strips: dict[tuple, list[tuple[float, float]]] = defaultdict(list)
-    for (a, b), adj in adjacent.items():
-        left = next((fi for fi, fwd in adj if fwd), None)
-        right = next((fi for fi, fwd in adj if not fwd), None)
-        for k in range(n):
-            in_left = bool(member[k][left]) if left is not None else False
-            in_right = bool(member[k][right]) if right is not None else False
-            if in_left == in_right:
-                continue
-            if in_left:
-                p, q, other = a, b, right
-            else:
-                p, q, other = b, a, left
-            who = int(neighbour[k][other]) if other is not None else -1
-            if not buried and who >= 0:
-                continue  # this wall is an interface; nothing sees it
-            strips[(p[0], p[1], q[0], q[1], who)].append((z[k], z[k + 1]))
+    for start in range(0, len(edges), WALL_CHUNK):
+        stop = min(start + WALL_CHUNK, len(edges))
+        left, right = left_of[start:stop], right_of[start:stop]
+        in_left = member_at[:, left]
+        in_right = member_at[:, right]
+        who = np.where(in_left, against_at[:, right], against_at[:, left])
+        wall = in_left != in_right
+        if not buried:
+            wall &= who < 0  # an interface wall; nothing sees it
+        here, slab = np.nonzero(wall.T)
+        for ei, k, mine_left, against in zip(
+            here.tolist(),
+            slab.tolist(),
+            in_left.T[here, slab].tolist(),
+            who.T[here, slab].tolist(),
+        ):
+            a, b = edges[start + ei][0]
+            p, q = (a, b) if mine_left else (b, a)
+            strips[(p[0], p[1], q[0], q[1], against)].append((z[k], z[k + 1]))
     _emit_walls(acc, strips)
 
     mesh = acc.to_trimesh()

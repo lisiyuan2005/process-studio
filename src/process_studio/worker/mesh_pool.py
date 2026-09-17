@@ -83,11 +83,13 @@ refused: str | None = None
 
 # -- the child side --------------------------------------------------------
 
-#: the state this child last read, kept so the other materials of the same
-#: build do not each pay for it again. Keyed by the file's identity rather
-#: than its name: a temporary name can be handed out again once we have
-#: deleted it, and that would serve the wrong state.
-_held: tuple[tuple[str, int, int], Any] | None = None
+#: the state this child last read and the figure it cut from it, kept so
+#: the other materials of the same build do not each pay for them again --
+#: the figure is 6.6 s on a real stack and says nothing about which
+#: material is being built. Keyed by the file's identity rather than its
+#: name: a temporary name can be handed out again once we have deleted it,
+#: and that would serve the wrong state.
+_held: tuple[tuple[str, int, int], Any, Any] | None = None
 
 
 def _child_setup() -> None:
@@ -131,22 +133,24 @@ def _ready(_index: int) -> int:
 def _build_material(job: tuple[str, int, str, bool, bool]) -> tuple[str, ...]:
     global _held
     path, index, engine, buried, manifold = job
+
+    from deviceflow._internal.mesh.builder import arrange, build_one_material
+
     stat = os.stat(path)
     key = (path, stat.st_size, stat.st_mtime_ns)
     held = _held
     if held is None or held[0] != key:
         with open(path, "rb") as handle:
-            _held = held = (key, pickle.loads(handle.read()))
-    state = held[1]
+            state = pickle.loads(handle.read())
+        _held = held = (key, state, arrange(state))
+    _key, state, figure = held
 
-    from deviceflow._internal.mesh.builder import build_one_material, materials_in_order
     from deviceflow._internal.mesh.triangulate import using
 
-    materials = materials_in_order(state)
-    material = materials[index]
+    material = figure.materials[index]
     with using(engine):
         mesh = build_one_material(
-            state, material, manifold=manifold, materials=materials, buried=buried
+            state, material, manifold=manifold, buried=buried, arrangement=figure
         )
     return (material.name, *display_arrays(mesh))
 
