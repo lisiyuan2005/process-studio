@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { MAX_TILES, tileOffsets, type TilingState } from "./Viewport";
+import {
+  MAX_TILES,
+  restoredCamera,
+  tileOffsets,
+  type CameraMemory,
+  type TilingState,
+} from "./Viewport";
 
 const tiling = (rest: Partial<TilingState> = {}): TilingState => ({
   on: true,
@@ -53,5 +59,34 @@ describe("showing the cell as the array it stands for", () => {
     // Right up to the limit it still lays them out.
     const edge = tiling({ countX: MAX_TILES, countY: 1 });
     expect(tileOffsets(edge)).toHaveLength(MAX_TILES);
+  });
+});
+
+
+describe("keeping the view across a step", () => {
+  const turned: CameraMemory = { position: [3, -3, 2.4], target: [0, 0, 0], span: 1.2 };
+
+  it("puts the camera back exactly when the model is the same size", () => {
+    const put = restoredCamera(turned, 1.2);
+    expect(put.position).toEqual([3, -3, 2.4]);
+    expect(put.target).toEqual([0, 0, 0]);
+  });
+
+  it("stands further back from a taller step, in the same direction", () => {
+    const put = restoredCamera(turned, 2.4);
+    expect(put.position).toEqual([6, -6, 4.8]);
+    // The direction the user chose is what is kept; only the distance moves.
+    expect(put.near).toBeCloseTo(2.4 * 0.02);
+    expect(put.far).toBeCloseTo(2.4 * 40);
+  });
+
+  it("carries a panned target with it, so the same corner stays in the middle", () => {
+    const panned: CameraMemory = { position: [3, -3, 2.4], target: [0.5, 0, 0], span: 1.2 };
+    expect(restoredCamera(panned, 2.4).target).toEqual([1, 0, 0]);
+  });
+
+  it("does not divide by a span it never had", () => {
+    const fresh: CameraMemory = { position: [3, -3, 2.4], target: [0, 0, 0], span: 0 };
+    expect(restoredCamera(fresh, 2.4).position).toEqual([3, -3, 2.4]);
   });
 });

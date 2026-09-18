@@ -1,4 +1,5 @@
 import { OrbitControls } from "@react-three/drei";
+import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { Canvas, useThree } from "@react-three/fiber";
 import {
   Box,
@@ -19,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { MutableRefObject } from "react";
 import { createPortal } from "react-dom";
 import { ContextMenu, type MenuAnchor } from "./ContextMenu";
 import { NumberField } from "./NumberField";
@@ -331,6 +333,83 @@ export function tileOffsets(tiling: TilingState): [number, number][] {
 }
 
 /**
+ * Where the camera was left, so the next step opens on the same view.
+ *
+ * Switching steps clears the result before the next one arrives -- one
+ * step's geometry must not sit on screen labelled as another's -- so the
+ * canvas is unmounted and built again, and a new canvas starts at the
+ * default three-quarter view. The direction the user turned to is theirs,
+ * though, and having to turn back on every step is the thing that makes a
+ * flow tedious to look through. So it is remembered out here, where it
+ * survives the canvas, and put back when the next one mounts.
+ *
+ * The span it was stored at comes with it: a taller step is looked at from
+ * further back, the same way ``KeepInView`` dollies while mounted.
+ */
+export interface CameraMemory {
+  position: [number, number, number];
+  target: [number, number, number];
+  span: number;
+}
+
+/** A remembered view, put back in front of a model of this size. */
+export function restoredCamera(memory: CameraMemory, span: number) {
+  const scale = memory.span > 0 && span > 0 ? span / memory.span : 1;
+  const scaled = (point: [number, number, number]) =>
+    point.map((value) => value * scale) as [number, number, number];
+  return {
+    position: scaled(memory.position),
+    target: scaled(memory.target),
+    near: span * 0.02,
+    far: span * 40,
+  };
+}
+
+function RememberCamera({
+  memory,
+  span,
+}: {
+  memory: MutableRefObject<CameraMemory | null>;
+  span: number;
+}) {
+  const { camera, controls, invalidate } = useThree();
+  const orbit = controls as unknown as OrbitControlsImpl | null;
+
+  useEffect(() => {
+    if (!orbit) return;
+    const stored = memory.current;
+    if (stored && span > 0) {
+      const put = restoredCamera(stored, span);
+      camera.position.set(...put.position);
+      orbit.target.set(...put.target);
+      if (camera instanceof THREE.PerspectiveCamera) {
+        camera.near = put.near;
+        camera.far = put.far;
+        camera.updateProjectionMatrix();
+      }
+      orbit.update();
+      invalidate();
+    }
+    const remember = () => {
+      memory.current = {
+        position: camera.position.toArray() as [number, number, number],
+        target: orbit.target.toArray() as [number, number, number],
+        span,
+      };
+    };
+    remember();
+    orbit.addEventListener("change", remember);
+    return () => orbit.removeEventListener("change", remember);
+    // Restoring is for a fresh canvas; a span that changes while this one
+    // is mounted is ``KeepInView``'s to handle, and re-running here would
+    // undo the turn the user has made since.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orbit, camera, invalidate]);
+
+  return null;
+}
+
+/**
  * Dolly out when the model grows, and in when it shrinks.
  *
  * The camera prop is read when the canvas mounts and never again -- which
@@ -375,6 +454,7 @@ function SurfaceScene({
   clip,
   tiling,
   registerSnapshot,
+  cameraMemory,
 }: {
   surfaces: SurfaceDocument;
   materials: MaterialDefinition[];
@@ -383,6 +463,8 @@ function SurfaceScene({
   clip: ClipState;
   tiling: TilingState;
   registerSnapshot: (capture: (() => string) | null) => void;
+  /** Where the camera was left, kept outside the canvas so it survives it. */
+  cameraMemory: MutableRefObject<CameraMemory | null>;
 }) {
   const { bounds } = surfaces;
   const tiles = useMemo(() => tileOffsets(tiling), [tiling]);
@@ -448,6 +530,7 @@ function SurfaceScene({
     <Canvas camera={camera} dpr={[1, 2]} frameloop="demand" gl={{ localClippingEnabled: true }}>
       <color attach="background" args={["#f4f7f9"]} />
       <KeepInView span={span} />
+      <RememberCamera memory={cameraMemory} span={span} />
       <ambientLight intensity={0.72} />
       <directionalLight position={[span, -span, span * 1.6]} intensity={1.25} />
       <directionalLight position={[-span, span * 0.6, span]} intensity={0.45} />
@@ -565,6 +648,7 @@ function PictureView({
   pendingStart,
   onPoint,
   onClickCapture,
+  memory,
   children,
 }: {
   image: string;
@@ -580,6 +664,12 @@ function PictureView({
   onPoint: (point: [number, number]) => void;
   /** Takes the click instead of the measurement when it returns true. */
   onClickCapture?: (point: [number, number]) => boolean;
+  /**
+   * Where this view was zoomed and panned to, kept by the caller so that
+   * switching steps -- which unmounts this while the next picture is
+   * fetched -- does not throw it away.
+   */
+  memory: MutableRefObject<{ scale: number; x: number; y: number }>;
   children?: React.ReactNode;
 }) {
   // The cursor readout floats over the picture rather than sitting in the
@@ -597,9 +687,12 @@ function PictureView({
   // about the pointer, a drag moves it, and it never leaves a gap inside
   // the area the unzoomed picture filled. Nothing is re-fetched; the
   // picture's own pixels are magnified, so raise Sampling for finer ones.
-  const [zoom, setZoom] = useState({ scale: 1, x: 0, y: 0 });
+  const [zoom, setZoom] = useState(memory.current);
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
+  useEffect(() => {
+    memory.current = zoom;
+  }, [zoom, memory]);
   const clampZoom = (next: { scale: number; x: number; y: number }) => {
     const scale = Math.min(16, Math.max(1, next.scale));
     if (scale === 1 || !size) return { scale: 1, x: 0, y: 0 };
@@ -632,6 +725,17 @@ function PictureView({
     element.addEventListener("wheel", wheel, { passive: false });
     return () => element.removeEventListener("wheel", wheel);
     // The clamp reads the fitted size; a new size means new limits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [size]);
+  // A zoom taken from another picture -- another step, another axis -- can
+  // sit outside what this one's fitted size allows, and the limits are not
+  // known until it has one.
+  useEffect(() => {
+    // Not before there is one: the clamp reads the fitted size, and with
+    // none it answers "no zoom at all", which would throw the remembered
+    // zoom away on the very mount that is meant to restore it.
+    if (!size) return;
+    setZoom((current) => clampZoom(current));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [size]);
   const drag = useRef<{ x: number; y: number; zx: number; zy: number; moved: boolean } | null>(null);
@@ -854,6 +958,13 @@ export function Viewport({
 }: ViewportProps) {
   // The 3D clipping plane and the material whose look is being edited.
   const [clip, setClip] = useState<ClipState>({ axis: null, fraction: 0.5, flip: false });
+  // Outside the canvas, so switching steps -- which unmounts it while the
+  // next result is fetched -- does not throw away the view the user turned to.
+  const cameraMemory = useRef<CameraMemory | null>(null);
+  // The same for the flat views, one each: the section and the top view are
+  // looked at at different magnifications and should not share a zoom.
+  const sectionZoom = useRef({ scale: 1, x: 0, y: 0 });
+  const topZoom = useRef({ scale: 1, x: 0, y: 0 });
   // The window is the cell's period when the cell was cut to be one, which
   // is the case this is for, so that is where the pitch starts.
   const [tiling, setTiling] = useState<TilingState>({
@@ -1167,6 +1278,7 @@ export function Viewport({
               clip={clip}
               tiling={tiling}
               registerSnapshot={registerSnapshot}
+              cameraMemory={cameraMemory}
             />
           ) : (
             <div className="view-placeholder">
@@ -1194,6 +1306,7 @@ export function Viewport({
               measurement={measurement}
               pendingStart={measureStart}
               onPoint={measurePoint}
+              memory={sectionZoom}
             />
           ) : (
             <div className="view-placeholder">
@@ -1212,6 +1325,7 @@ export function Viewport({
             measurement={measurement}
             pendingStart={measureStart}
             onPoint={measurePoint}
+            memory={topZoom}
             onClickCapture={
               drawing
                 ? (point) => {
