@@ -149,6 +149,12 @@ $CoreReport = ($Cores -join "") -replace '\s', ''
 if ($CoreReport -notmatch '"workers":1,' -and $CoreReport -match '"pool":false') {
   throw "The packaged worker cannot build meshes on more than one core: $Cores"
 }
+# A build carrying the slab kernel must also be able to *build* a mesh in a
+# child. A level-set-only build leaves the geometry library out on purpose
+# and reports warmed=false, which is not a fault.
+if ($Kernels -match 'slab' -and $CoreReport -match '"warmed":false') {
+  throw "The packaged worker's children cannot build a mesh: $Cores"
+}
 
 # Trim the bundle now that everything that runs on it has already run:
 # pip, setuptools and wheel exist only to have installed the rest and are

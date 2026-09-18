@@ -12,6 +12,9 @@ in the same mesh built here.
 from __future__ import annotations
 
 import pathlib
+import sys
+import time
+from unittest import mock
 
 import numpy as np
 import pytest
@@ -72,6 +75,15 @@ def test_the_warmup_task_runs_clean():
     assert mesh_pool._ready(0) == 1
 
 
+def test_a_build_without_the_slab_kernel_still_gets_a_pool():
+    """The level-set-only package leaves the geometry library out on
+    purpose -- it has no display mesh at all. The warm-up finding nothing
+    to warm is not a machine that cannot give us processes, and reading it
+    as one failed a release build."""
+    with mock.patch.dict(sys.modules, {"deviceflow": None}):
+        assert mesh_pool._ready(0) == 0
+
+
 def test_a_pool_build_is_the_mesh_we_would_have_built(cores):
     state = _stack()
     assert mesh_pool.start() is not None, mesh_pool.refused
@@ -91,10 +103,19 @@ def test_shutdown_ends_the_children(cores):
     assert all(child.is_alive() for child in children)
 
     mesh_pool.shutdown()
-    for child in children:
-        child.join(5.0)
-        assert not child.is_alive()
     assert mesh_pool._pool is None
+
+    # Either every child has been seen to go, or the executor's own thread
+    # got there first -- it clears its record of them only after joining
+    # them, and once it has, ``is_alive()`` on our side can no longer tell
+    # us anything (whoever loses that race gets ECHILD and reads True for
+    # ever, whatever became of the process).
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        if pool._processes is None or not any(child.is_alive() for child in children):
+            break
+        time.sleep(0.05)
+    assert pool._processes is None or not any(child.is_alive() for child in children)
 
 
 def test_one_worker_means_building_it_here(monkeypatch):

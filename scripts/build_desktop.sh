@@ -86,9 +86,17 @@ esac
 # them is.
 CORES="$("$WORKER" --json cores || true)"
 echo "Mesh pool: $CORES"
-case "$(echo "$CORES" | tr -d ' \n')" in
+REPORT="$(echo "$CORES" | tr -d ' \n')"
+case "$REPORT" in
   *'"workers":1,'*) : ;;                       # nothing to spread over anyway
   *'"pool":false'*) echo "The packaged worker cannot build meshes on more than one core"; exit 1 ;;
+esac
+# A build carrying the slab kernel must also be able to *build* a mesh in a
+# child. A level-set-only build leaves the geometry library out on purpose
+# and reports warmed=false, which is not a fault.
+case "$KERNELS,$REPORT" in
+  *slab*'"warmed":false'*)
+    echo "The packaged worker's children cannot build a mesh: $CORES"; exit 1 ;;
 esac
 
 cd desktop

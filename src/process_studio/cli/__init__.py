@@ -211,6 +211,11 @@ def cmd_cores(session: Session, args: argparse.Namespace) -> int:
     packaged one can, since a frozen binary has to start *itself* to make a
     child -- would only be slow, never broken. This is how a build says so
     out loud, and it is what the packaging script checks.
+
+    A build without the slab kernel has no display mesh at all and leaves
+    the geometry library out; the pool still comes up (the machine is no
+    less able to run processes) and ``warmed`` says there was nothing in it
+    to warm.
     """
     import time
 
@@ -220,12 +225,13 @@ def cmd_cores(session: Session, args: argparse.Namespace) -> int:
     pool = mesh_pool.start()
     seconds = time.perf_counter() - started
     workers = mesh_pool.worker_count()
-    refused = mesh_pool.refused
+    refused, warmed = mesh_pool.refused, mesh_pool.warmed
     mesh_pool.shutdown()
     session.emit(
         {
             "workers": workers,
             "pool": pool is not None,
+            "warmed": warmed,
             "startSeconds": round(seconds, 3),
             "refused": refused,
         },
@@ -236,7 +242,12 @@ def cmd_cores(session: Session, args: argparse.Namespace) -> int:
                 if pool is not None
                 else f"Pool: not available ({refused}); meshes are built one material at a time"
             ),
-        ],
+        ]
+        + (
+            []
+            if warmed or pool is None
+            else ["Mesh builder: not in this build, so there is no display mesh to build"]
+        ),
     )
     return EXIT_OK
 

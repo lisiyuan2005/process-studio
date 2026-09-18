@@ -81,6 +81,9 @@ _last_used = 0.0
 _registered = False
 #: why we stopped trying, once we have
 refused: str | None = None
+#: whether the children found a mesh builder to warm. False in a build
+#: without the slab kernel, which has no display mesh to build.
+warmed = False
 
 
 # -- the child side --------------------------------------------------------
@@ -111,9 +114,16 @@ def _ready(_index: int) -> int:
     only reached on the first mesh -- so this warms the whole path on a
     solid small enough (a hundred triangles) to cost nothing.
     """
-    from deviceflow import Device
-    from deviceflow._internal.mesh.builder import build_one_material, materials_in_order
-    from deviceflow._internal.mesh.triangulate import DEFAULT_ENGINE, using
+    try:
+        from deviceflow import Device
+        from deviceflow._internal.mesh.builder import build_one_material, materials_in_order
+        from deviceflow._internal.mesh.triangulate import DEFAULT_ENGINE, using
+    except ImportError:
+        # A build without the slab kernel leaves deviceflow out on purpose
+        # (see packaging/ProcessStudioWorker.spec). It has no display mesh
+        # at all, so there is nothing here to warm -- and the machine is no
+        # less able to run processes for it, which is what the pool is.
+        return 0
 
     device = Device("mesh-pool-warmup", (0.0, 0.0, 1.0, 1.0), verbose=False)
     # Names the built-in palette knows, so this needs no material table.
@@ -189,7 +199,7 @@ def start() -> ProcessPoolExecutor | None:
     guarantees is that the machine *will* give us processes, which is the
     thing a caller cannot afford to find out in the middle of a build.
     """
-    global _pool, refused
+    global _pool, refused, warmed
     with _lock:
         if _pool is not None:
             return _pool
@@ -205,10 +215,11 @@ def start() -> ProcessPoolExecutor | None:
             mp_context=multiprocessing.get_context("spawn"),
             initializer=_child_setup,
         )
-        list(pool.map(_ready, range(count)))
+        ready = list(pool.map(_ready, range(count)))
     except Exception as error:  # noqa: BLE001 - any refusal means "not here"
         _refuse(error)
         return None
+    warmed = bool(ready) and all(ready)
     with _lock:
         # Another caller won the race, or the worker went away while we were
         # starting -- either way these children have nothing to do, and
@@ -276,20 +287,18 @@ def _end(pool: ProcessPoolExecutor | None) -> None:
     if pool is None:
         return
     # Read before the shutdown: it is what clears the record of them.
-    # concurrent.futures has no public way to end a child that is mid-task,
-    # and waiting for one is what we cannot do here.
-    children = list((getattr(pool, "_processes", None) or {}).values())
-    try:
-        pool.shutdown(wait=False, cancel_futures=True)
-    except Exception:  # noqa: BLE001
-        pass
-    for child in children:
-        try:
+    # concurrent.futures has no public way to end a child that is mid-task.
+    for child in list((getattr(pool, "_processes", None) or {}).values()):
+        with contextlib.suppress(Exception):
             if child.is_alive():
                 child.kill()
-            child.join(1.0)
-        except Exception:  # noqa: BLE001
-            pass
+    # Signalled, and deliberately not waited for: the executor's own thread
+    # joins its children when it hears the queue break, and two threads
+    # waiting on one child means the loser gets ECHILD -- after which
+    # ``is_alive()`` says True for ever, whatever became of the process.
+    # A killed process holds nothing open, which is all this has to achieve.
+    with contextlib.suppress(Exception):
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 def _refuse(error: BaseException) -> None:
