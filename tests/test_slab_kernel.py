@@ -880,30 +880,6 @@ def test_a_material_added_to_the_library_after_a_step_was_stored_is_known(
     assert etched.priority == ["Si"]
 
 
-def test_the_top_view_can_be_coloured_by_surface_height(kernel, project, sketches):
-    materials = default_materials()
-    state = kernel.initial_state(project, materials=materials)
-    trenched = run(
-        kernel,
-        state,
-        step(
-            ProcessType.ETCH,
-            mask_source="quick_sketch",
-            parameters={"target": 0.3, "directional_fraction": 1.0, "sketch_id": "default"},
-            material_responses={"Si": MaterialResponse("Si", 0.1)},
-        ),
-        project, sketches, materials,
-    )
-    by_material = kernel.top_view(trenched, {"Si": "#7f7f7f"}, project=project)
-    assert by_material["shading"] == "material" and by_material["levels"] == []
-    by_height = kernel.top_view(trenched, {"Si": "#7f7f7f"}, project=project, shading="height")
-    assert by_height["shading"] == "height"
-    # Two planes face the sky: the trench floor and the wafer top, in project heights.
-    assert [level["z"] for level in by_height["levels"]] == pytest.approx([-0.3, 0.0])
-    assert by_height["levels"][0]["color"] != by_height["levels"][1]["color"]
-    assert by_height["image"] != by_material["image"]
-
-
 def test_the_top_view_can_look_through_a_material(kernel, project, sketches):
     """A blanket film hides everything; taking it away shows what it covered."""
     materials = default_materials()

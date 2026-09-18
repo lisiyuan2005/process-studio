@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Mapping, Sequence
 import numpy as np
 from PIL import Image
 
-from ..visualization import height_levels, surface_heights, top_view_labels
+from ..visualization import surface_heights, top_view_labels
 from .errors import InvalidRequest
 
 if TYPE_CHECKING:
@@ -389,7 +389,6 @@ def top_view_image(
     state: MaterialState,
     colors: Mapping[str, str],
     *,
-    shading: str = "material",
     hidden: Sequence[str] = (),
     steps: bool = True,
 ) -> dict[str, Any]:
@@ -397,43 +396,21 @@ def top_view_image(
 
     The top view reports the topmost occupied label per column, so it is not
     interpolated: an upsampled picture here would invent coverage the kernel
-    never computed. With ``shading="height"`` each column shows the height
-    of its topmost occupied node instead, at most twelve bands wide.
+    never computed.
 
     ``hidden`` names materials to see through, so a column reports the first
     thing under them -- which is how you look into the hole a resist or a
-    liner is standing in.
+    liner is standing in. ``steps`` marks the brink where one material meets
+    itself at another height, which its colour alone cannot show.
     """
-    levels: list[dict[str, Any]] = []
-    if shading == "height":
-        heights = surface_heights(state, hidden)
-        present = heights[np.isfinite(heights)]
-        distinct = np.unique(present)
-        if distinct.size > 12:
-            edges = np.linspace(distinct.min(), distinct.max(), 13)
-            band = np.clip(np.digitize(heights, edges[1:-1]), 0, 11)
-            band_heights = [float(edges[i]) for i in range(12)]
-        else:
-            band = np.searchsorted(distinct, heights)
-            band_heights = [float(z) for z in distinct]
-        levels = height_levels(band_heights)
-        labels = np.where(np.isfinite(heights), band, -1).astype(np.int16)
-        names = [f"z={level['z']:.6g}" for level in levels]
-        colors = {name: level["color"] for name, level in zip(names, levels)}
-    else:
-        labels = top_view_labels(state, hidden)
-        names = list(state.priority)
-    rgb = _colorize(labels, names, colors)
-    if shading != "height" and steps:
-        # Colour says which material; this says where that material is at
-        # two different heights, which colour alone cannot.
+    labels = top_view_labels(state, hidden)
+    rgb = _colorize(labels, list(state.priority), colors)
+    if steps:
         rgb = _mark_steps(rgb, labels, surface_heights(state, hidden), state.grid.dz)
     rgb = rgb[::-1]
     grid = state.grid
     return {
         "image": _png(rgb),
-        "shading": "height" if shading == "height" else "material",
-        "levels": levels,
         "width": int(rgb.shape[1]),
         "height": int(rgb.shape[0]),
         "extent": {

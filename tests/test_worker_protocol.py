@@ -997,23 +997,6 @@ def test_run_cli_runs_a_command_inside_the_worker(tmp_path):
         call("run_cli", root=str(root), argv=[])
 
 
-def test_the_top_view_reports_height_levels_when_asked(workspace):
-    root = str(workspace)
-    document = call("open_workspace", root=root)
-    branch = document["branches"][0]
-    call("run_flow", root=root, branchId=branch["id"])
-    plain = call("get_top_view", root=root, branchId=branch["id"], stepId=branch["steps"][-1]["id"])
-    assert plain["shading"] == "material"
-    shaded = call(
-        "get_top_view", root=root, branchId=branch["id"], stepId=branch["steps"][-1]["id"], shading="height"
-    )
-    assert shaded["shading"] == "height"
-    assert shaded["levels"] and all({"z", "color"} <= set(level) for level in shaded["levels"])
-    assert [level["z"] for level in shaded["levels"]] == sorted(level["z"] for level in shaded["levels"])
-    with pytest.raises(InvalidRequest):
-        call("get_top_view", root=root, branchId=branch["id"], stepId=branch["steps"][-1]["id"], shading="rainbow")
-
-
 def _top_view_colors(view) -> set[str]:
     """Every colour the rendered top view actually shows."""
     picture = Image.open(io.BytesIO(base64.b64decode(view["image"]))).convert("RGB")
@@ -1039,19 +1022,6 @@ def test_the_top_view_can_look_through_a_material(workspace):
     assert colors["Al2O3"] not in _top_view_colors(through)
     # What was under it is what is seen instead, not a hole in the picture.
     assert colors["Si"] in _top_view_colors(through)
-    # And the heights are the heights of what is left.
-    heights = call(
-        "get_top_view",
-        root=root,
-        branchId=branch["id"],
-        stepId=last,
-        shading="height",
-        hidden=["Al2O3"],
-    )
-    assert heights["levels"]
-    assert heights["levels"] != call(
-        "get_top_view", root=root, branchId=branch["id"], stepId=last, shading="height"
-    )["levels"]
     with pytest.raises(InvalidRequest):
         call("get_top_view", root=root, branchId=branch["id"], stepId=last, hidden="Al2O3")
 
@@ -1072,10 +1042,6 @@ def test_the_top_view_marks_a_step_inside_one_material(workspace):
     assert plain == {silicon}
     # The rim of the trench, in the same silicon at a darker shade.
     assert marked - plain == {_shaded(silicon)}
-    # Height shading is made of those lines already, so it draws none.
-    assert _top_view_colors(
-        call("get_top_view", **through, shading="height")
-    ) == _top_view_colors(call("get_top_view", **through, shading="height", steps=False))
 
 
 def _shaded(color: str) -> str:

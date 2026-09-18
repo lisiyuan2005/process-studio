@@ -778,14 +778,10 @@ def dispatch(
         )
     if method == "get_top_view":
         state, repository, project, kernel = _view_state(parameters)
-        shading = str(parameters.get("shading") or "material")
-        if shading not in ("material", "height"):
-            raise InvalidRequest("get_top_view shading must be 'material' or 'height'.")
         return kernel.top_view(
             state,
             _material_colors(repository),
             project=project,
-            shading=shading,
             hidden=_hidden_materials(parameters),
             steps=parameters.get("steps", True) is not False,
         )

@@ -322,8 +322,6 @@ export interface MaskPreview {
   extent: ImageExtent;
 }
 
-export type TopShading = "material" | "height";
-
 /**
  * How the slab kernel's display mesh is triangulated. The two describe the
  * same solid -- same vertices, same triangle count, same area and volume --
@@ -339,10 +337,6 @@ export interface TopViewDocument {
   height: number;
   extent: ImageExtent;
   exact?: boolean;
-  /** How the picture is coloured: by topmost material, or by surface height. */
-  shading?: TopShading;
-  /** With height shading: the distinct surface heights (µm) and their colours, ascending. */
-  levels?: { z: number; color: string }[];
 }
 
 export interface GdsLayer {

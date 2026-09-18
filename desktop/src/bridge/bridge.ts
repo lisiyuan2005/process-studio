@@ -12,7 +12,6 @@ import type {
   SectionDocument,
   SectionLine,
   SurfaceDocument,
-  TopShading,
   Triangulation,
   UpdateInfo,
   TopViewDocument,
@@ -45,8 +44,6 @@ export interface ViewRequest {
   /** Empty means the bare wafer, before the first step. */
   stepId: string;
   interpolation?: number;
-  /** Top view only: colour by topmost material (default) or by surface height. */
-  shading?: TopShading;
   /** 3D view only: which triangulator builds the mesh. */
   triangulation?: Triangulation;
   /**

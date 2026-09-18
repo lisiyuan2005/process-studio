@@ -584,7 +584,7 @@ def cmd_view_top(session: Session, args: argparse.Namespace) -> int:
     step_id = step_reference(session, document, args.step)
     payload = session.call(
         "get_top_view", root=str(session.root), branchId=branch["id"], stepId=step_id,
-        shading=args.color_by,
+        steps=not args.no_steps,
     )
     destination = Path(args.output)
     _write_png(payload, destination)
@@ -1034,8 +1034,8 @@ def build_parser() -> argparse.ArgumentParser:
     top = view_commands.add_parser("top", help="the top view as PNG")
     _view_step(top)
     top.add_argument(
-        "--color-by", choices=("material", "height"), default="material",
-        help="colour each point by its topmost material, or by its surface height",
+        "--no-steps", action="store_true",
+        help="do not mark where one material meets itself at another height",
     )
     top.set_defaults(handler=cmd_view_top)
     mesh = view_commands.add_parser("mesh", help="the 3D surfaces as .glb, .gltf, .obj, .stl or .ply")

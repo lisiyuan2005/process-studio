@@ -32,7 +32,6 @@ import type {
   SectionLine,
   SurfaceDocument,
   SurfacePayload,
-  TopShading,
   TopViewDocument,
   Triangulation,
 } from "../types";
@@ -77,8 +76,6 @@ interface ViewportProps {
   surfaces?: SurfaceDocument;
   section?: SectionDocument;
   topView?: TopViewDocument;
-  topShading: TopShading;
-  onTopShadingChange: (shading: TopShading) => void;
   /** Top view: draw the line where one material meets itself at another height. */
   topSteps: boolean;
   onTopStepsChange: (steps: boolean) => void;
@@ -850,8 +847,6 @@ export function Viewport({
   surfaces,
   section,
   topView,
-  topShading,
-  onTopShadingChange,
   topSteps,
   onTopStepsChange,
   triangulation,
@@ -1307,18 +1302,6 @@ export function Viewport({
           </>
         )}
         {mode === "top" && (
-          <label>
-            Colour by
-            <select
-              value={topShading}
-              onChange={(event) => onTopShadingChange(event.target.value as TopShading)}
-            >
-              <option value="material">Topmost material</option>
-              <option value="height">Surface height</option>
-            </select>
-          </label>
-        )}
-        {mode === "top" && topShading === "material" && (
           // Colour says which material; this says where that material is at
           // two different heights, which colour alone cannot.
           <button
@@ -1479,29 +1462,7 @@ export function Viewport({
         )}
         <div className="footer-spacer" />
         <div className="legend">
-          {mode === "top" && topView?.shading === "height" ? (
-            <>
-              {(topView.levels ?? []).map((level) => (
-                <span key={level.z} title={`Surface at z = ${level.z} µm`}>
-                  <i style={{ background: level.color }} />
-                  {level.z.toFixed(3)} µm
-                </span>
-              ))}
-              {/* The legend here is heights, so the only way back to a
-                  material hidden under material shading is this. */}
-              {hiddenMaterials.length > 0 && (
-                <button
-                  type="button"
-                  className="hidden-material"
-                  title={`These heights are measured with ${hiddenMaterials.join(", ")} taken away. Click to put ${hiddenMaterials.length > 1 ? "them" : "it"} back.`}
-                  onClick={() => hiddenMaterials.forEach(onToggleMaterial)}
-                >
-                  <EyeOff size={11} />
-                  {hiddenMaterials.length} hidden
-                </button>
-              )}
-            </>
-          ) : (
+          {
             materials
             .filter((material) => shownMaterials.includes(material.name))
             .map((material) =>
@@ -1560,7 +1521,7 @@ export function Viewport({
                 </span>
               ),
             )
-          )}
+          }
         </div>
       </div>
       {lookEditor && (

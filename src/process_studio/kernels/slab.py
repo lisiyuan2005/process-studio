@@ -38,7 +38,6 @@ from deviceflow.state_io import decode_state, encode_state
 from deviceflow._internal.mesh.triangulate import DEFAULT_ENGINE, ENGINES
 
 from ..layout.quick_sketch import QuickSketch, SketchShape
-from ..visualization import height_levels
 from ..models import MaterialDefinition, ProcessStep, ProcessType, ProjectDefinition, Recipe
 from ..worker.errors import Cancelled
 from .base import KernelInfo
@@ -870,25 +869,6 @@ def _strands(geometry) -> list[list[tuple[float, float]]]:
     return strands
 
 
-def _height_shapes(top_view, z_offset: float):
-    """The top view split by surface height: (shapes, colours, legend levels).
-
-    Every visible piece carries the height of the slab it belongs to, so
-    the levels are exact: one per distinct plane the sky can see.
-    """
-    by_height: dict[float, list] = {}
-    for _name, z_top, region in top_view._pieces:
-        by_height.setdefault(round(float(z_top), 9), []).append(region)
-    levels = height_levels([z + z_offset for z in by_height])
-    shapes, colors = [], {}
-    for index, level in enumerate(levels):
-        name = f"z={level['z']:.6g}"
-        colors[name] = level["color"]
-        union = shapely.unary_union(by_height[round(level["z"] - z_offset, 9)])
-        shapes.extend((rings, name) for rings in _rings(union))
-    return shapes, colors, levels
-
-
 class SlabKernel:
     """Exact slab geometry, from the DeviceFlow 0.2.0 core."""
 
@@ -1210,7 +1190,6 @@ class SlabKernel:
         colors: Mapping[str, str],
         *,
         project: ProjectDefinition,
-        shading: str = "material",
         hidden: Sequence[str] = (),
         steps: bool = True,
     ) -> dict[str, Any]:
@@ -1218,23 +1197,14 @@ class SlabKernel:
         x_min, y_min, x_max, y_max = device.bounds
         extent = (x_min, x_max, y_min, y_max)
         top_view = device.top_view(hidden)
-        levels: list[dict[str, Any]] = []
-        lines: list[tuple[list[list[tuple[float, float]]], str]] = []
-        if shading == "height":
-            shapes, colors, levels = _height_shapes(top_view, state.z_offset)
-        else:
-            shapes = _top_view_shapes(top_view)
+        rgb = _raster(_top_view_shapes(top_view), colors, extent, _pixels_per_um(extent, 1))
+        if steps:
             # Colour says which material; the lines say where that material
             # is at two different heights, which colour alone cannot.
-            lines = _step_lines(top_view) if steps else []
-        rgb = _raster(shapes, colors, extent, _pixels_per_um(extent, 1))
-        if lines:
-            rgb = _stroke(rgb, lines, colors, extent)
+            rgb = _stroke(rgb, _step_lines(top_view), colors, extent)
         return {
             "image": _png(rgb),
             "exact": True,
-            "shading": "height" if shading == "height" else "material",
-            "levels": levels,
             "width": int(rgb.shape[1]),
             "height": int(rgb.shape[0]),
             "extent": {

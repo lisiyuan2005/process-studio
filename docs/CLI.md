@@ -46,7 +46,7 @@ cd ~/devices/dram
 | `fidelity [detailed\|simplified]` | 看或切换 slab 内核的膜模型：detailed 圆角、按分辨率采样；simplified 直角、每个平面一段，快得多。两档的结果分开保存，切回去不用重算 |
 | `window [--x A B] [--y A B] [--z A B] [--spacing NM] [--spacing-xy NM]` | 看或改工程窗口和精度（改动会丢弃全部结果）；slab 工程 `--spacing` 是 z 步长，`--spacing-xy` 是 XY 弧线弦高，0 表示跟随 z |
 | `view section --step STEP [--axis x\|y --at UM \| --line X0 Y0 X1 Y1] -o cut.png` | 截面 PNG |
-| `view top --step STEP [--color-by material\|height] -o top.png` | 俯视图 PNG；`--color-by height` 按表面高度着色，`--json` 里的 `levels` 是每级高度和颜色 |
+| `view top --step STEP [--no-steps] -o top.png` | 俯视图 PNG，按每点最上层材料的颜色画；同一材料自己的高度分界默认画一条压暗的线，`--no-steps` 关掉 |
 | `view mesh --step STEP -o step.glb` | 3D 表面，.glb / .gltf / .obj / .stl / .ply |
 | `materials list\|add NAME [--category --color --opacity]\|rm NAME` | 材料库 |
 | `recipes list\|export FILE.xlsx\|import FILE.xlsx` | Recipe 库，按类型和分组列出 |

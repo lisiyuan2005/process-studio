@@ -165,18 +165,14 @@ class Kernel(Protocol):
         colors: Mapping[str, str],
         *,
         project: ProjectDefinition,
-        shading: str = "material",
         hidden: Sequence[str] = (),
         steps: bool = True,
     ) -> dict[str, Any]:
         """The view from above, as a PNG plus the frame it was drawn in.
 
-        ``shading`` is "material" (the topmost material's colour) or
-        "height" (one palette colour per distinct surface height, listed
-        under ``levels`` for a legend). ``hidden`` names materials to look
-        through: they are neither drawn nor allowed to cover what is under
-        them, so the view is of the structure without them. ``steps`` draws
-        the line where one material meets itself at another height, which
-        material colour alone cannot show; it is for material shading,
-        height shading being made of those lines already.
+        Every point takes the colour of the topmost material there.
+        ``hidden`` names materials to look through: they are neither drawn
+        nor allowed to cover what is under them, so the view is of the
+        structure without them. ``steps`` draws the line where one material
+        meets itself at another height, which its colour alone cannot show.
         """
