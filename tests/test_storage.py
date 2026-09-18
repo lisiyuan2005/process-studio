@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from process_studio.kernel.grid import UniformGrid3D
 from process_studio.kernel.material_state import MaterialState
 from process_studio.models import (
@@ -75,3 +77,60 @@ def test_delete_project_snapshots_preserves_flow(tmp_path) -> None:
     assert repository.load_branch(branch.id).steps[0].id == step.id
     assert repository.load_latest_snapshot(branch.id) is None
     assert not (repository.snapshot_directory / f"{snapshot_id}.npz").exists()
+
+
+def test_a_workspace_that_moves_keeps_the_results_it_computed(tmp_path):
+    """Snapshot paths are stored relative to the workspace.
+
+    Every step's stored result was recorded by absolute path, so a
+    workspace copied anywhere -- another machine, another home directory,
+    a zip and back -- pointed every one of them at a directory that is not
+    there. Nothing said so: the flow looked current and each step
+    recomputed, or failed, when it was asked for.
+    """
+    import shutil
+
+    from process_studio.storage import ProjectRepository
+
+    class _State:
+        def save(self, path):
+            Path(path).write_bytes(b"a result")
+
+    here = tmp_path / "here"
+    repository = ProjectRepository(here / "process_studio.sqlite3")
+    repository.save_project(ProjectDefinition(id="p", name="p", grid={}))
+    repository.save_branch("p", FlowBranch(id="b", name="main", steps=[]))
+    repository.save_snapshot("p", "b", "s1", _State(), suffix=".dfz")
+
+    with repository.connect() as connection:
+        stored = connection.execute("SELECT path FROM snapshots").fetchone()[0]
+    assert stored.startswith("process_studio_snapshots/"), stored
+    assert repository.snapshot_path("b", "s1").read_bytes() == b"a result"
+
+    there = tmp_path / "there"
+    shutil.copytree(here, there)
+    moved = ProjectRepository(there / "process_studio.sqlite3")
+    found = moved.snapshot_path("b", "s1")
+    assert found.parent == moved.snapshot_directory
+    assert found.read_bytes() == b"a result"
+
+
+def test_a_snapshot_recorded_by_absolute_path_is_adopted(tmp_path):
+    """What the workspaces written before this look like."""
+    from process_studio.storage import ProjectRepository
+
+    class _State:
+        def save(self, path):
+            Path(path).write_bytes(b"a result")
+
+    repository = ProjectRepository(tmp_path / "process_studio.sqlite3")
+    repository.save_project(ProjectDefinition(id="p", name="p", grid={}))
+    repository.save_branch("p", FlowBranch(id="b", name="main", steps=[]))
+    repository.save_snapshot("p", "b", "s1", _State(), suffix=".dfz")
+    with repository.connect() as connection:
+        name = connection.execute("SELECT path FROM snapshots").fetchone()[0].rsplit("/", 1)[-1]
+        connection.execute(
+            "UPDATE snapshots SET path = ?", (f"/somewhere/else/snapshots/{name}",)
+        )
+
+    assert repository.snapshot_path("b", "s1").read_bytes() == b"a result"

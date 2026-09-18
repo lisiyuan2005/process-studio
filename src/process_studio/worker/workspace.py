@@ -265,7 +265,9 @@ def _canonical(value: Any) -> str:
     return json.dumps(_plain_numbers(value), sort_keys=True, separators=(",", ":"), default=str)
 
 
-def layout_fingerprint(gds_path: str | None) -> list[Any] | None:
+def layout_fingerprint(
+    gds_path: str | None, repository: "ProjectRepository | None" = None
+) -> list[Any] | None:
     """What identifies the layout a step's mask is cut from.
 
     The file itself, not the path alone: importing the same GDS again
@@ -273,14 +275,20 @@ def layout_fingerprint(gds_path: str | None) -> list[Any] | None:
     Its size and modification time say both, and cost one stat -- a real
     layout runs to hundreds of megabytes, and this is read again every
     time the flow's status is refreshed, so reading the bytes is not on.
+
+    The path goes in as the workspace stores it, not as it resolves here:
+    an absolute one would make every step that cuts from the layout stale
+    the moment the workspace was copied anywhere, which is the opposite of
+    what the digest is for.
     """
     if not gds_path:
         return None
+    named = gds_path if repository is None else repository.as_stored(gds_path)
     try:
         stat = Path(gds_path).stat()
     except OSError:
-        return [gds_path, None, None]  # gone: not the layout that ran
-    return [gds_path, stat.st_size, stat.st_mtime_ns]
+        return [named, None, None]  # gone: not the layout that ran
+    return [named, stat.st_size, stat.st_mtime_ns]
 
 
 def step_digest(

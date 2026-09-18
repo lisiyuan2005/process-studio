@@ -41,31 +41,35 @@ class ProjectRepository:
         """The directory this workspace's files live in."""
         return self.database_path.parent
 
-    def layout_as_stored(self, resolved: str | None) -> str | None:
-        """A layout path as it goes into the database: relative to here.
+    def as_stored(self, resolved: str | Path | None) -> str | None:
+        """A path as it goes into the database: relative to this workspace.
 
-        An absolute path is the machine it was written on. A workspace with
-        one in it stops finding its layout the moment it is copied anywhere
-        -- to another machine, another user's home, or a zip and back -- and
-        the steps that cut from that layout then cannot run at all. The
-        file is inside the workspace (importing one copies it into
-        ``layouts``), so what is stored is where it sits in the workspace.
+        An absolute path names the machine it was written on. A workspace
+        carrying one stops finding the file the moment it is copied
+        anywhere -- another machine, another user's home, a zip and back --
+        and everything that needed the file then quietly does not work.
+        Every file a project refers to is inside the workspace (importing a
+        layout copies it into ``layouts``, a snapshot is written into the
+        snapshot directory), so what is stored is where it sits in the
+        workspace. A path that really does point outside is kept as it is.
         """
-        if not resolved:
-            return resolved
+        if resolved is None or resolved == "":
+            return None if resolved is None else ""
         path = Path(resolved)
         try:
             return path.relative_to(self.workspace).as_posix()
         except ValueError:
-            return resolved  # someone pointed at a file outside the workspace
+            return str(path)
 
-    def layout_on_disk(self, stored: str | None) -> str | None:
-        """Where the stored layout path actually is, now, on this machine.
+    def on_disk(self, stored: str | None, adopt_in: Path | None = None) -> str | None:
+        """Where a stored path actually is, now, on this machine.
 
-        A path written before they were stored relative -- absolute, from
-        another machine, Windows separators and all -- is adopted when the
-        file it names is in this workspace's ``layouts``, which is where
-        importing a layout puts it.
+        ``adopt_in`` is where to look for a file named by a path written
+        before they were stored relative -- absolute, from another machine,
+        Windows separators and all. Everything a project refers to lives in
+        one known directory per kind, so the name is enough to find it
+        again; a name that is not there is left alone, so the error the
+        user sees still carries the path they chose.
         """
         if not stored:
             return stored
@@ -82,9 +86,17 @@ class ProjectRepository:
             return str(self.workspace.joinpath(*stored.replace("\\", "/").split("/")))
         if Path(stored).exists():
             return stored
-        name = stored.replace("\\", "/").rsplit("/", 1)[-1]
-        moved = self.workspace / "layouts" / name
-        return str(moved) if moved.is_file() else stored
+        if adopt_in is not None:
+            name = stored.replace("\\", "/").rsplit("/", 1)[-1]
+            moved = adopt_in / name
+            if moved.is_file():
+                return str(moved)
+        return stored
+
+    @property
+    def layouts_directory(self) -> Path:
+        """Where importing a layout puts it."""
+        return self.workspace / "layouts"
 
     def connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path)
@@ -208,7 +220,7 @@ class ProjectRepository:
                     project.id,
                     project.name,
                     json.dumps(project.grid),
-                    self.layout_as_stored(project.gds_path),
+                    self.as_stored(project.gds_path),
                     project.active_branch_id,
                     project.kernel,
                     project.resolution_um,
@@ -229,7 +241,7 @@ class ProjectRepository:
             id=row["id"],
             name=row["name"],
             grid=json.loads(row["grid_json"]),
-            gds_path=self.layout_on_disk(row["gds_path"]),
+            gds_path=self.on_disk(row["gds_path"], self.layouts_directory),
             active_branch_id=row["active_branch_id"],
             kernel=row["kernel"] or "levelset",
             resolution_um=row["resolution_um"],
@@ -391,7 +403,9 @@ class ProjectRepository:
                 ORDER BY branch_steps.position DESC LIMIT 1""",
                 (branch_id,),
             ).fetchone()
-        return None if row is None else MaterialState.load(row["path"])
+        if row is None:
+            return None
+        return MaterialState.load(self.on_disk(row["path"], self.snapshot_directory))
 
     def create_branch(
         self,
@@ -450,7 +464,7 @@ class ProjectRepository:
                 (
                     snapshot_id,
                     project_id,
-                    str(path),
+                    self.as_stored(path),
                     datetime.now(timezone.utc).isoformat(),
                 ),
             )
@@ -473,7 +487,7 @@ class ProjectRepository:
             ).fetchone()
         if row is None:
             raise KeyError((branch_id, step_id))
-        return Path(row["path"])
+        return Path(self.on_disk(row["path"], self.snapshot_directory) or row["path"])
 
     def load_snapshot(self, branch_id: str, step_id: str) -> MaterialState:
         # See load_latest_snapshot: kept lazy so importing this module never
@@ -489,7 +503,7 @@ class ProjectRepository:
             ).fetchone()
         if row is None:
             raise KeyError((branch_id, step_id))
-        return MaterialState.load(row["path"])
+        return MaterialState.load(self.on_disk(row["path"], self.snapshot_directory))
 
     def delete_project_snapshots(self, project_id: str) -> int:
         """Remove every cached state for a project while preserving its flow."""
@@ -557,7 +571,9 @@ class ProjectRepository:
             ).fetchone()
             connection.execute("DELETE FROM snapshots WHERE id=?", (snapshot_id,))
         if row is not None:
-            Path(row["path"]).unlink(missing_ok=True)
+            found = self.on_disk(row["path"], self.snapshot_directory)
+            if found:
+                Path(found).unlink(missing_ok=True)
 
     def log(
         self,

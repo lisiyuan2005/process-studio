@@ -108,7 +108,7 @@ def step_statuses(
     """
     by_id = {recipe.id: recipe for recipe in recipes}
     digests = branch_digests(
-        branch, by_id, sketches, project.grid, layout_fingerprint(project.gds_path)
+        branch, by_id, sketches, project.grid, layout_fingerprint(project.gds_path, repository)
     )
     stored = DigestCache(repository).load(branch.id)
     with repository.connect() as connection:
@@ -160,7 +160,7 @@ def run_flow(
     by_id = {recipe.id: recipe for recipe in recipes}
     sketches = load_sketches(root)
     digests = branch_digests(
-        branch, by_id, sketches, project.grid, layout_fingerprint(project.gds_path)
+        branch, by_id, sketches, project.grid, layout_fingerprint(project.gds_path, repository)
     )
     cache = DigestCache(repository)
     stored = cache.load(branch.id)

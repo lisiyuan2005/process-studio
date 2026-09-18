@@ -1227,6 +1227,14 @@ def test_a_workspace_carries_its_layout_when_it_moves(tmp_path):
     moved = ProjectRepository(there / "process_studio.sqlite3")
     assert moved.load_project("p").gds_path == str(there / "layouts" / "wafer.gds")
 
+    # ...and the layout still counts as the same layout, so the steps that
+    # cut from it are not all stale for having been copied.
+    from process_studio.worker.workspace import layout_fingerprint
+
+    assert layout_fingerprint(
+        repository.load_project("p").gds_path, repository
+    ) == layout_fingerprint(moved.load_project("p").gds_path, moved)
+
 
 def test_an_old_absolute_layout_path_is_adopted(tmp_path):
     """What the workspaces written before that look like: a path from the
@@ -1247,6 +1255,12 @@ def test_an_old_absolute_layout_path_is_adopted(tmp_path):
 
     found = repository.load_project("p").gds_path
     assert found == str(root / "layouts" / "1789494000968-3D DRAM.gds")
+    # Reading it did not rewrite the row; saving the project does that.
+    repository.save_project(repository.load_project("p"))
+    with repository.connect() as connection:
+        assert connection.execute("SELECT gds_path FROM projects").fetchone()[0] == (
+            "layouts/1789494000968-3D DRAM.gds"
+        )
 
     # One that names a file this workspace does not have is left alone, so
     # the error the user sees still names the path they chose.
