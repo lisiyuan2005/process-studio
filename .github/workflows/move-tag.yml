@@ -1,0 +1,41 @@
+# Point a tag at another commit.
+#
+# A release that is rebuilt (the Desktop builds workflow run again with the
+# same `release` tag) uploads binaries from the commit it built, but the tag
+# itself stays where it was first created -- so the release page's source
+# and compare link describe a different commit from the files under it.
+# Nothing in a checkout can fix that from a session whose git credentials
+# only push branches; this runs on the runner, which may write refs.
+name: Move a tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The tag to move, e.g. v0.9.7
+        type: string
+        required: true
+      sha:
+        description: "The commit it should point at; empty means the commit this run was started from"
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  move:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Point the tag at the commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          WANTED: ${{ inputs.sha }}
+        run: |
+          set -e
+          sha="${WANTED:-$GITHUB_SHA}"
+          echo "$TAG -> $sha"
+          # Force, because moving a tag is not a fast-forward.
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" \
+            -f sha="$sha" -F force=true --jq '.ref + " now " + .object.sha'
