@@ -837,6 +837,21 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .loop-form { padding: 16px 18px 4px; }
 .field-hint { display: block; margin-top: 6px; color: var(--faint); font-size: 11px; line-height: 1.45; }
 
+/* Repeating the cell in the 3D view: how many copies, and how far apart. */
+.tile-controls .tile-count { width: 40px; }
+.tile-controls .tile-pitch { width: 62px; }
+.tile-controls input {
+  height: 24px;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--panel-raised, #11171d);
+  color: var(--text);
+  font-size: 11px;
+  text-align: right;
+}
+.tile-warning { color: #d9a441; }
+
 /* The 3D clipping plane controls in the viewport footer. */
 .clip-controls { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 11px; }
 .clip-controls .footer-toggle { min-width: 26px; padding: 0 6px; display: inline-grid; place-items: center; }

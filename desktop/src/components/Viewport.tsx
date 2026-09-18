@@ -8,6 +8,7 @@ import {
   EyeOff,
   FileBox,
   FlipHorizontal2,
+  Grid2x2,
   Image as ImageIcon,
   LoaderCircle,
   PenLine,
@@ -20,6 +21,7 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ContextMenu, type MenuAnchor } from "./ContextMenu";
+import { NumberField } from "./NumberField";
 import { SectionLineEditor } from "./SectionLineEditor";
 import * as THREE from "three";
 import type {
@@ -126,6 +128,7 @@ function SurfaceMesh({
   exact,
   hiddenMaterials,
   clipPlane,
+  tiles,
 }: {
   surface: SurfacePayload;
   color: string;
@@ -139,6 +142,8 @@ function SurfaceMesh({
   exact: boolean;
   /** Materials not drawn; faces lying against one of them are shown. */
   hiddenMaterials: string[];
+  /** Where to draw this material, in µm; one entry per copy. */
+  tiles: [number, number][];
 }) {
   const hiddenKey = hiddenMaterials.join("\u0000");
   const geometry = useMemo(() => {
@@ -183,7 +188,11 @@ function SurfaceMesh({
   // Marching-cubes buffers are large; release them when the step changes.
   useEffect(() => () => geometry.dispose(), [geometry]);
 
-  const position: [number, number, number] = [-offset.x, -offset.y, -offset.z];
+  const at = (tile: [number, number]): [number, number, number] => [
+    tile[0] - offset.x,
+    tile[1] - offset.y,
+    -offset.z,
+  ];
   // A cut solid shows its inside: while the plane is on, the back faces
   // behind the cut are what the eye sees as the interior, so they are drawn.
   const side = exact && !clipPlane ? THREE.FrontSide : THREE.DoubleSide;
@@ -191,7 +200,7 @@ function SurfaceMesh({
   const translucent = opacity < 1;
   return (
     <group>
-      {translucent && (
+      {translucent &&
         // A translucent solid shows what lies behind it, not its own inside:
         // this pass writes only depth, so the colour pass below keeps just
         // the nearest face of the material at each pixel. Without it the
@@ -199,11 +208,16 @@ function SurfaceMesh({
         // triangles happen to be drawn first. It sits in the transparent
         // queue so the opaque materials behind the film are already drawn
         // and still show through.
-        <mesh geometry={geometry} position={position} renderOrder={2 * order}>
-          <meshBasicMaterial transparent colorWrite={false} side={side} clippingPlanes={clippingPlanes} />
-        </mesh>
-      )}
-      <mesh geometry={geometry} position={position} renderOrder={translucent ? 2 * order + 1 : 0}>
+        tiles.map((tile) => (
+          <mesh key={`depth ${tile[0]} ${tile[1]}`} geometry={geometry} position={at(tile)} renderOrder={2 * order}>
+            <meshBasicMaterial transparent colorWrite={false} side={side} clippingPlanes={clippingPlanes} />
+          </mesh>
+        ))}
+      {/* One geometry, drawn once per copy: the copies cost a draw each and
+          no memory, which is the whole point of tiling a cell rather than
+          simulating the array. */}
+      {tiles.map((tile) => (
+      <mesh key={`${tile[0]} ${tile[1]}`} geometry={geometry} position={at(tile)} renderOrder={translucent ? 2 * order + 1 : 0}>
         <meshStandardMaterial
           color={color}
           transparent={translucent}
@@ -225,6 +239,7 @@ function SurfaceMesh({
           polygonOffsetUnits={exact ? 0 : order}
         />
       </mesh>
+      ))}
     </group>
   );
 }
@@ -272,6 +287,78 @@ function Snapshot({ register }: { register: (capture: (() => string) | null) => 
   return null;
 }
 
+/**
+ * Showing the cell as the array it stands for.
+ *
+ * A repeating structure is simulated once -- one cell, with the window as
+ * its period -- because that is where the saving is: the same array as
+ * geometry would be N times the polygons through every step, every
+ * harmonise and every mesh. Copies of the finished mesh cost one draw
+ * each and nothing at all to compute, so the picture can have the array
+ * even though the simulation never did.
+ *
+ * It is a picture, not a result: a section, a top view or an exported mesh
+ * is still the one cell.
+ */
+export interface TilingState {
+  on: boolean;
+  countX: number;
+  countY: number;
+  /** Centre-to-centre spacing, in µm. Defaults to the project window. */
+  pitchX: number;
+  pitchY: number;
+}
+
+/** No more copies than a view can draw without becoming a slideshow. */
+export const MAX_TILES = 400;
+
+/** Where each copy sits, in µm, centred on the cell that was simulated. */
+export function tileOffsets(tiling: TilingState): [number, number][] {
+  if (!tiling.on) return [[0, 0]];
+  const countX = Math.max(1, Math.round(tiling.countX));
+  const countY = Math.max(1, Math.round(tiling.countY));
+  if (countX * countY > MAX_TILES) return [[0, 0]];
+  const offsets: [number, number][] = [];
+  for (let iy = 0; iy < countY; iy += 1) {
+    for (let ix = 0; ix < countX; ix += 1) {
+      offsets.push([
+        (ix - (countX - 1) / 2) * tiling.pitchX,
+        (iy - (countY - 1) / 2) * tiling.pitchY,
+      ]);
+    }
+  }
+  return offsets;
+}
+
+/**
+ * Dolly out when the model grows, and in when it shrinks.
+ *
+ * The camera prop is read when the canvas mounts and never again -- which
+ * is what keeps the view the user has turned to from being reset on every
+ * render -- so turning the copies on would otherwise leave them off the
+ * edge of the screen. The model is centred on the origin, which is also
+ * where the controls orbit, so keeping it framed is a scale of the
+ * camera's position about that point: the direction the user chose is
+ * untouched.
+ */
+function KeepInView({ span }: { span: number }) {
+  const { camera, invalidate } = useThree();
+  const framed = useRef(span);
+  useEffect(() => {
+    if (!Number.isFinite(span) || span <= 0 || Math.abs(span - framed.current) < 1e-9) return;
+    const scale = span / framed.current;
+    framed.current = span;
+    camera.position.multiplyScalar(scale);
+    if (camera instanceof THREE.PerspectiveCamera) {
+      camera.near = span * 0.02;
+      camera.far = span * 40;
+      camera.updateProjectionMatrix();
+    }
+    invalidate();
+  }, [span, camera, invalidate]);
+  return null;
+}
+
 /** Where a clip setting cuts, in model coordinates along its axis. */
 function clipPosition(clip: ClipState, bounds: SurfaceDocument["bounds"]): number {
   if (!clip.axis) return 0;
@@ -286,6 +373,7 @@ function SurfaceScene({
   hiddenMaterials,
   looks,
   clip,
+  tiling,
   registerSnapshot,
 }: {
   surfaces: SurfaceDocument;
@@ -293,12 +381,21 @@ function SurfaceScene({
   hiddenMaterials: string[];
   looks: Record<string, MaterialLook>;
   clip: ClipState;
+  tiling: TilingState;
   registerSnapshot: (capture: (() => string) | null) => void;
 }) {
   const { bounds } = surfaces;
+  const tiles = useMemo(() => tileOffsets(tiling), [tiling]);
+  // The copies are centred on the cell, so the cell's centre is still the
+  // middle of what is on screen; only how far back the camera has to sit
+  // depends on how many there are.
+  const spread = {
+    x: Math.max(...tiles.map(([x]) => Math.abs(x))) * 2,
+    y: Math.max(...tiles.map(([, y]) => Math.abs(y))) * 2,
+  };
   const span = Math.max(
-    bounds.xMax - bounds.xMin,
-    bounds.yMax - bounds.yMin,
+    bounds.xMax - bounds.xMin + spread.x,
+    bounds.yMax - bounds.yMin + spread.y,
     bounds.zMax - bounds.zMin,
   );
   const distance = span * 2.1;
@@ -350,6 +447,7 @@ function SurfaceScene({
     // nothing to flicker with.
     <Canvas camera={camera} dpr={[1, 2]} frameloop="demand" gl={{ localClippingEnabled: true }}>
       <color attach="background" args={["#f4f7f9"]} />
+      <KeepInView span={span} />
       <ambientLight intensity={0.72} />
       <directionalLight position={[span, -span, span * 1.6]} intensity={1.25} />
       <directionalLight position={[-span, span * 0.6, span]} intensity={0.45} />
@@ -368,6 +466,7 @@ function SurfaceScene({
               exact={surfaces.exact === true}
               hiddenMaterials={hiddenMaterials}
               clipPlane={clipPlane}
+              tiles={tiles}
             />
           );
         })}
@@ -755,6 +854,28 @@ export function Viewport({
 }: ViewportProps) {
   // The 3D clipping plane and the material whose look is being edited.
   const [clip, setClip] = useState<ClipState>({ axis: null, fraction: 0.5, flip: false });
+  // The window is the cell's period when the cell was cut to be one, which
+  // is the case this is for, so that is where the pitch starts.
+  const [tiling, setTiling] = useState<TilingState>({
+    on: false,
+    countX: 3,
+    countY: 3,
+    pitchX: windowBounds.xMax - windowBounds.xMin,
+    pitchY: windowBounds.yMax - windowBounds.yMin,
+  });
+  // A different project, a different cell: follow its window until the user
+  // has said otherwise.
+  const windowSize = `${windowBounds.xMax - windowBounds.xMin}x${windowBounds.yMax - windowBounds.yMin}`;
+  const chosenPitch = useRef(false);
+  useEffect(() => {
+    if (chosenPitch.current) return;
+    setTiling((current) => ({
+      ...current,
+      pitchX: windowBounds.xMax - windowBounds.xMin,
+      pitchY: windowBounds.yMax - windowBounds.yMin,
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [windowSize]);
   const [lookEditor, setLookEditor] = useState<{ material: MaterialDefinition; x: number; y: number } | null>(null);
   // Drawing the AA–BB line: two clicks on the top view, A then B.
   const [drawing, setDrawing] = useState(false);
@@ -1044,6 +1165,7 @@ export function Viewport({
               hiddenMaterials={hiddenMaterials}
               looks={looks}
               clip={clip}
+              tiling={tiling}
               registerSnapshot={registerSnapshot}
             />
           ) : (
@@ -1206,6 +1328,78 @@ export function Viewport({
               <option value="delaunay">Delaunay</option>
             </select>
           </label>
+        )}
+        {mode === "surfaces" && (
+          <div className="clip-controls tile-controls" role="group" aria-label="Repeat the cell">
+            <button
+              type="button"
+              className={`footer-toggle ${tiling.on ? "active" : ""}`}
+              title={
+                tiling.on
+                  ? "Show the one cell that was simulated"
+                  : "Draw copies of this cell in a grid. Only the picture repeats: the simulation, the section, the top view and an exported mesh are all still the one cell."
+              }
+              onClick={() => setTiling((current) => ({ ...current, on: !current.on }))}
+            >
+              <Grid2x2 size={13} />
+            </button>
+            {tiling.on && (
+              <>
+                <NumberField
+                  className="tile-count"
+                  aria-label="Copies across x"
+                  min={1}
+                  max={MAX_TILES}
+                  step={1}
+                  value={tiling.countX}
+                  onChange={(countX) => {
+                    chosenPitch.current = true;
+                    setTiling((current) => ({ ...current, countX: Math.round(countX) }));
+                  }}
+                />
+                <span>×</span>
+                <NumberField
+                  className="tile-count"
+                  aria-label="Copies across y"
+                  min={1}
+                  max={MAX_TILES}
+                  step={1}
+                  value={tiling.countY}
+                  onChange={(countY) => {
+                    chosenPitch.current = true;
+                    setTiling((current) => ({ ...current, countY: Math.round(countY) }));
+                  }}
+                />
+                <span title="Centre-to-centre spacing of the copies">pitch</span>
+                <NumberField
+                  className="tile-pitch"
+                  aria-label="Pitch in x, µm"
+                  step={0.001}
+                  value={tiling.pitchX}
+                  onChange={(pitchX) => {
+                    chosenPitch.current = true;
+                    setTiling((current) => ({ ...current, pitchX }));
+                  }}
+                />
+                <NumberField
+                  className="tile-pitch"
+                  aria-label="Pitch in y, µm"
+                  step={0.001}
+                  value={tiling.pitchY}
+                  onChange={(pitchY) => {
+                    chosenPitch.current = true;
+                    setTiling((current) => ({ ...current, pitchY }));
+                  }}
+                />
+                <code>µm</code>
+                {Math.round(tiling.countX) * Math.round(tiling.countY) > MAX_TILES && (
+                  <span className="tile-warning" role="status">
+                    over {MAX_TILES} copies: showing one
+                  </span>
+                )}
+              </>
+            )}
+          </div>
         )}
         {mode === "surfaces" && (
           <div className="clip-controls" role="group" aria-label="Clipping plane">
