@@ -1689,13 +1689,15 @@ export function Workspace({
           ) : (
             <Save size={13} />
           )}
-          {saveState === "saving"
-            ? "Saving"
-            : saveState === "unsaved"
-              ? "Unsaved"
-              : saveState === "error"
-                ? "Save failed"
-                : "Saved"}
+          <span>
+            {saveState === "saving"
+              ? "Saving"
+              : saveState === "unsaved"
+                ? "Unsaved"
+                : saveState === "error"
+                  ? "Save failed"
+                  : "Saved"}
+          </span>
         </div>
         <button type="button" className="log-button" onClick={() => setShowLog((value) => !value)}>
           <ScrollText size={15} />

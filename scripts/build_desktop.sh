@@ -21,7 +21,7 @@ cat > "$VARIANT_CONFIG" <<JSON
 {
   "productName": "$PRODUCT",
   "identifier": "$IDENTIFIER",
-  "app": { "windows": [ { "title": "$PRODUCT", "width": 1440, "height": 900, "minWidth": 960, "minHeight": 640, "resizable": true, "fullscreen": false, "center": true } ] }
+  "app": { "windows": [ { "title": "$PRODUCT", "width": 1440, "height": 900, "minWidth": 720, "minHeight": 600, "resizable": true, "fullscreen": false, "center": true } ] }
 }
 JSON
 echo "Building $PRODUCT with kernels: $KERNELS"

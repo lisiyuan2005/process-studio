@@ -17,7 +17,7 @@ $VariantConfig = Join-Path $ProjectRoot "work/tauri-variant.json"
 @{
   productName = $Product
   identifier = $Identifier
-  app = @{ windows = @(@{ title = $Product; width = 1440; height = 900; minWidth = 960; minHeight = 640; resizable = $true; fullscreen = $false; center = $true }) }
+  app = @{ windows = @(@{ title = $Product; width = 1440; height = 900; minWidth = 720; minHeight = 600; resizable = $true; fullscreen = $false; center = $true }) }
 } | ConvertTo-Json -Depth 5 | Set-Content -Path $VariantConfig -Encoding UTF8
 Write-Host "Building $Product with kernels: $Kernels"
 

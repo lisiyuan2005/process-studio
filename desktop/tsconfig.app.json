@@ -13,7 +13,10 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
-    "types": ["vite/client"]
+    // "node" is for the tests, which read styles.css and tauri.conf.json to
+    // check the layout cannot outgrow the window; nothing the browser runs
+    // imports from node.
+    "types": ["vite/client", "node"]
   },
   "include": ["src"]
 }

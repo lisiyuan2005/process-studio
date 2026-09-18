@@ -21,7 +21,10 @@
 
 * { box-sizing: border-box; }
 
-html, body, #root { margin: 0; min-width: 960px; min-height: 640px; width: 100%; height: 100%; overflow: hidden; }
+/* The floor the layout is actually built for; the window's own minimum is
+   in tauri.conf.json and matches it. It used to say 960 while the content
+   needed 1170, which is why anything past the window edge was simply cut. */
+html, body, #root { margin: 0; min-width: 720px; min-height: 600px; width: 100%; height: 100%; overflow: hidden; }
 
 button, input, select { font: inherit; }
 button { color: inherit; }
@@ -31,7 +34,14 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   outline-offset: 1px;
 }
 
-.app-shell { display: grid; grid-template-rows: 52px 1fr; width: 100%; height: 100%; background: var(--bg); }
+/* One column, said out loud. A grid with only its rows named gets a single
+   implicit column sized to its widest row, and the widest row is the
+   topbar: its min-content width is about 1170px, so the workspace grid
+   below it was stretched that wide whatever the window was, and the page's
+   ``overflow: hidden`` cut off whatever hung past the edge -- the
+   inspector, by 52px at 1120 and 212px at 960, which was as narrow as the
+   window could get. */
+.app-shell { display: grid; grid-template-rows: 52px 1fr; grid-template-columns: minmax(0, 1fr); width: 100%; height: 100%; background: var(--bg); }
 
 /* The window holds one tab per open workspace. The strip only appears when
    there is more than one: a single project should look exactly as it did. */
@@ -106,6 +116,13 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   align-items: center;
   gap: 12px;
   height: 52px;
+  /* Allowed to shrink, or it decides how wide the window has to be: the
+     shell's one column is sized to its widest row (see .app-shell), and
+     this row's min-content width is about 1170px. What gives is the
+     project name and the branch controls; the menus, the log and Run never
+     move, and the breakpoints drop the wordmark before anything useful has
+     to go. */
+  min-width: 0;
   padding: 0 12px;
   border-bottom: 1px solid var(--line);
   background: rgba(18, 23, 29, 0.96);
@@ -153,7 +170,13 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .global-progress div { height: 100%; background: #5da1f2; transition: width 180ms ease; }
 
 .app-shell { --steps-width: 310px; --inspector-width: 320px; }
-.workspace-grid { position: relative; display: grid; grid-template-columns: var(--steps-width) minmax(360px, 1fr) var(--inspector-width); min-height: 0; height: 100%; }
+/* The viewport is what yields. A floor on the middle track reads as
+   generous until the window is narrower than the three tracks together:
+   then the grid overflows and the side panel on the end is the part that
+   disappears, which is the worst of the three outcomes. So the middle
+   track may go to nothing, and the breakpoints below keep it from having
+   to. */
+.workspace-grid { position: relative; display: grid; grid-template-columns: var(--steps-width) minmax(0, 1fr) var(--inspector-width); min-height: 0; height: 100%; }
 .steps-panel, .inspector-panel { min-height: 0; display: flex; flex-direction: column; background: var(--panel); }
 .steps-panel { border-right: 1px solid var(--line); }
 .inspector-panel { border-left: 1px solid var(--line); }
@@ -406,7 +429,6 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 
 @media (max-width: 1120px) {
   .app-shell { --steps-width: 248px; --inspector-width: 278px; }
-  .workspace-grid { grid-template-columns: var(--steps-width) minmax(340px, 1fr) var(--inspector-width); }
   .project-path { display: none; }
 }
 
@@ -514,6 +536,26 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   .variant-controls button { width: 30px; justify-content: center; padding: 0; font-size: 0; }
   .variant-controls select { width: 126px; }
   .project-path { display: none; }
+}
+
+/* Half a 1920 screen. The panels are already at 248/278 (see the 1120
+   query); what goes now is the wordmark and the branch name's width. */
+@media (max-width: 1000px) {
+  .brand-compact span:not(.brand-glyph) { display: none; }
+  .variant-controls select { width: 104px; }
+  .topbar { gap: 8px; padding-right: 10px; }
+}
+
+/* Half a 1440 screen, and the narrowest the window will go. The panels
+   give up a little so the viewport keeps a usable share, and the save
+   state becomes its icon alone. */
+@media (max-width: 900px) {
+  .app-shell { --steps-width: 216px; --inspector-width: 236px; }
+  .brand-compact { display: none; }
+  .save-indicator span { display: none; }
+  .save-indicator { padding: 0; }
+  .menubar { margin-left: 0; }
+  .menubar button { padding: 0 7px; }
 }
 
 /* ---------------------------------------------------------------------------
@@ -730,6 +772,8 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 
 /* -- the top bar with a menu: brand and menus never shrink, the crumb and the path do ---- */
 .topbar > .back-button, .topbar > .brand-compact, .topbar > .menubar, .topbar > .save-indicator, .topbar > .log-button, .topbar > .run-button { flex: 0 0 auto; }
+
+.project-crumb strong { min-width: 0; }
 .topbar > .project-crumb { flex: 0 1 auto; min-width: 60px; overflow: hidden; }
 .project-path { flex: 0 1 auto; min-width: 0; }
 .run-button { white-space: nowrap; }
