@@ -1014,6 +1014,66 @@ def test_the_top_view_reports_height_levels_when_asked(workspace):
         call("get_top_view", root=root, branchId=branch["id"], stepId=branch["steps"][-1]["id"], shading="rainbow")
 
 
+def _top_view_colors(view) -> set[str]:
+    """Every colour the rendered top view actually shows."""
+    picture = Image.open(io.BytesIO(base64.b64decode(view["image"]))).convert("RGB")
+    pixels = np.asarray(picture).reshape(-1, 3)
+    return {"#%02x%02x%02x" % tuple(pixel) for pixel in np.unique(pixels, axis=0)}
+
+
+def test_the_top_view_can_look_through_a_material(workspace):
+    """Hiding the last deposit is how you see the hole it is standing in."""
+    root = str(workspace)
+    document = call("open_workspace", root=root)
+    branch = document["branches"][0]
+    call("run_flow", root=root, branchId=branch["id"])
+    last = branch["steps"][-1]["id"]
+    colors = {material["name"]: material["color"] for material in document["materials"]}
+
+    plain = call("get_top_view", root=root, branchId=branch["id"], stepId=last)
+    through = call(
+        "get_top_view", root=root, branchId=branch["id"], stepId=last, hidden=["Al2O3"]
+    )
+
+    assert colors["Al2O3"] in _top_view_colors(plain)
+    assert colors["Al2O3"] not in _top_view_colors(through)
+    # What was under it is what is seen instead, not a hole in the picture.
+    assert colors["Si"] in _top_view_colors(through)
+    # And the heights are the heights of what is left.
+    heights = call(
+        "get_top_view",
+        root=root,
+        branchId=branch["id"],
+        stepId=last,
+        shading="height",
+        hidden=["Al2O3"],
+    )
+    assert heights["levels"]
+    assert heights["levels"] != call(
+        "get_top_view", root=root, branchId=branch["id"], stepId=last, shading="height"
+    )["levels"]
+    with pytest.raises(InvalidRequest):
+        call("get_top_view", root=root, branchId=branch["id"], stepId=last, hidden="Al2O3")
+
+
+def test_the_slab_top_view_can_look_through_a_material(tmp_path):
+    root = str(tmp_path / "slab")
+    document = call("create_workspace", root=root, name="Through", kernel="slab")
+    branch = document["branches"][0]
+    call("run_flow", root=root, branchId=branch["id"])
+    last = branch["steps"][-1]["id"]
+    colors = {material["name"]: material["color"] for material in document["materials"]}
+
+    plain = call("get_top_view", root=root, branchId=branch["id"], stepId=last)
+    through = call(
+        "get_top_view", root=root, branchId=branch["id"], stepId=last, hidden=["Al2O3"]
+    )
+
+    assert colors["Al2O3"] in _top_view_colors(plain)
+    assert colors["Al2O3"] not in _top_view_colors(through)
+    assert colors["Si"] in _top_view_colors(through)
+
+
 def test_results_of_both_fidelities_are_kept_side_by_side(tmp_path):
     root = str(tmp_path / "slab")
     document = call("create_workspace", root=root, name="Both", kernel="slab")

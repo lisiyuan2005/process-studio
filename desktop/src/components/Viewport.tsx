@@ -1458,38 +1458,68 @@ export function Viewport({
         )}
         <div className="footer-spacer" />
         <div className="legend">
-          {mode === "top" && topView?.shading === "height"
-            ? (topView.levels ?? []).map((level) => (
+          {mode === "top" && topView?.shading === "height" ? (
+            <>
+              {(topView.levels ?? []).map((level) => (
                 <span key={level.z} title={`Surface at z = ${level.z} µm`}>
                   <i style={{ background: level.color }} />
                   {level.z.toFixed(3)} µm
                 </span>
-              ))
-            : materials
+              ))}
+              {/* The legend here is heights, so the only way back to a
+                  material hidden under material shading is this. */}
+              {hiddenMaterials.length > 0 && (
+                <button
+                  type="button"
+                  className="hidden-material"
+                  title={`These heights are measured with ${hiddenMaterials.join(", ")} taken away. Click to put ${hiddenMaterials.length > 1 ? "them" : "it"} back.`}
+                  onClick={() => hiddenMaterials.forEach(onToggleMaterial)}
+                >
+                  <EyeOff size={11} />
+                  {hiddenMaterials.length} hidden
+                </button>
+              )}
+            </>
+          ) : (
+            materials
             .filter((material) => shownMaterials.includes(material.name))
             .map((material) =>
-              mode === "surfaces" ? (
+              mode === "surfaces" || mode === "top" ? (
                 <button
                   key={material.id}
                   type="button"
-                  className={`${hiddenMaterials.includes(material.name) ? "hidden-material" : ""} ${looks[material.name] ? "custom-look" : ""}`}
+                  className={`${hiddenMaterials.includes(material.name) ? "hidden-material" : ""} ${mode === "surfaces" && looks[material.name] ? "custom-look" : ""}`}
                   title={
-                    (hiddenMaterials.includes(material.name)
-                      ? `Show ${material.name} in the 3D view`
-                      : `Hide ${material.name} in the 3D view`) + ". Right-click, or click the swatch, for its colour and opacity here."
+                    mode === "top"
+                      ? hiddenMaterials.includes(material.name)
+                        ? `Show ${material.name} in the view from above`
+                        : `Look through ${material.name}: the view from above then shows what is under it.`
+                      : (hiddenMaterials.includes(material.name)
+                          ? `Show ${material.name} in the 3D view`
+                          : `Hide ${material.name} in the 3D view`) +
+                        ". Right-click, or click the swatch, for its colour and opacity here."
                   }
                   onClick={() => onToggleMaterial(material.name)}
                   onContextMenu={(event) => {
+                    if (mode !== "surfaces") return;
                     event.preventDefault();
                     setLookEditor({ material, x: event.clientX, y: event.clientY });
                   }}
                 >
                   <i
                     style={{
-                      background: looks[material.name]?.color ?? material.color,
-                      opacity: 0.35 + 0.65 * (looks[material.name]?.opacity ?? material.opacity),
+                      background:
+                        mode === "surfaces"
+                          ? looks[material.name]?.color ?? material.color
+                          : material.color,
+                      opacity:
+                        mode === "surfaces"
+                          ? 0.35 + 0.65 * (looks[material.name]?.opacity ?? material.opacity)
+                          : 1,
                     }}
                     onClick={(event) => {
+                      // The colour and opacity here are the 3D view's own.
+                      if (mode !== "surfaces") return;
                       event.stopPropagation();
                       const box = event.currentTarget.getBoundingClientRect();
                       setLookEditor({ material, x: box.left, y: box.top - 6 });
@@ -1508,7 +1538,8 @@ export function Viewport({
                   {material.name}
                 </span>
               ),
-            )}
+            )
+          )}
         </div>
       </div>
       {lookEditor && (

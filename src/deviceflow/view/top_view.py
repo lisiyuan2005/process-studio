@@ -6,6 +6,8 @@ of the footprint not yet claimed by anything above it.
 
 from __future__ import annotations
 
+from typing import Sequence
+
 import shapely
 from shapely.geometry import MultiPolygon, Point, box
 from shapely.geometry.polygon import orient
@@ -20,17 +22,32 @@ Ring = list[tuple[float, float]]
 
 
 class TopView:
-    def __init__(self, state: ProcessState, materials: list[Material]):
+    """What the sky sees.
+
+    ``hidden`` names materials to look through: they neither appear nor
+    hide what is beneath them, so a resist or a liner can be taken out of
+    the way to see the hole it stands in. Everything else -- areas, the
+    void, the pictures -- then describes the view without them.
+    """
+
+    def __init__(
+        self, state: ProcessState, materials: list[Material], hidden: Sequence[str] = ()
+    ):
         self._state = state
         self._materials = {m.name: m for m in materials}
+        self._hidden = set(hidden)
         self._pieces: list[tuple[str, float, MultiPolygon]] = []  # (material, z_top, region)
         claimed = P.EMPTY
         for slab in reversed(state.slabs):
-            for m, region in slab.regions.items():
+            shown = {m: region for m, region in slab.regions.items() if m.name not in self._hidden}
+            for m, region in shown.items():
                 visible = state.clean(region.difference(claimed)) if not claimed.is_empty else region
                 if not visible.is_empty:
                     self._pieces.append((m.name, slab.z1, visible))
-            claimed = P.as_multipolygon(shapely.unary_union([claimed, slab.occupied()]))
+            if not shown:
+                continue
+            here = P.as_multipolygon(shapely.unary_union(list(shown.values())))
+            claimed = P.as_multipolygon(shapely.unary_union([claimed, here]))
         self._void = state.clean(box(*state.bounds).difference(claimed)) if not claimed.is_empty else P.clean(box(*state.bounds), state.grid)
 
     # -- queries ----------------------------------------------------------

@@ -904,6 +904,43 @@ def test_the_top_view_can_be_coloured_by_surface_height(kernel, project, sketche
     assert by_height["image"] != by_material["image"]
 
 
+def test_the_top_view_can_look_through_a_material(kernel, project, sketches):
+    """A blanket film hides everything; taking it away shows what it covered."""
+    materials = default_materials()
+    state = kernel.initial_state(project, materials=materials)
+    trenched = run(
+        kernel,
+        state,
+        step(
+            ProcessType.ETCH,
+            mask_source="quick_sketch",
+            parameters={"target": 0.3, "directional_fraction": 1.0, "sketch_id": "default"},
+            material_responses={"Si": MaterialResponse("Si", 0.1)},
+        ),
+        project, sketches, materials,
+    )
+    covered = run(
+        kernel,
+        trenched,
+        step(ProcessType.DEPOSIT, parameters={"target": 0.05, "mode": "planar"}, output_material="W"),
+        project, sketches, materials,
+    )
+    device = covered.device
+
+    assert device.top_view().materials == ["W"]
+    through = device.top_view(["W"])
+    # The tungsten is neither drawn nor able to cover what is under it, so
+    # the wafer and the trench floor are what the sky sees.
+    assert through.materials == ["Si"]
+    assert through.area("W") == 0.0
+    assert through.height_at(0.0, 0.0) == pytest.approx(0.5)
+    assert through.height_at(0.79, 0.79) == pytest.approx(0.8)
+    # And with everything hidden there is nothing left but the void.
+    empty = device.top_view(["W", "Si"])
+    assert empty.materials == []
+    assert empty.area(None) == pytest.approx(device.top_view().area("W"))
+
+
 def test_the_detailed_planar_film_grows_lips_on_both_sides_of_a_mouth(kernel, project, sketches):
     materials = default_materials()
     state = _undercut(kernel, project, materials)

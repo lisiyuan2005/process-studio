@@ -489,6 +489,16 @@ def _set_grid(parameters: Mapping[str, Any]) -> dict[str, Any]:
     return build_document(root, repository, project)
 
 
+def _hidden_materials(parameters: Mapping[str, Any]) -> list[str]:
+    """Materials the view is to look through, from the request."""
+    names = parameters.get("hidden")
+    if names is None:
+        return []
+    if not isinstance(names, list) or any(not isinstance(name, str) for name in names):
+        raise InvalidRequest("hidden must be a list of material names.")
+    return [str(name) for name in names]
+
+
 def _view_state(parameters: Mapping[str, Any]):
     """The state a view should draw, with the kernel that knows how to draw it."""
     root = _root(parameters)
@@ -772,7 +782,11 @@ def dispatch(
         if shading not in ("material", "height"):
             raise InvalidRequest("get_top_view shading must be 'material' or 'height'.")
         return kernel.top_view(
-            state, _material_colors(repository), project=project, shading=shading
+            state,
+            _material_colors(repository),
+            project=project,
+            shading=shading,
+            hidden=_hidden_materials(parameters),
         )
     if method == "export_mesh":
         state, repository, project, kernel = _view_state(parameters)

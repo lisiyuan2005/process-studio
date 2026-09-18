@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 import numpy as np
 
@@ -15,13 +15,34 @@ if TYPE_CHECKING:
     from .kernel.material_state import MaterialState
 
 
-def top_view_labels(state: MaterialState) -> np.ndarray:
+def top_view_labels(state: MaterialState, hidden: Sequence[str] = ()) -> np.ndarray:
+    """The topmost material per column, as an index into ``state.priority``.
+
+    A hidden material is not there to be seen through: the column reports
+    whatever is under it, which is the point of hiding one -- looking into
+    the hole a resist or a liner is filling.
+    """
     labels, _ = state.labels()
     top = np.full((state.grid.ny, state.grid.nx), -1, dtype=np.int16)
+    skip = _hidden_labels(state, hidden)
     for z_index in range(state.grid.nz):
-        occupied = labels[z_index] >= 0
-        top[occupied] = labels[z_index][occupied]
+        layer = labels[z_index]
+        occupied = layer >= 0
+        if skip.size:
+            occupied &= ~np.isin(layer, skip)
+        top[occupied] = layer[occupied]
     return top
+
+
+def _hidden_labels(state: MaterialState, hidden: Sequence[str]) -> np.ndarray:
+    """The label indices of the materials to see through, if any."""
+    if not hidden:
+        return np.empty(0, dtype=np.int16)
+    names = set(hidden)
+    return np.array(
+        [index for index, name in enumerate(state.priority) if name in names],
+        dtype=np.int16,
+    )
 
 
 def line_section_labels(
@@ -101,12 +122,20 @@ def height_levels(heights: list[float]) -> list[dict]:
     ]
 
 
-def surface_heights(state: MaterialState) -> np.ndarray:
-    """The height of the topmost occupied node per column; NaN where nothing is."""
+def surface_heights(state: MaterialState, hidden: Sequence[str] = ()) -> np.ndarray:
+    """The height of the topmost occupied node per column; NaN where nothing is.
+
+    A hidden material is seen through, so the height is that of the first
+    thing under it.
+    """
     labels, _ = state.labels()
     z = state.grid.z
     heights = np.full((state.grid.ny, state.grid.nx), np.nan, dtype=float)
+    skip = _hidden_labels(state, hidden)
     for z_index in range(state.grid.nz):
-        occupied = labels[z_index] >= 0
+        layer = labels[z_index]
+        occupied = layer >= 0
+        if skip.size:
+            occupied &= ~np.isin(layer, skip)
         heights[occupied] = z[z_index]
     return heights

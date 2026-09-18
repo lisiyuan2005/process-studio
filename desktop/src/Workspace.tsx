@@ -1073,7 +1073,9 @@ export function Workspace({
           if (next.index !== sectionIndex) setSectionIndex(next.index);
         }
       } else {
-        const key = `top:${target}:${topShading}`;
+        // The top view is drawn by the worker, so hiding a material is a
+        // different picture rather than something to switch off here.
+        const key = `top:${target}:${topShading}:${hiddenMaterials.join(",")}`;
         const hit = cached<TopViewDocument>(key);
         if (hit) {
           setTopView(hit);
@@ -1081,7 +1083,11 @@ export function Workspace({
           return;
         }
         setViewLoading(true);
-        const next = await bridge.getTopView(root, { ...request, shading: topShading });
+        const next = await bridge.getTopView(root, {
+          ...request,
+          shading: topShading,
+          hidden: hiddenMaterials,
+        });
         if (token !== viewToken.current) return;
         setTopView(remember(key, next));
       }

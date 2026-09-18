@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import base64
 import io
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 import numpy as np
 from PIL import Image
@@ -351,7 +351,11 @@ def sketch_preview_image(
 
 
 def top_view_image(
-    state: MaterialState, colors: Mapping[str, str], *, shading: str = "material"
+    state: MaterialState,
+    colors: Mapping[str, str],
+    *,
+    shading: str = "material",
+    hidden: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Render the native-resolution top view.
 
@@ -359,10 +363,14 @@ def top_view_image(
     interpolated: an upsampled picture here would invent coverage the kernel
     never computed. With ``shading="height"`` each column shows the height
     of its topmost occupied node instead, at most twelve bands wide.
+
+    ``hidden`` names materials to see through, so a column reports the first
+    thing under them -- which is how you look into the hole a resist or a
+    liner is standing in.
     """
     levels: list[dict[str, Any]] = []
     if shading == "height":
-        heights = surface_heights(state)
+        heights = surface_heights(state, hidden)
         present = heights[np.isfinite(heights)]
         distinct = np.unique(present)
         if distinct.size > 12:
@@ -377,7 +385,7 @@ def top_view_image(
         names = [f"z={level['z']:.6g}" for level in levels]
         colors = {name: level["color"] for name, level in zip(names, levels)}
     else:
-        labels = top_view_labels(state)
+        labels = top_view_labels(state, hidden)
         names = list(state.priority)
     rgb = _colorize(labels, names, colors)[::-1]
     grid = state.grid

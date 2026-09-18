@@ -55,6 +55,12 @@ export interface ViewRequest {
    * stack's mesh, so they are asked for only when something is hidden.
    */
   buried?: boolean;
+  /**
+   * Top view only: materials to look through. They are neither drawn nor
+   * allowed to cover what is under them, so hiding the resist shows the
+   * hole it is standing in rather than a blank.
+   */
+  hidden?: string[];
 }
 
 

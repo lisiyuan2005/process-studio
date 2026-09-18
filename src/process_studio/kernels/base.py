@@ -166,10 +166,13 @@ class Kernel(Protocol):
         *,
         project: ProjectDefinition,
         shading: str = "material",
+        hidden: Sequence[str] = (),
     ) -> dict[str, Any]:
         """The view from above, as a PNG plus the frame it was drawn in.
 
         ``shading`` is "material" (the topmost material's colour) or
         "height" (one palette colour per distinct surface height, listed
-        under ``levels`` for a legend).
+        under ``levels`` for a legend). ``hidden`` names materials to look
+        through: they are neither drawn nor allowed to cover what is under
+        them, so the view is of the structure without them.
         """

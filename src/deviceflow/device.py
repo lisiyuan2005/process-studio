@@ -9,6 +9,7 @@ from __future__ import annotations
 import tempfile
 import time
 from pathlib import Path
+from typing import Sequence
 
 from ._internal.geometry.state import ProcessState
 from ._internal.mesh.builder import build_material_meshes
@@ -699,8 +700,9 @@ class Device:
         e = tuple(parse_length(v) for v in end)
         return CrossSection(self._state, s, e, list(self._materials))
 
-    def top_view(self) -> TopView:
-        return TopView(self._state, list(self._materials))
+    def top_view(self, hidden: Sequence[str] = ()) -> TopView:
+        """The view from above; ``hidden`` names materials to look through."""
+        return TopView(self._state, list(self._materials), hidden)
 
     # -- inspection -------------------------------------------------------
 

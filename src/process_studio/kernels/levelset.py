@@ -140,5 +140,6 @@ class LevelSetKernel:
         *,
         project: ProjectDefinition,
         shading: str = "material",
+        hidden: Sequence[str] = (),
     ) -> dict[str, Any]:
-        return top_view_image(state, colors, shading=shading)
+        return top_view_image(state, colors, shading=shading, hidden=hidden)

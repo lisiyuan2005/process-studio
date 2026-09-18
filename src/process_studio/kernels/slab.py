@@ -1132,11 +1132,12 @@ class SlabKernel:
         *,
         project: ProjectDefinition,
         shading: str = "material",
+        hidden: Sequence[str] = (),
     ) -> dict[str, Any]:
         device = state.device
         x_min, y_min, x_max, y_max = device.bounds
         extent = (x_min, x_max, y_min, y_max)
-        top_view = device.top_view()
+        top_view = device.top_view(hidden)
         levels: list[dict[str, Any]] = []
         if shading == "height":
             shapes, colors, levels = _height_shapes(top_view, state.z_offset)
