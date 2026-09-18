@@ -82,3 +82,44 @@ export function forgetWorkspace(root: string): RecentWorkspace[] {
   if (lastWorkspace() === root) clearLastWorkspace();
   return items;
 }
+
+const TABS_KEY = "process-studio.tabs";
+
+export interface OpenTabs {
+  /** One workspace directory per tab; "" is a tab showing the home page. */
+  roots: string[];
+  /** Which of them was on screen. */
+  active: number;
+}
+
+/** The tabs to reopen on the next start.
+ *
+ * A build that only ever knew one workspace at a time left the one it had
+ * open under its own key; that is where the first tab comes from, so
+ * updating does not drop what was open.
+ */
+export function openTabs(): OpenTabs {
+  try {
+    const raw = window.localStorage.getItem(TABS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as OpenTabs;
+      if (Array.isArray(parsed.roots)) {
+        const roots = parsed.roots.filter((root) => typeof root === "string");
+        const active = Number.isInteger(parsed.active) ? parsed.active : 0;
+        if (roots.length > 0) return { roots, active: Math.min(Math.max(active, 0), roots.length - 1) };
+      }
+    }
+  } catch {
+    // a corrupt entry is one the user cannot see or fix: start fresh
+  }
+  const single = lastWorkspace();
+  return { roots: [single ?? ""], active: 0 };
+}
+
+export function rememberOpenTabs(tabs: OpenTabs) {
+  try {
+    window.localStorage.setItem(TABS_KEY, JSON.stringify(tabs));
+  } catch {
+    // ignore
+  }
+}
