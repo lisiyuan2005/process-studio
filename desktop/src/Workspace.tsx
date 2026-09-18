@@ -107,17 +107,17 @@ import {
 } from "./domain/clipboard";
 
 import {
-  clampPanelWidths,
-  loadPanelWidths,
-  savePanelWidths,
-  type PanelWidths,
+  clampPanelShares,
+  DEFAULT_PANELS,
+  loadPanelShares,
+  percent,
+  savePanelShares,
+  type PanelShares,
 } from "./domain/layout";
 
 import { tabName, type TabHandle } from "./domain/tabs";
 
 type SaveState = "saved" | "saving" | "unsaved" | "error";
-
-const DEFAULT_PANELS: PanelWidths = { steps: 286, inspector: 306 };
 
 const AUTOSAVE_DELAY_MS = 600;
 
@@ -223,17 +223,17 @@ export function Workspace({
   const [activeLineId, setActiveLineId] = useState<string | null>(null);
   const [sectionIndex, setSectionIndex] = useState<number | null>(null);
   // Sampled films drawn as the surface they sample, or as the stored slabs.
-  // Side panel widths the user dragged; null means the stylesheet's defaults.
-  const [panelWidths, setPanelWidths] = useState<PanelWidths | null>(loadPanelWidths);
-  const resizePanel = (side: "steps" | "inspector", width: number) => {
-    const current = panelWidths ?? DEFAULT_PANELS;
-    const next = clampPanelWidths({ ...current, [side]: width }, window.innerWidth);
-    setPanelWidths(next);
-    savePanelWidths(next);
+  // The share of the window the user dragged each side panel to; null means
+  // the stylesheet's defaults.
+  const [panelShares, setPanelShares] = useState<PanelShares | null>(loadPanelShares);
+  const resizePanel = (side: "steps" | "inspector", share: number) => {
+    const next = clampPanelShares({ ...(panelShares ?? DEFAULT_PANELS), [side]: share });
+    setPanelShares(next);
+    savePanelShares(next);
   };
   const resetPanels = () => {
-    setPanelWidths(null);
-    savePanelWidths(null);
+    setPanelShares(null);
+    savePanelShares(null);
   };
   const [surfaces, setSurfaces] = useState<SurfaceDocument>();
   const [section, setSection] = useState<SectionDocument>();
@@ -1590,10 +1590,10 @@ export function Workspace({
       // The panel widths live on the shell so the log drawer, which sits
       // outside the grid, lines up with the same edges.
       style={
-        panelWidths
+        panelShares
           ? ({
-              "--steps-width": `${panelWidths.steps}px`,
-              "--inspector-width": `${panelWidths.inspector}px`,
+              "--steps-width": percent(panelShares.steps),
+              "--inspector-width": percent(panelShares.inspector),
             } as React.CSSProperties)
           : undefined
       }
@@ -1746,13 +1746,13 @@ export function Workspace({
       <div className="workspace-grid">
         <PanelResizer
           side="left"
-          width={(panelWidths ?? DEFAULT_PANELS).steps}
+          share={(panelShares ?? DEFAULT_PANELS).steps}
           onResize={(width) => resizePanel("steps", width)}
           onReset={resetPanels}
         />
         <PanelResizer
           side="right"
-          width={(panelWidths ?? DEFAULT_PANELS).inspector}
+          share={(panelShares ?? DEFAULT_PANELS).inspector}
           onResize={(width) => resizePanel("inspector", width)}
           onReset={resetPanels}
         />

@@ -41,7 +41,13 @@ button:focus-visible, input:focus-visible, select:focus-visible {
    ``overflow: hidden`` cut off whatever hung past the edge -- the
    inspector, by 52px at 1120 and 212px at 960, which was as narrow as the
    window could get. */
-.app-shell { display: grid; grid-template-rows: 52px 1fr; grid-template-columns: minmax(0, 1fr); width: 100%; height: 100%; background: var(--bg); }
+/* The three columns of the workspace are shares of the window, not pixel
+   widths. Pixels meant the three did not fit every window, so breakpoints
+   stepped them down -- and any width the breakpoints did not foresee ended
+   with a panel over the edge of the screen. A share fits at every width by
+   construction, and what the user drags is stored as a share too (see
+   domain/layout). */
+.app-shell { display: grid; grid-template-rows: 52px 1fr; grid-template-columns: minmax(0, 1fr); width: 100%; height: 100%; background: var(--bg); --steps-width: 21%; --inspector-width: 22%; }
 
 /* The window holds one tab per open workspace. The strip only appears when
    there is more than one: a single project should look exactly as it did. */
@@ -169,7 +175,6 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .global-progress { position: fixed; top: 51px; left: 0; right: 0; height: 2px; z-index: 30; background: rgba(78, 143, 232, 0.1); }
 .global-progress div { height: 100%; background: #5da1f2; transition: width 180ms ease; }
 
-.app-shell { --steps-width: 310px; --inspector-width: 320px; }
 /* The viewport is what yields. A floor on the middle track reads as
    generous until the window is narrower than the three tracks together:
    then the grid overflows and the side panel on the end is the part that
@@ -248,8 +253,11 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   color: var(--text);
   font-size: 11.5px;
 }
-.recipe-load-row .secondary-button { min-width: 66px; padding: 0 8px; white-space: nowrap; }
-.save-recipe-row .secondary-button { min-width: 112px; }
+/* Wide enough to read, but not so wide they push out of the panel: with a
+   floor they stuck 4px out of a 158px inspector, which ``overflow: hidden``
+   then quietly ate. */
+.recipe-load-row .secondary-button { min-width: 0; padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.save-recipe-row .secondary-button { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .add-parameter-row { margin-top: 2px; }
 .add-parameter-row button {
   min-width: 48px;
@@ -314,7 +322,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .preview-disclaimer, .viewport-notice { position: absolute; left: 13px; bottom: 12px; padding: 6px 9px; border: 1px solid rgba(83, 98, 112, 0.33); border-radius: 5px; background: rgba(14, 19, 24, 0.82); backdrop-filter: blur(8px); color: #71808d; font-size: 10.5px; }
 .viewport-notice { top: 12px; bottom: auto; display: flex; align-items: center; gap: 6px; color: #d5a65b; border-color: rgba(213, 166, 91, 0.32); }
 
-.log-drawer { position: fixed; z-index: 50; left: var(--steps-width, 286px); right: var(--inspector-width, 306px); bottom: 0; height: 180px; border-top: 1px solid #34414c; background: rgba(13, 18, 23, 0.97); box-shadow: 0 -8px 30px rgba(0,0,0,0.22); }
+.log-drawer { position: fixed; z-index: 50; left: var(--steps-width, 21%); right: var(--inspector-width, 22%); bottom: 0; height: 180px; border-top: 1px solid #34414c; background: rgba(13, 18, 23, 0.97); box-shadow: 0 -8px 30px rgba(0,0,0,0.22); }
 .log-heading { height: 34px; display: flex; align-items: center; justify-content: space-between; padding: 0 11px; border-bottom: 1px solid #232d36; color: #8997a4; font-size: 11.5px; }
 .log-heading button { border: 0; background: transparent; color: #61707e; cursor: pointer; font-size: 11px; }
 .log-heading-actions { display: flex; align-items: center; gap: 4px; }
@@ -353,8 +361,12 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .kernel-lock { display: flex; align-items: flex-start; gap: 6px; margin: 10px 0 0 !important; color: #a0885c !important; font-size: 11px !important; line-height: 1.5; }
 .kernel-lock svg { flex: 0 0 auto; margin-top: 1px; }
 .stop-button { background: linear-gradient(145deg, #d9636b, #b8434b) !important; box-shadow: 0 6px 18px rgba(184, 67, 75, 0.25) !important; }
-.sketch-actions { display: flex; gap: 6px; margin: 2px 0 10px; }
-.sketch-actions .secondary-button { height: 28px; display: inline-flex; align-items: center; gap: 5px; padding: 0 9px; font-size: 11px; }
+/* Two buttons side by side, and they wrap rather than stick out of a narrow
+   panel -- ``overflow: hidden`` on the inspector would simply eat the part
+   that did. */
+.sketch-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 10px; }
+.sketch-actions .secondary-button { height: 28px; display: inline-flex; align-items: center; gap: 5px; min-width: 0; padding: 0 9px; font-size: 11px; }
+.sketch-actions .secondary-button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kernel-badge { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); font-size: 11.5px; }
 .home-divider { display: flex; align-items: center; gap: 9px; margin: 17px 0; color: #56636f; font-size: 10px; }
 .home-divider::before, .home-divider::after { content: ""; flex: 1; height: 1px; background: #29333c; }
@@ -428,7 +440,6 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .open-button { color: #566b7d; }
 
 @media (max-width: 1120px) {
-  .app-shell { --steps-width: 248px; --inspector-width: 278px; }
   .project-path { display: none; }
 }
 
@@ -546,11 +557,10 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   .topbar { gap: 8px; padding-right: 10px; }
 }
 
-/* Half a 1440 screen, and the narrowest the window will go. The panels
-   give up a little so the viewport keeps a usable share, and the save
-   state becomes its icon alone. */
+/* Half a 1440 screen, and the narrowest the window will go. The columns
+   need no help -- they are shares -- but the topbar has to give things up
+   or it decides how narrow the window may be. */
 @media (max-width: 900px) {
-  .app-shell { --steps-width: 216px; --inspector-width: 236px; }
   .brand-compact { display: none; }
   .save-indicator span { display: none; }
   .save-indicator { padding: 0; }

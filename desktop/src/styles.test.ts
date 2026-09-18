@@ -67,6 +67,21 @@ describe("the layout at every window width", () => {
     }
   });
 
+  it("shares the width between the three columns instead of fixing two", () => {
+    // Pixel widths are what needed breakpoints to step them down, and a
+    // width no breakpoint foresaw is how a panel left the screen.
+    for (const [, declarations] of styles.matchAll(
+      /--steps-width:([^;]*);|--inspector-width:([^;]*);/g,
+    )) {
+      const value = (declarations ?? "").trim();
+      if (!value) continue;
+      expect(value, `a pixel width for a side panel: ${value}`).not.toMatch(/\d+px/);
+    }
+    // And the defaults are there to be shared out.
+    expect(rule(".app-shell")).toMatch(/--steps-width:\s*\d+(\.\d+)?%/);
+    expect(rule(".app-shell")).toMatch(/--inspector-width:\s*\d+(\.\d+)?%/);
+  });
+
   it("is built for a page no wider than the window can be", () => {
     const floor = rule("html, body, #root").match(/min-width:\s*(\d+)px/);
     expect(floor, "the page says no minimum width").not.toBeNull();
