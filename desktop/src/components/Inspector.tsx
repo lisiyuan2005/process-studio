@@ -16,6 +16,7 @@ import type {
   StepStatus,
   ToolDefinition,
 } from "../types";
+import { NumberField } from "./NumberField";
 
 /** What the inspector shows for a selected loop. */
 export interface LoopSummary {
@@ -698,16 +699,11 @@ export function Inspector({
             {Object.values(step.materialResponses).map((response) => (
               <div className="response-row" key={response.material}>
                 <input value={response.material} readOnly />
-                <input
-                  type="number"
-                  min="0"
-                  step="0.001"
+                <NumberField
+                  min={0}
+                  step={0.001}
                   value={response.rateUmPerMin}
-                  onChange={(event) =>
-                    setResponse(response.material, {
-                      rateUmPerMin: Math.max(0, Number(event.target.value) || 0),
-                    })
-                  }
+                  onChange={(rateUmPerMin) => setResponse(response.material, { rateUmPerMin })}
                 />
                 <label>
                   <input

@@ -47,6 +47,7 @@ import { createPortal } from "react-dom";
 import type { ProcessType, ProcessStep, StepLoop, StepStatus } from "../types";
 import { flowUnits, loopIterations, type FlowUnit } from "../domain/project";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
+import { NumberField } from "./NumberField";
 
 /** Which keys were held on a click: Ctrl (or Cmd) toggles, Shift extends. */
 export interface SelectModifiers {
@@ -452,7 +453,7 @@ function LoopDialog({
           </label>
           <label className="field-row">
             <span>Times in all</span>
-            <input type="number" min={1} step={1} value={repeat} onChange={(event) => setRepeat(Number(event.target.value))} />
+            <NumberField min={1} step={1} value={repeat} onChange={setRepeat} />
             <small>
               The selected steps are the first time through; the copies that follow stay identical to them.
               Each time through has its own result, so the view can stop after any of them.

@@ -10,6 +10,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { NumberField } from "./NumberField";
 import type { GridDefinition, MaskKeep, MaskPreview, QuickSketch, SketchShape, TopViewDocument } from "../types";
 
 type Tool = "select" | "rectangle" | "circle" | "polygon" | "path";
@@ -346,26 +347,24 @@ export function SketchEditor({
           </div>
           <label className="mask-instruction">
             Snap
-            <input
+            <NumberField
               className="mask-number"
-              type="number"
               min={0}
               step={1}
               value={snapNm}
-              onChange={(event) => setSnapNm(Math.max(0, Number(event.target.value)))}
+              onChange={setSnapNm}
             />
             nm
           </label>
           {tool === "path" && (
             <label className="mask-instruction">
               Width
-              <input
+              <NumberField
                 className="mask-number"
-                type="number"
                 min={0}
                 step={0.01}
                 value={pathWidth}
-                onChange={(event) => setPathWidth(Math.max(0, Number(event.target.value)))}
+                onChange={setPathWidth}
               />
               µm
             </label>
@@ -503,23 +502,21 @@ export function SketchEditor({
                     <label>
                       Centre µm
                       <span className="pair">
-                        <input
-                          type="number"
+                        <NumberField
                           step={0.001}
                           value={pointList([shape.parameters.center ?? [0, 0]])[0]?.[0] ?? 0}
-                          onChange={(event) =>
+                          onChange={(x) =>
                             updateParameters(index, {
-                              center: [Number(event.target.value), pointList([shape.parameters.center ?? [0, 0]])[0]?.[1] ?? 0],
+                              center: [x, pointList([shape.parameters.center ?? [0, 0]])[0]?.[1] ?? 0],
                             })
                           }
                         />
-                        <input
-                          type="number"
+                        <NumberField
                           step={0.001}
                           value={pointList([shape.parameters.center ?? [0, 0]])[0]?.[1] ?? 0}
-                          onChange={(event) =>
+                          onChange={(y) =>
                             updateParameters(index, {
-                              center: [pointList([shape.parameters.center ?? [0, 0]])[0]?.[0] ?? 0, Number(event.target.value)],
+                              center: [pointList([shape.parameters.center ?? [0, 0]])[0]?.[0] ?? 0, y],
                             })
                           }
                         />
@@ -530,23 +527,21 @@ export function SketchEditor({
                     <label>
                       Size µm
                       <span className="pair">
-                        <input
-                          type="number"
+                        <NumberField
                           step={0.001}
                           value={pointList([shape.parameters.size ?? [0, 0]])[0]?.[0] ?? 0}
-                          onChange={(event) =>
+                          onChange={(width) =>
                             updateParameters(index, {
-                              size: [Number(event.target.value), pointList([shape.parameters.size ?? [0, 0]])[0]?.[1] ?? 0],
+                              size: [width, pointList([shape.parameters.size ?? [0, 0]])[0]?.[1] ?? 0],
                             })
                           }
                         />
-                        <input
-                          type="number"
+                        <NumberField
                           step={0.001}
                           value={pointList([shape.parameters.size ?? [0, 0]])[0]?.[1] ?? 0}
-                          onChange={(event) =>
+                          onChange={(height) =>
                             updateParameters(index, {
-                              size: [pointList([shape.parameters.size ?? [0, 0]])[0]?.[0] ?? 0, Number(event.target.value)],
+                              size: [pointList([shape.parameters.size ?? [0, 0]])[0]?.[0] ?? 0, height],
                             })
                           }
                         />
@@ -556,22 +551,20 @@ export function SketchEditor({
                   {shape.kind === "circle" && (
                     <label>
                       Radius µm
-                      <input
-                        type="number"
+                      <NumberField
                         step={0.001}
                         value={number(shape.parameters.radius)}
-                        onChange={(event) => updateParameters(index, { radius: Number(event.target.value) })}
+                        onChange={(radius) => updateParameters(index, { radius })}
                       />
                     </label>
                   )}
                   {shape.kind === "path" && (
                     <label>
                       Width µm
-                      <input
-                        type="number"
+                      <NumberField
                         step={0.001}
                         value={number(shape.parameters.width)}
-                        onChange={(event) => updateParameters(index, { width: Number(event.target.value) })}
+                        onChange={(width) => updateParameters(index, { width })}
                       />
                     </label>
                   )}
@@ -584,22 +577,20 @@ export function SketchEditor({
                   <label>
                     Array n
                     <span className="pair">
-                      <input
-                        type="number"
+                      <NumberField
                         min={1}
                         step={1}
                         value={shape.array[0]}
-                        onChange={(event) =>
-                          updateShape(index, { array: [Math.max(1, Math.round(Number(event.target.value))), shape.array[1], shape.array[2], shape.array[3]] })
+                        onChange={(count) =>
+                          updateShape(index, { array: [Math.round(count), shape.array[1], shape.array[2], shape.array[3]] })
                         }
                       />
-                      <input
-                        type="number"
+                      <NumberField
                         min={1}
                         step={1}
                         value={shape.array[1]}
-                        onChange={(event) =>
-                          updateShape(index, { array: [shape.array[0], Math.max(1, Math.round(Number(event.target.value))), shape.array[2], shape.array[3]] })
+                        onChange={(count) =>
+                          updateShape(index, { array: [shape.array[0], Math.round(count), shape.array[2], shape.array[3]] })
                         }
                       />
                     </span>
@@ -607,17 +598,15 @@ export function SketchEditor({
                   <label>
                     Pitch µm
                     <span className="pair">
-                      <input
-                        type="number"
+                      <NumberField
                         step={0.001}
                         value={shape.array[2]}
-                        onChange={(event) => updateShape(index, { array: [shape.array[0], shape.array[1], Number(event.target.value), shape.array[3]] })}
+                        onChange={(pitch) => updateShape(index, { array: [shape.array[0], shape.array[1], pitch, shape.array[3]] })}
                       />
-                      <input
-                        type="number"
+                      <NumberField
                         step={0.001}
                         value={shape.array[3]}
-                        onChange={(event) => updateShape(index, { array: [shape.array[0], shape.array[1], shape.array[2], Number(event.target.value)] })}
+                        onChange={(pitch) => updateShape(index, { array: [shape.array[0], shape.array[1], shape.array[2], pitch] })}
                       />
                     </span>
                   </label>

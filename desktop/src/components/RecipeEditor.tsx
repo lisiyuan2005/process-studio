@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { groupRecipes, newId, type RecipeGroup } from "../domain/project";
 import { ToolPicker } from "./ToolPicker";
 import type { MaterialDefinition, ParameterValue, ProcessType, Recipe, ToolDefinition } from "../types";
+import { NumberField } from "./NumberField";
 
 interface RecipeEditorProps {
   recipes: Recipe[];
@@ -279,16 +280,11 @@ export function RecipeEditor({
                 {Object.values(selected.materialResponses).map((response) => (
                   <div className="response-row" key={response.material}>
                     <input type="text" value={response.material} readOnly />
-                    <input
-                      type="number"
-                      step="0.001"
-                      min="0"
+                    <NumberField
+                      step={0.001}
+                      min={0}
                       value={response.rateUmPerMin}
-                      onChange={(event) =>
-                        setResponse(response.material, {
-                          rateUmPerMin: Math.max(0, Number(event.target.value) || 0),
-                        })
-                      }
+                      onChange={(rateUmPerMin) => setResponse(response.material, { rateUmPerMin })}
                     />
                     <label>
                       <input
