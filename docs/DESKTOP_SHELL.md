@@ -48,7 +48,7 @@ worker 内部读线程和执行线程分开。执行分两条道：视图请求�
 | `preview_mask` | 未保存的 sketch 在工程窗口上的曝光区域 PNG，由内核自己的符号距离函数算出，编辑器拿它当填充 |
 | `run_flow` | 执行分支，可指定 `throughStepId` 或 `force` |
 | `get_surfaces` | 每种材料的 marching cubes 三角面，base64 传输 |
-| `get_section` / `get_top_view` | 截面与俯视图 PNG。截面可按 `axis`+`position` 沿 x 或 y 切，也可给 `line: {start:[x,y], end:[x,y]}` 沿任意 AA–BB 线切，此时横轴是沿线距离；俯视图可给 `hidden: [材料名]` 看穿这些材料 |
+| `get_section` / `get_top_view` | 截面与俯视图 PNG。截面可按 `axis`+`position` 沿 x 或 y 切，也可给 `line: {start:[x,y], end:[x,y]}` 沿任意 AA–BB 线切，此时横轴是沿线距离；俯视图可给 `hidden: [材料名]` 看穿这些材料、`steps: false` 不画同材料内部的台阶线 |
 | `export_mesh` | 把一步的 3D 表面写成 `.glb` / `.gltf` / `.obj` / `.stl` / `.ply`，参数 `destination`，可选 `materials` |
 | `save_image` | 把一张 base64 PNG 写到 `destination`，视图右键菜单的「保存图片」走它 |
 | `import_gds` / `gds_layers` | 导入布局并列出 layer/datatype |
@@ -101,6 +101,9 @@ slab 内核有两种沉积模式：**Conformal** 在每个露出的表面上长�
 - **Project window**（同一个对话框）：x、y、z 范围，单位 µm。晶圆表面固定在 z = 0，所以 z 范围必须跨过 0；每轴最大 200 µm，超过多半是把 nm 当 µm 填了。改窗口和改网格一样丢弃全部已存结果；slab 工程的衬底厚度就是窗口的深度 |zMin|。`plan_grid` 和 `set_grid` 都接受 `bounds`，level set 工程会在新窗口上重新搜索能整除三个跨度的格子。
 - **Simulation grid / Geometry resolution**（顶栏间距按钮）：改的是真实计算精度。level set 工程改的是网格；slab 工程改的是保形沉积的行走步长，对话框相应地不显示节点数和内存，因为该内核没有场。填目标间距（nm）或选预设，worker 用 `grid_for_target_spacing` 搜索能整除三个方向跨度的最近格子，因此三向间距永远相等，不需要手填 nx/ny/nz。对话框实时显示提议的格子形状、节点数、状态体积和运行所需内存，超过 `MAXIMUM_NODES`（2000 万）会拒绝。应用后会丢弃全部已存结果。
 - **Colour by**（俯视图底栏）：俯视图按每列最上层材料的颜色画（默认），或按表面高度画：天空能看见的每个平面一种颜色（viridis 顺序色板，低的深蓝、高的黄），底栏图例列出各级高度（µm）。slab 内核的高度级是精确的（每个可见的板面一级）；level set 内核取每列最上层节点的高度，超过 12 级时分成 12 段。RPC `get_top_view` 的 `shading: "material"|"height"`，返回里带 `shading` 和 `levels: [{z, color}]`；命令行 `view top --color-by height`。
+- **Steps**（俯视图底栏，按材料着色时才有，默认开）：按材料着色看不出**同一种材料自己的台阶**——晶圆和刻进它的沟底都是同一块硅，同一个颜色。打开这个开关就在两者之间画一条线，颜色是该材料自己的颜色压暗到 45%（不是黑色：这张图是按材料读的，台阶是这个材料的特征，不是压在它上面的另一样东西）。**不同材料之间不画**，那里颜色本来就变了。RPC `get_top_view` 的 `steps: true|false`。按高度着色时这张图本身就是由这些线分出来的，所以没有这个开关。
+  - **slab 内核**是精确的矢量线：把同一材料里高度相同的碎片先合并，剩下的边界减掉这个材料的外轮廓，剩下的就正好是不同高度之间的边（`_step_lines`）。代价随可见高度数线性增长——一个 200 级的台阶金字塔实测 45 ms，而整张图本身就要几百 ms。
+  - **level set 内核**是逐列比较：相邻两列材料相同、高度差超过 **1.5 个 z 节点**时，把高的那一列标暗。为什么是 1.5 个节点：斜面每列大约移动一个节点，按「差值非零」画会把所有斜面涂成一片；而比一个节点还小的台阶，这个内核本来也分辨不出来。标高的那一侧，线就落在会绊到脚的那条边上。
 - **Sampling**（视口底栏）：只影响显示。它对 level-set 场做线性插值后再提取零等值面或标签，不改变内核算出的结果。俯视图不提供该选项，因为它取的是每列最上层的标签，插值会凭空造出覆盖。
 
 刻蚀步骤的求解器阶数和分块大小都是按需参数，分别写入该 Step 的 `solver_order` 与 `tile_shape`。分块只影响内存占用，不影响结果。

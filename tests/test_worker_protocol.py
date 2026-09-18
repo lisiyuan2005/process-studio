@@ -1056,6 +1056,50 @@ def test_the_top_view_can_look_through_a_material(workspace):
         call("get_top_view", root=root, branchId=branch["id"], stepId=last, hidden="Al2O3")
 
 
+def test_the_top_view_marks_a_step_inside_one_material(workspace):
+    """A trench in silicon is the same colour as the silicon around it."""
+    root = str(workspace)
+    document = call("open_workspace", root=root)
+    branch = document["branches"][0]
+    call("run_flow", root=root, branchId=branch["id"])
+    last = branch["steps"][-1]["id"]
+    silicon = next(m["color"] for m in document["materials"] if m["name"] == "Si")
+    through = {"root": root, "branchId": branch["id"], "stepId": last, "hidden": ["Al2O3"]}
+
+    plain = _top_view_colors(call("get_top_view", **through, steps=False))
+    marked = _top_view_colors(call("get_top_view", **through))
+
+    assert plain == {silicon}
+    # The rim of the trench, in the same silicon at a darker shade.
+    assert marked - plain == {_shaded(silicon)}
+    # Height shading is made of those lines already, so it draws none.
+    assert _top_view_colors(
+        call("get_top_view", **through, shading="height")
+    ) == _top_view_colors(call("get_top_view", **through, shading="height", steps=False))
+
+
+def _shaded(color: str) -> str:
+    """A material's colour as a step inside it is drawn: darker, same hue."""
+    channels = [int(color[index : index + 2], 16) for index in (1, 3, 5)]
+    return "#%02x%02x%02x" % tuple(int(channel * 0.45) for channel in channels)
+
+
+def test_the_slab_top_view_marks_a_step_inside_one_material(tmp_path):
+    root = str(tmp_path / "slab")
+    document = call("create_workspace", root=root, name="Steps", kernel="slab")
+    branch = document["branches"][0]
+    call("run_flow", root=root, branchId=branch["id"])
+    last = branch["steps"][-1]["id"]
+    silicon = next(m["color"] for m in document["materials"] if m["name"] == "Si")
+    through = {"root": root, "branchId": branch["id"], "stepId": last, "hidden": ["Al2O3"]}
+
+    plain = _top_view_colors(call("get_top_view", **through, steps=False))
+    marked = _top_view_colors(call("get_top_view", **through))
+
+    assert plain == {silicon}
+    assert marked - plain == {_shaded(silicon)}
+
+
 def test_the_slab_top_view_can_look_through_a_material(tmp_path):
     root = str(tmp_path / "slab")
     document = call("create_workspace", root=root, name="Through", kernel="slab")

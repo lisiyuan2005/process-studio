@@ -61,6 +61,13 @@ export interface ViewRequest {
    * hole it is standing in rather than a blank.
    */
   hidden?: string[];
+  /**
+   * Top view only: draw the line where one material meets itself at
+   * another height. Coloured by material a step inside one material is
+   * invisible -- the wafer and the floor of a trench cut into it are the
+   * same silicon -- so this is on unless it is turned off.
+   */
+  steps?: boolean;
 }
 
 

@@ -48,6 +48,9 @@ except ImportError:  # pragma: no cover - exercised only without the extra
 
 MAXIMUM_INTERPOLATION = 4
 BACKGROUND_RGB = (247, 249, 252)
+#: A step inside one material is drawn in that material's own colour at this
+#: fraction of its brightness, so the picture is still read by material.
+STEP_LINE_SHADE = 0.45
 
 
 def _encode(array: np.ndarray) -> str:
@@ -172,6 +175,38 @@ def _colorize(labels: np.ndarray, names: list[str], colors: Mapping[str, str]) -
     for index, name in enumerate(names):
         rgb[labels == index] = _rgb(colors.get(name, "#7c83a0"))
     return rgb
+
+
+def _mark_steps(
+    rgb: np.ndarray, labels: np.ndarray, heights: np.ndarray, dz: float
+) -> np.ndarray:
+    """Darken the brink of every step inside one material.
+
+    A column is a brink when the column next to it holds the same material
+    at a height more than a node away. More than a node, because a surface
+    that slopes moves by about one node per column and is not a step: at
+    one node the mark would cover every slope in the picture, and the
+    kernel cannot resolve a step smaller than that anyway.
+
+    The higher of the two columns is marked, so the line sits on the edge
+    you would trip over rather than straddling it.
+    """
+    jump = 1.5 * float(dz)
+    brink = np.zeros(labels.shape, dtype=bool)
+    for axis in (0, 1):
+        here = [slice(None), slice(None)]
+        there = [slice(None), slice(None)]
+        here[axis] = slice(None, -1)
+        there[axis] = slice(1, None)
+        a, b = tuple(here), tuple(there)
+        same = (labels[a] == labels[b]) & (labels[a] >= 0)
+        difference = heights[a] - heights[b]
+        step = same & np.isfinite(difference) & (np.abs(difference) > jump)
+        brink[a] |= step & (difference > 0)
+        brink[b] |= step & (difference < 0)
+    marked = rgb.copy()
+    marked[brink] = (marked[brink] * STEP_LINE_SHADE).astype(np.uint8)
+    return marked
 
 
 def _resampled_labels(
@@ -356,6 +391,7 @@ def top_view_image(
     *,
     shading: str = "material",
     hidden: Sequence[str] = (),
+    steps: bool = True,
 ) -> dict[str, Any]:
     """Render the native-resolution top view.
 
@@ -387,7 +423,12 @@ def top_view_image(
     else:
         labels = top_view_labels(state, hidden)
         names = list(state.priority)
-    rgb = _colorize(labels, names, colors)[::-1]
+    rgb = _colorize(labels, names, colors)
+    if shading != "height" and steps:
+        # Colour says which material; this says where that material is at
+        # two different heights, which colour alone cannot.
+        rgb = _mark_steps(rgb, labels, surface_heights(state, hidden), state.grid.dz)
+    rgb = rgb[::-1]
     grid = state.grid
     return {
         "image": _png(rgb),

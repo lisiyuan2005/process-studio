@@ -217,6 +217,10 @@ export function Workspace({
   const [interpolation, setInterpolation] = useState(1);
   // Top view coloured by the topmost material, or by surface height.
   const [topShading, setTopShading] = useState<TopShading>("material");
+  // Whether the top view draws the steps inside a material. On by default:
+  // without them a trench in silicon is the same colour as the silicon
+  // around it, and the picture says nothing about where it is.
+  const [topSteps, setTopSteps] = useState(true);
   // Which triangulator builds the 3D mesh. Ear clipping is the default;
   // the other is there to compare against, and costs a rebuild.
   const [triangulation, setTriangulation] = useState<Triangulation>("ears");
@@ -1075,7 +1079,7 @@ export function Workspace({
       } else {
         // The top view is drawn by the worker, so hiding a material is a
         // different picture rather than something to switch off here.
-        const key = `top:${target}:${topShading}:${hiddenMaterials.join(",")}`;
+        const key = `top:${target}:${topShading}:${topSteps}:${hiddenMaterials.join(",")}`;
         const hit = cached<TopViewDocument>(key);
         if (hit) {
           setTopView(hit);
@@ -1087,6 +1091,7 @@ export function Workspace({
           ...request,
           shading: topShading,
           hidden: hiddenMaterials,
+          steps: topSteps,
         });
         if (token !== viewToken.current) return;
         setTopView(remember(key, next));
@@ -1111,6 +1116,7 @@ export function Workspace({
     mode,
     interpolation,
     topShading,
+    topSteps,
     triangulation,
     alwaysBuried,
     hiddenMaterials,
@@ -1525,6 +1531,7 @@ export function Workspace({
         { label: "Top view", action: () => setMode("top"), checked: mode === "top" },
         { label: "Colour the top view by material", action: () => setTopShading("material"), checked: topShading === "material", separated: true },
         { label: "Colour the top view by height", action: () => setTopShading("height"), checked: topShading === "height" },
+        { label: "Mark the steps inside a material", action: () => setTopSteps((value) => !value), checked: topSteps, disabled: topShading !== "material" },
         { label: "Worker log", action: () => setShowLog((value) => !value), checked: showLog, separated: true },
       ],
     },
@@ -1854,6 +1861,8 @@ export function Workspace({
           onInterpolationChange={setInterpolation}
           topShading={topShading}
           onTopShadingChange={setTopShading}
+          topSteps={topSteps}
+          onTopStepsChange={setTopSteps}
           triangulation={triangulation}
           onTriangulationChange={setTriangulation}
           sectionAxis={sectionAxis}

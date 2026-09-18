@@ -141,5 +141,6 @@ class LevelSetKernel:
         project: ProjectDefinition,
         shading: str = "material",
         hidden: Sequence[str] = (),
+        steps: bool = True,
     ) -> dict[str, Any]:
-        return top_view_image(state, colors, shading=shading, hidden=hidden)
+        return top_view_image(state, colors, shading=shading, hidden=hidden, steps=steps)

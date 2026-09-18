@@ -72,6 +72,10 @@ SECTION_POSITIONS = 201
 #: Longest edge of a rendered picture, before the sampling factor.
 BASE_PIXELS = 900
 MAXIMUM_PIXELS = 2600
+#: How a step inside one material is drawn on the top view: this many pixels
+#: wide, in the material's own colour at this fraction of its brightness.
+STEP_LINE_PIXELS = 2
+STEP_LINE_SHADE = 0.45
 
 _ROLES = {
     "semiconductor": "semiconductor",
@@ -761,6 +765,39 @@ def _raster(
     return canvas
 
 
+def _stroke(
+    canvas: np.ndarray,
+    lines: Sequence[tuple[Sequence[Sequence[tuple[float, float]]], str]],
+    colors: Mapping[str, str],
+    extent: tuple[float, float, float, float],
+) -> np.ndarray:
+    """Draw lines onto a finished picture, in a darker shade of the material.
+
+    Darker rather than black: the picture is read by material colour, and a
+    step is a feature of that material rather than another thing lying on it.
+    """
+    horizontal_min, horizontal_max, vertical_min, vertical_max = extent
+    height, width = canvas.shape[:2]
+    scale_x = (width - 1) / max(horizontal_max - horizontal_min, 1e-12)
+    scale_y = (height - 1) / max(vertical_max - vertical_min, 1e-12)
+    for strands, name in lines:
+        stencil = Image.new("1", (width, height), 0)
+        pen = ImageDraw.Draw(stencil)
+        for strand in strands:
+            points = [
+                ((x - horizontal_min) * scale_x, (vertical_max - y) * scale_y)
+                for x, y in strand
+            ]
+            if len(points) >= 2:
+                pen.line(points, fill=1, width=STEP_LINE_PIXELS)
+        canvas[np.asarray(stencil, dtype=bool)] = _darker(_rgb(colors.get(name, "#7c83a0")))
+    return canvas
+
+
+def _darker(rgb: tuple[int, int, int]) -> tuple[int, int, int]:
+    return tuple(int(channel * STEP_LINE_SHADE) for channel in rgb)
+
+
 def _section_shapes(section, z_offset: float):
     # `polygons()` returns exterior rings only, which would paint over every
     # cavity; `_shapes` keeps the holes, which is what a filled picture needs.
@@ -789,6 +826,48 @@ def _rings(geometry) -> list[list[tuple[float, float]]]:
             [list(polygon.exterior.coords[:-1])] + [list(r.coords[:-1]) for r in polygon.interiors]
         )
     return shapes
+
+
+def _step_lines(top_view) -> list[tuple[list[list[tuple[float, float]]], str]]:
+    """Where one material meets itself at another height, per material.
+
+    Coloured by material, a step inside one material is invisible: the
+    wafer and the floor of a trench cut into it are the same silicon. The
+    line between them is what says the surface is not flat there.
+
+    Pieces at the same height are merged first, so their shared edges
+    disappear into that height's interior and what is left of the
+    boundaries is exactly the edges between different heights. The
+    material's own outline is taken away because the picture already draws
+    it -- the colour changes there.
+    """
+    by_material: dict[str, dict[float, list]] = {}
+    for name, z_top, region in top_view._pieces:
+        by_material.setdefault(name, {}).setdefault(round(float(z_top), 9), []).append(region)
+    lines: list[tuple[list[list[tuple[float, float]]], str]] = []
+    for name, by_height in by_material.items():
+        if len(by_height) < 2:
+            continue
+        levels = [shapely.unary_union(regions) for regions in by_height.values()]
+        outline = shapely.unary_union(levels).boundary
+        inside = shapely.unary_union([level.boundary for level in levels]).difference(outline)
+        strands = _strands(inside)
+        if strands:
+            lines.append((strands, name))
+    return lines
+
+
+def _strands(geometry) -> list[list[tuple[float, float]]]:
+    """Every line in a geometry, as a list of points to stroke."""
+    parts = geometry.geoms if hasattr(geometry, "geoms") else [geometry]
+    strands = []
+    for part in parts:
+        if part.is_empty or part.geom_type not in ("LineString", "LinearRing"):
+            continue
+        points = [(float(x), float(y)) for x, y in part.coords]
+        if len(points) >= 2:
+            strands.append(points)
+    return strands
 
 
 def _height_shapes(top_view, z_offset: float):
@@ -1133,17 +1212,24 @@ class SlabKernel:
         project: ProjectDefinition,
         shading: str = "material",
         hidden: Sequence[str] = (),
+        steps: bool = True,
     ) -> dict[str, Any]:
         device = state.device
         x_min, y_min, x_max, y_max = device.bounds
         extent = (x_min, x_max, y_min, y_max)
         top_view = device.top_view(hidden)
         levels: list[dict[str, Any]] = []
+        lines: list[tuple[list[list[tuple[float, float]]], str]] = []
         if shading == "height":
             shapes, colors, levels = _height_shapes(top_view, state.z_offset)
         else:
             shapes = _top_view_shapes(top_view)
+            # Colour says which material; the lines say where that material
+            # is at two different heights, which colour alone cannot.
+            lines = _step_lines(top_view) if steps else []
         rgb = _raster(shapes, colors, extent, _pixels_per_um(extent, 1))
+        if lines:
+            rgb = _stroke(rgb, lines, colors, extent)
         return {
             "image": _png(rgb),
             "exact": True,

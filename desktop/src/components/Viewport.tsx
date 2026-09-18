@@ -79,6 +79,9 @@ interface ViewportProps {
   topView?: TopViewDocument;
   topShading: TopShading;
   onTopShadingChange: (shading: TopShading) => void;
+  /** Top view: draw the line where one material meets itself at another height. */
+  topSteps: boolean;
+  onTopStepsChange: (steps: boolean) => void;
   /** 3D view: which triangulator builds the mesh. */
   triangulation: Triangulation;
   onTriangulationChange: (triangulation: Triangulation) => void;
@@ -849,6 +852,8 @@ export function Viewport({
   topView,
   topShading,
   onTopShadingChange,
+  topSteps,
+  onTopStepsChange,
   triangulation,
   onTriangulationChange,
 }: ViewportProps) {
@@ -1312,6 +1317,22 @@ export function Viewport({
               <option value="height">Surface height</option>
             </select>
           </label>
+        )}
+        {mode === "top" && topShading === "material" && (
+          // Colour says which material; this says where that material is at
+          // two different heights, which colour alone cannot.
+          <button
+            type="button"
+            className={`footer-toggle ${topSteps ? "active" : ""}`}
+            title={
+              topSteps
+                ? "Stop drawing the steps inside a material"
+                : "Draw the line where one material meets itself at another height, such as the rim of a trench cut into the wafer"
+            }
+            onClick={() => onTopStepsChange(!topSteps)}
+          >
+            Steps
+          </button>
         )}
         {mode === "surfaces" && (
           <label>

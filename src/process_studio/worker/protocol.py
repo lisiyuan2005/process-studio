@@ -787,6 +787,7 @@ def dispatch(
             project=project,
             shading=shading,
             hidden=_hidden_materials(parameters),
+            steps=parameters.get("steps", True) is not False,
         )
     if method == "export_mesh":
         state, repository, project, kernel = _view_state(parameters)
