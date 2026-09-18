@@ -208,14 +208,22 @@ def initialize_workspace(
             else chosen.info.spacing_presets_nm[1] / 1000.0
         ),
     )
-    for material in default_materials():
-        repository.save_material(material)
-    for recipe in default_recipes(chosen.info.id):
-        repository.save_recipe(recipe)
-    for tool in default_tools():
-        repository.save_tool(tool)
+    # The starter library belongs to the user, not to this project: seed it
+    # only the first time, or a new workspace would put the shipped Si back
+    # over the one they recoloured and restore every recipe they deleted.
+    # So the starter recipes are written for whichever kernel came first;
+    # the starter *flow* below is always written for this project's kernel,
+    # which is what a new project actually runs.
+    if repository.library.is_empty():
+        for material in default_materials():
+            repository.save_material(material)
+        for recipe in default_recipes(chosen.info.id):
+            repository.save_recipe(recipe)
+        for tool in default_tools():
+            repository.save_tool(tool)
     repository.save_project(project)
     repository.save_branch(project.id, branch)
+    repository.refresh_library_copy()
     starter = QuickSketch(
         "default",
         [SketchShape("circle", parameters={"center": (0.0, 0.0), "radius": 0.22})],

@@ -55,7 +55,7 @@ export function ToolEditor({ tools, usage, onSave, onDelete, onClose }: ToolEdit
       <div className="modal-card material-modal">
         <header className="modal-header">
           <div>
-            <span className="eyebrow">LIBRARY</span>
+            <span className="eyebrow">LIBRARY &middot; SHARED BY EVERY PROJECT</span>
             <h2>Tools</h2>
           </div>
           <button type="button" className="icon-button" aria-label="Close" onClick={onClose}>

@@ -19,7 +19,7 @@ src/process_studio/kernel   Level Set 内核，未改动
 
 | 路径 | 内容 |
 | --- | --- |
-| `process_studio.sqlite3` | 工程、分支、步骤、Recipe、材料、快照索引 |
+| `process_studio.sqlite3` | 工程、分支、步骤、快照索引，以及共享库（材料/工具/Recipe）的一份副本——库本身在用户目录里，见下文 |
 | `process_studio_snapshots/` | 每步一个材料状态：level set 是 `.npz`，slab 是 `.dfz`；slab 快照旁边的 `*.mesh.npz` 是它的 3D 显示网格，第一次构建后留下来，删掉只会让下次打开 3D 视图重新构建 |
 | `sketches/<id>.json` | Quick Sketch；旧版放在根目录的 `default-sketch.json` 仍可读取 |
 | `layouts/` | 导入的 GDSII 文件 |
@@ -227,6 +227,22 @@ Ctrl+C / Ctrl+V 现在**跨标签、跨窗口**都能用，因为放上系统剪
 步骤的掩膜来源选 Quick Sketch 后，右侧可以选已有 sketch，也可以点 **Edit** 改它或 **New** 新建，都打开编辑器。工具有矩形（拖对角）、圆（从圆心拖）、多边形和路径（逐点点击，Enter 结束，Escape 放弃），每个新图形带一个布尔操作（merge、subtract、intersect），右侧列表按应用顺序列出图形，可以改数值、改操作、调阵列（个数与间距）、上下移动和删除。坐标默认吸附 5 nm，可改。
 
 画布底下垫着这一步之前一步的俯视图（没跑过就没有），填充是 worker 通过 `preview_mask` 用内核的 CSG 算出来的曝光区域，按步骤的 Keep 设置翻转，所以看到的就是运行时会采样的掩膜，不是前端自己画的近似。保存写入 `sketches/<id>.json`，用到它的步骤随之变成 stale。
+
+## 材料、工具、Recipe 是一整台机器共用一个库
+
+这三样**不再跟着工程走**。同一个人手里的 SiO2 在每个工程里都该是同一个 SiO2，一条调好的 recipe 下次开新工程也该在；一份一份地存，结果就是同一个材料要在五个地方改，还会慢慢改岔。
+
+库放在用户目录下的 `library.sqlite3`（Windows `%APPDATA%/ProcessStudio/`，macOS `~/Library/Application Support/ProcessStudio/`，Linux `$XDG_CONFIG_HOME` 或 `~/.config/process-studio/`）；`PROCESS_STUDIO_LIBRARY` 可以指到别处——测试用它，也可以让一个组指到共享盘上的同一个文件。读和写都走这个库：`ProjectRepository` 的 `save_material` / `load_materials` 这六个方法后面是它，所以界面、CLI、导入导出全都自动是共享的。
+
+**工程里仍然留一份副本**（`materials` / `tools` / `recipes` 三张表照旧）。副本是工作目录能带着走的原因：压成 zip 发给别人，那边打开时步骤引用的材料名还在。打开一个**从别处来的**工作目录时，副本里本机库没有的东西会被收进库里，**已有的不动**——别人的工程不该把你的 Si 改成红色，也不该把你改过的 recipe 覆盖掉。
+
+怎么知道一个工作目录是不是"从别处来的"：库有一个 id，工作目录记下它上次抄的是哪个库（`settings` 表）。id 相同就是本机库自己的镜像，不再往回读——否则在 A 工程里删掉一个材料，下次打开还留着旧副本的 B 工程就会把它原样交回来，删除永远删不掉。
+
+副本是在**打开工作目录时**刷新的（`refresh_library_copy`，`open_workspace` 这一条命令里调，别处不调），因为它同时还是"这个窗口当时看到的是什么"的记录：保存文档时，文档里少了的东西要跟这份副本比，而不是跟库比——这个窗口从来没见过的材料，是另一个标签页刚加的，少了它不算删除。
+
+**新建工程不再重新播种**：`default_materials()` / `default_recipes()` / `default_tools()` 只在库是空的时候写一次（第一次装）。否则每开一个新工程都会把出厂的 Si 盖回你改过的那个，把你删掉的 recipe 全放回来。出厂 recipe 是按第一次建工程时那个内核写的；新工程的**起始流程**永远按自己这个工程的内核生成，跑起来的是它。
+
+**多个标签页**：库是共享的，所以一个标签页改了材料，别的标签页手里的旧副本必须跟着换——否则它下一次自动保存会把旧颜色写回去（自动保存发的是整个 document，库也在里面）。壳（`App.tsx`）拿着最后一次被报上来的库，发给所有标签页；`domain/library.ts` 是这三个列表的取、比、换。
 
 ## Step 与 Recipe Library
 

@@ -115,6 +115,7 @@ import {
   type PanelShares,
 } from "./domain/layout";
 
+import { libraryOf, sameLibrary, withLibrary, type Library } from "./domain/library";
 import { tabName, type TabHandle } from "./domain/tabs";
 
 type SaveState = "saved" | "saving" | "unsaved" | "error";
@@ -137,6 +138,14 @@ export type WorkspaceProps = {
   /** Close this tab. */
   onClose: () => void;
   /**
+   * The library as another tab last had it, with a count that rises on
+   * every report. Materials, tools and recipes are the user's rather than
+   * the project's, so every tab shows the same ones.
+   */
+  library: { count: number; value: Library } | null;
+  /** Say what this tab's library holds, so the other tabs follow it. */
+  onLibraryChanged: (library: Library) => void;
+  /**
    * Ask to hold this workspace. False means another tab already does, and
    * the shell has brought that tab forward instead.
    */
@@ -149,6 +158,8 @@ export function Workspace({
   onChanged,
   onOpenInNewTab,
   onClose,
+  library,
+  onLibraryChanged,
   claimRoot,
 }: WorkspaceProps) {
   const [document, setDocumentState] = useState<WorkspaceDocument | null>(null);
@@ -426,6 +437,29 @@ export function Workspace({
     const supported = projectKernel?.surfaces ?? capabilities.rendering.surfaces;
     if (!supported && mode === "surfaces") setMode("section");
   }, [capabilities, projectKernel, mode]);
+
+  // The library this tab last saw, which is both what it would report and
+  // what keeps a report of its own from coming back to it as news.
+  const ownLibrary = useRef<Library | null>(null);
+
+  // Materials, tools and recipes are shared, so a change here is a change
+  // in every tab. Sending it up first, then taking down what comes back:
+  // without the first, the other tabs' autosaves would write their older
+  // copy back over this edit, which is the whole reason the shell holds it.
+  useEffect(() => {
+    if (!document) return;
+    const here = libraryOf(document);
+    if (ownLibrary.current && sameLibrary(ownLibrary.current, here)) return;
+    ownLibrary.current = here;
+    onLibraryChanged(here);
+  }, [document, onLibraryChanged]);
+
+  useEffect(() => {
+    if (!library || !document) return;
+    if (sameLibrary(libraryOf(document), library.value)) return;
+    ownLibrary.current = library.value;
+    setDocumentState(withLibrary(document, library.value));
+  }, [library, document]);
 
   // Autosave: the worker is the store of record, so every edit is written back.
   useEffect(() => {

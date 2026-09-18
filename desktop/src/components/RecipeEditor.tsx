@@ -185,7 +185,7 @@ export function RecipeEditor({
       <div className="modal-card recipe-modal">
         <header className="modal-header">
           <div>
-            <span className="eyebrow">LIBRARY</span>
+            <span className="eyebrow">LIBRARY &middot; SHARED BY EVERY PROJECT</span>
             <h2>Recipes</h2>
           </div>
           <button type="button" className="icon-button" aria-label="Close" onClick={onClose}>

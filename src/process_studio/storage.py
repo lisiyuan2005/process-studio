@@ -21,13 +21,26 @@ from .models import (
     Recipe,
     ToolDefinition,
 )
+from .shared_library import SharedLibrary, recipe_from_payload
 
 if TYPE_CHECKING:
     from .kernel.material_state import MaterialState
 
 
 class ProjectRepository:
-    def __init__(self, database_path: str | Path) -> None:
+    """One workspace on disk, plus the shared library it draws its names from.
+
+    Materials, tools and recipes are the user's, not the project's: the same
+    oxide and the same etch recipe belong in every workspace they open. So
+    those three live in one shared library (see ``shared_library``) and the
+    project's own tables are kept as a copy of it, which is what makes a
+    workspace portable -- zip it, send it, and the steps still name
+    materials the person on the other end can see. Opening a workspace
+    hands the library whatever it has never seen, without letting it
+    overwrite anything already there.
+    """
+
+    def __init__(self, database_path: str | Path, library: SharedLibrary | None = None) -> None:
         self.database_path = Path(database_path)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self.snapshot_directory = self.database_path.with_suffix("").with_name(
@@ -35,6 +48,8 @@ class ProjectRepository:
         )
         self.snapshot_directory.mkdir(parents=True, exist_ok=True)
         self._initialize()
+        self.library = library if library is not None else self._shared_library()
+        self.adopted = self._learn_from_this_workspace()
 
     @property
     def workspace(self) -> Path:
@@ -166,6 +181,10 @@ class ProjectRepository:
                     FOREIGN KEY(branch_id) REFERENCES branches(id) ON DELETE CASCADE,
                     FOREIGN KEY(snapshot_id) REFERENCES snapshots(id) ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS process_logs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     project_id TEXT NOT NULL,
@@ -255,82 +274,165 @@ class ProjectRepository:
             ids = [row[0] for row in connection.execute("SELECT id FROM projects ORDER BY name")]
         return [self.load_project(project_id) for project_id in ids]
 
+    # -- the shared library, and this workspace's copy of it ---------------
+
     def save_material(self, material: MaterialDefinition) -> None:
-        """Write a material by id, so a rename updates it rather than inserting.
+        """Write a material to the library and to this workspace's copy.
 
-        Looking the row up by name meant a renamed material was not found and
-        was inserted again under its existing id, which the primary key
-        refused on every autosave. The id is the identity; the name is a
-        label that must merely be unique.
+        By id, so a rename updates it rather than inserting. Looking the row
+        up by name meant a renamed material was not found and was inserted
+        again under its existing id, which the primary key refused on every
+        autosave. The id is the identity; the name is a label that must
+        merely be unique.
         """
-        payload = asdict(material)
-        with self.connect() as connection:
-            clash = connection.execute(
-                "SELECT id FROM materials WHERE name=? AND id<>?",
-                (material.name, material.id),
-            ).fetchone()
-            if clash is not None:
-                raise ValueError(f"A material named {material.name!r} already exists.")
-            connection.execute(
-                """INSERT INTO materials(id, name, payload_json) VALUES (?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET name=excluded.name,
-                payload_json=excluded.payload_json""",
-                (material.id, material.name, json.dumps(payload)),
-            )
-
-    def save_tool(self, tool: ToolDefinition) -> None:
-        """Write a tool by id; the name is a label that must merely be unique."""
-        payload = asdict(tool)
-        with self.connect() as connection:
-            clash = connection.execute(
-                "SELECT id FROM tools WHERE name=? AND id<>?", (tool.name, tool.id)
-            ).fetchone()
-            if clash is not None:
-                raise ValueError(f"A tool named {tool.name!r} already exists.")
-            connection.execute(
-                """INSERT INTO tools(id, name, payload_json) VALUES (?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET name=excluded.name,
-                payload_json=excluded.payload_json""",
-                (tool.id, tool.name, json.dumps(payload)),
-            )
-
-    def load_tools(self) -> list[ToolDefinition]:
-        with self.connect() as connection:
-            rows = connection.execute("SELECT payload_json FROM tools ORDER BY name")
-            return [ToolDefinition(**json.loads(row[0])) for row in rows]
+        self.library.save_material(material)
+        self._store("materials", material.id, material.name, asdict(material))
 
     def load_materials(self) -> list[MaterialDefinition]:
-        with self.connect() as connection:
-            rows = connection.execute("SELECT payload_json FROM materials ORDER BY name")
-            return [MaterialDefinition(**json.loads(row[0])) for row in rows]
+        return self.library.load_materials()
+
+    def remove_material(self, material_id: str) -> None:
+        self.library.remove_material(material_id)
+        self._drop("materials", "id", material_id)
+
+    def save_tool(self, tool: ToolDefinition) -> None:
+        """Write a tool; the name is a label that must merely be unique."""
+        self.library.save_tool(tool)
+        self._store("tools", tool.id, tool.name, asdict(tool))
+
+    def load_tools(self) -> list[ToolDefinition]:
+        return self.library.load_tools()
+
+    def remove_tool(self, tool_id: str) -> None:
+        self.library.remove_tool(tool_id)
+        self._drop("tools", "id", tool_id)
 
     def save_recipe(self, recipe: Recipe) -> None:
         payload = asdict(recipe)
         payload["process_type"] = recipe.process_type.value
+        self.library.save_recipe(recipe)
         with self.connect() as connection:
             connection.execute(
                 "DELETE FROM recipes WHERE name=? AND id<>?", (recipe.name, recipe.id)
             )
-            connection.execute(
-                """INSERT INTO recipes(id, name, payload_json) VALUES (?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET name=excluded.name,
-                payload_json=excluded.payload_json""",
-                (recipe.id, recipe.name, json.dumps(payload)),
-            )
+        self._store("recipes", recipe.id, recipe.name, payload)
 
     def load_recipes(self) -> list[Recipe]:
-        recipes = []
+        return self.library.load_recipes()
+
+    def remove_recipe(self, recipe_id: str) -> None:
+        self.library.remove_recipe(recipe_id)
+        self._drop("recipes", "id", recipe_id)
+
+    def _store(self, table: str, row_id: str, name: str, payload: dict[str, Any]) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                f"""INSERT INTO {table}(id, name, payload_json) VALUES (?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET name=excluded.name,
+                payload_json=excluded.payload_json""",
+                (row_id, name, json.dumps(payload)),
+            )
+
+    def _drop(self, table: str, column: str, value: str) -> None:
+        with self.connect() as connection:
+            connection.execute(f"DELETE FROM {table} WHERE {column}=?", (value,))
+
+    def own_materials(self) -> list[MaterialDefinition]:
+        """This workspace's own copy: what it was last showing.
+
+        The copy is what a zipped workspace travels with, and it is also
+        the answer to "did this window know about that material?". A save
+        that leaves a name out means the user deleted it *here*; a name
+        that was never in this copy is one another window added while this
+        one was open, and leaving it out of a stale document is not a
+        deletion. So the copy catches up on open and on the saves this
+        workspace makes, and not otherwise.
+        """
+        with self.connect() as connection:
+            rows = connection.execute("SELECT payload_json FROM materials ORDER BY name")
+            return [MaterialDefinition(**json.loads(row[0])) for row in rows]
+
+    def own_tools(self) -> list[ToolDefinition]:
+        with self.connect() as connection:
+            rows = connection.execute("SELECT payload_json FROM tools ORDER BY name")
+            return [ToolDefinition(**json.loads(row[0])) for row in rows]
+
+    def own_recipes(self) -> list[Recipe]:
         with self.connect() as connection:
             rows = connection.execute("SELECT payload_json FROM recipes ORDER BY name")
-            for row in rows:
-                payload = json.loads(row[0])
-                payload["process_type"] = ProcessType(payload["process_type"])
-                payload["material_responses"] = {
-                    name: MaterialResponse(**response)
-                    for name, response in payload["material_responses"].items()
-                }
-                recipes.append(Recipe(**payload))
-        return recipes
+            return [recipe_from_payload(json.loads(row[0])) for row in rows]
+
+    def _shared_library(self) -> SharedLibrary:
+        """The user's library, or one in this workspace if there is nowhere else.
+
+        A home directory that cannot be written to is rare, and the answer
+        to it is not to refuse to open the workspace: a library beside the
+        project is what every project had before they were shared.
+        """
+        try:
+            return SharedLibrary()
+        except (OSError, sqlite3.Error):
+            return SharedLibrary(self.workspace / "library.sqlite3")
+
+    def _learn_from_this_workspace(self) -> list[str]:
+        """Hand the library whatever this workspace arrived with.
+
+        Only a workspace that came from elsewhere has anything to teach: a
+        copy taken from this same library is a mirror of it, and reading a
+        stale mirror back in would hand back every material and recipe the
+        user has since deleted.
+        """
+        if self._setting("library") == self.library.identity:
+            return []
+        taken = self.library.adopt(self.own_materials(), self.own_tools(), self.own_recipes())
+        self._remember("library", self.library.identity)
+        return taken
+
+    def _setting(self, key: str) -> str | None:
+        with self.connect() as connection:
+            row = connection.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        return str(row[0]) if row else None
+
+    def _remember(self, key: str, value: str) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """INSERT INTO settings(key, value) VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                (key, value),
+            )
+
+    def refresh_library_copy(self) -> None:
+        """Leave this workspace holding a copy of the library, so it travels.
+
+        A workspace that is zipped and sent has to carry the names its steps
+        use; the library on the other machine is somebody else's. This is
+        called when a window is handed the document -- opening the
+        workspace -- because the copy is also the record of what that
+        window was shown, which is what tells a deletion apart from a
+        material another window has added since.
+        """
+        materials = self.library.load_materials()
+        tools = self.library.load_tools()
+        recipes = self.library.load_recipes()
+        with self.connect() as connection:
+            for table, items in (
+                ("materials", materials),
+                ("tools", tools),
+                ("recipes", recipes),
+            ):
+                keep = {item.id for item in items}
+                stored = [row[0] for row in connection.execute(f"SELECT id FROM {table}")]
+                for row_id in stored:
+                    if row_id not in keep:
+                        connection.execute(f"DELETE FROM {table} WHERE id=?", (row_id,))
+        for material in materials:
+            self._store("materials", material.id, material.name, asdict(material))
+        for tool in tools:
+            self._store("tools", tool.id, tool.name, asdict(tool))
+        for recipe in recipes:
+            payload = asdict(recipe)
+            payload["process_type"] = recipe.process_type.value
+            self._store("recipes", recipe.id, recipe.name, payload)
 
     def save_branch(self, project_id: str, branch: FlowBranch) -> None:
         with self.connect() as connection:

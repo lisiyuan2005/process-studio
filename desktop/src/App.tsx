@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { Workspace, type WorkspaceProps } from "./Workspace";
 import { openTabs, rememberOpenTabs } from "./domain/recent";
+import type { Library } from "./domain/library";
 import {
   claimRoot,
   closeTab,
@@ -36,6 +37,10 @@ export default function App() {
     return start;
   });
   const { tabs, active } = state;
+  // The library belongs to the user, not to a project, so all the tabs show
+  // one. A tab reports what it has; the rest are given it. The count is
+  // what tells an old report from a new one when they cross.
+  const [library, setLibrary] = useState<{ count: number; value: Library } | null>(null);
 
   // The state as it is, for callbacks that must not close over a stale one.
   const shown = useRef(state);
@@ -56,7 +61,10 @@ export default function App() {
   // One stable callback set per tab: a Workspace reports through them from
   // an effect, and a fresh function on every render would make it loop.
   const perTab = useRef(
-    new Map<number, Pick<WorkspaceProps, "onChanged" | "onClose" | "claimRoot">>(),
+    new Map<
+      number,
+      Pick<WorkspaceProps, "onChanged" | "onClose" | "claimRoot" | "onLibraryChanged">
+    >(),
   );
   const callbacksFor = (key: number) => {
     let found = perTab.current.get(key);
@@ -64,6 +72,8 @@ export default function App() {
       found = {
         onChanged: (handle) => setState((current) => reportTab(current, key, handle)),
         onClose: () => close(key),
+        onLibraryChanged: (value: Library) =>
+          setLibrary((current) => ({ count: (current?.count ?? 0) + 1, value })),
         claimRoot: (root: string) => {
           const asked = claimRoot(shown.current, key, root);
           if (!asked.allowed) setState(asked.state);
@@ -149,6 +159,7 @@ export default function App() {
           <Workspace
             initialRoot={tab.initialRoot}
             active={index === active}
+            library={library}
             onOpenInNewTab={open}
             {...callbacksFor(tab.key)}
           />

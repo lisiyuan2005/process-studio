@@ -176,6 +176,10 @@ def _describe() -> dict[str, Any]:
 def _open(parameters: Mapping[str, Any]) -> dict[str, Any]:
     root = _root(parameters)
     repository = open_repository(root)
+    # The window is about to be shown the whole library, so this workspace's
+    # copy of it -- what it travels with, and the record of what this window
+    # was shown -- is brought up to date here and nowhere else.
+    repository.refresh_library_copy()
     project = load_project(repository, parameters.get("projectId"))
     return build_document(root, repository, project)
 
@@ -211,17 +215,20 @@ def _persist_document(parameters: Mapping[str, Any]) -> dict[str, Any]:
     project.kernel = stored.kernel
     repository.save_project(project)
 
+    # Materials, tools and recipes are the shared library's, so what is saved
+    # here is saved for every project. What the document leaves out is
+    # measured against this workspace's own copy rather than the library:
+    # a name this window never had is one another window has just added,
+    # and a stale document not mentioning it is not a deletion.
     recipes = document.get("recipes")
     if isinstance(recipes, list):
         incoming = [recipe_from_json(recipe) for recipe in recipes]
         keep = {recipe.id for recipe in incoming}
         for recipe in incoming:
             repository.save_recipe(recipe)
-        with repository.connect() as connection:
-            for row in connection.execute("SELECT id FROM recipes").fetchall():
-                if row["id"] in keep:
-                    continue
-                connection.execute("DELETE FROM recipes WHERE id=?", (row["id"],))
+        for stored in repository.own_recipes():
+            if stored.id not in keep:
+                repository.remove_recipe(stored.id)
 
     materials = document.get("materials")
     if isinstance(materials, list):
@@ -229,10 +236,9 @@ def _persist_document(parameters: Mapping[str, Any]) -> dict[str, Any]:
         keep_names = {material.name for material in incoming_materials}
         for material in incoming_materials:
             repository.save_material(material)
-        with repository.connect() as connection:
-            for row in connection.execute("SELECT name FROM materials").fetchall():
-                if row["name"] not in keep_names:
-                    connection.execute("DELETE FROM materials WHERE name=?", (row["name"],))
+        for stored_material in repository.own_materials():
+            if stored_material.name not in keep_names:
+                repository.remove_material(stored_material.id)
 
     tools = document.get("tools")
     if isinstance(tools, list):
@@ -243,10 +249,9 @@ def _persist_document(parameters: Mapping[str, Any]) -> dict[str, Any]:
                 repository.save_tool(tool)
             except ValueError as error:
                 raise InvalidRequest(str(error)) from error
-        with repository.connect() as connection:
-            for row in connection.execute("SELECT id FROM tools").fetchall():
-                if row["id"] not in keep_tool_ids:
-                    connection.execute("DELETE FROM tools WHERE id=?", (row["id"],))
+        for stored_tool in repository.own_tools():
+            if stored_tool.id not in keep_tool_ids:
+                repository.remove_tool(stored_tool.id)
 
     branches = document.get("branches")
     if isinstance(branches, list):
