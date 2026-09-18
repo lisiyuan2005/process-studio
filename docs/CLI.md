@@ -52,6 +52,7 @@ cd ~/devices/dram
 | `recipes list\|export FILE.xlsx\|import FILE.xlsx` | Recipe 库，按类型和分组列出 |
 | `tools list\|add NAME [--group G] [--notes N]\|rm NAME` | 工具库；分组用斜杠分子组，如 `Etch/Dry` |
 | `sketch list\|show ID\|export ID FILE\|import ID FILE` | Quick Sketch |
+| `branches list\|add NAME [--after STEP]\|use BRANCH\|rename BRANCH NAME\|rm BRANCH` | 工艺分叉（split）：`add` 把当前分支在某一步之后分出一条新分支，分叉点之前的步骤和**已经算好的结果**一起带过去，之后自动切到新分支；`rm` 只删这条分支独有的结果 |
 | `lines list\|add NAME X0 Y0 X1 Y1\|rm NAME` | 保存的 AA–BB 截面线；`view section --named NAME` 沿其中一条切 |
 | `flow dump [FILE]` / `flow apply FILE` | 整条流程写成一个文件 / 按文件设置工作目录；`FILE` 写 `-` 从 stdin 读（JSON 以 `{` 开头，否则按 YAML） |
 | `log [-n N]` | worker 记录的运行日志 |

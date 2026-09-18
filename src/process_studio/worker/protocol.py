@@ -184,6 +184,98 @@ def _open(parameters: Mapping[str, Any]) -> dict[str, Any]:
     return build_document(root, repository, project)
 
 
+def _branch_name(parameters: Mapping[str, Any], repository, project, *, keeping: str = "") -> str:
+    """A name for a branch: given, not blank, and not one already in use.
+
+    Names are what the branch picker shows, so two branches called the
+    same thing would leave the user choosing between them by position.
+    """
+    name = parameters.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise InvalidRequest("a branch needs a name.")
+    name = name.strip()
+    for branch in repository.list_branches(project.id):
+        if branch.name == name and branch.id != keeping:
+            raise InvalidRequest(f"this project already has a branch called {name!r}.")
+    return name
+
+
+def _create_branch(parameters: Mapping[str, Any]) -> dict[str, Any]:
+    """Fork a branch at one of its steps: a process split.
+
+    The new branch carries the steps up to and including that one and the
+    results already computed for them -- the same steps have the same
+    results -- so only what is added after the fork has to run.
+    """
+    root = _root(parameters)
+    repository = open_repository(root)
+    project = load_project(repository, parameters.get("projectId"))
+    source_id = parameters.get("branchId")
+    step_id = parameters.get("stepId")
+    if not isinstance(source_id, str) or not source_id:
+        raise InvalidRequest("create_branch requires branchId, the branch to fork.")
+    if not isinstance(step_id, str) or not step_id:
+        raise InvalidRequest("create_branch requires stepId, the step to fork after.")
+    name = _branch_name(parameters, repository, project)
+    try:
+        branch = repository.create_branch(project.id, source_id, step_id, name)
+    except KeyError as error:
+        raise InvalidRequest(
+            f"step {error.args[0]!r} is not on the branch being forked."
+        ) from error
+    DigestCache(repository).copy(
+        source_id, branch.id, [key for step in branch.steps for key in result_keys(step.id)]
+    )
+    project.active_branch_id = branch.id
+    repository.save_project(project)
+    return {"branchId": branch.id, **build_document(root, repository, project)}
+
+
+def _rename_branch(parameters: Mapping[str, Any]) -> dict[str, Any]:
+    root = _root(parameters)
+    repository = open_repository(root)
+    project = load_project(repository, parameters.get("projectId"))
+    branch_id = parameters.get("branchId")
+    if not isinstance(branch_id, str) or not branch_id:
+        raise InvalidRequest("rename_branch requires branchId.")
+    name = _branch_name(parameters, repository, project, keeping=branch_id)
+    try:
+        repository.rename_branch(branch_id, name)
+    except KeyError as error:
+        raise InvalidRequest(f"branch {error.args[0]!r} was not found.") from error
+    return build_document(root, repository, project)
+
+
+def _delete_branch(parameters: Mapping[str, Any]) -> dict[str, Any]:
+    """Drop a branch, and move off it if it was the one being worked on."""
+    root = _root(parameters)
+    repository = open_repository(root)
+    project = load_project(repository, parameters.get("projectId"))
+    branch_id = parameters.get("branchId")
+    if not isinstance(branch_id, str) or not branch_id:
+        raise InvalidRequest("delete_branch requires branchId.")
+    branches = repository.list_branches(project.id)
+    if not any(branch.id == branch_id for branch in branches):
+        raise InvalidRequest(f"branch {branch_id!r} was not found.")
+    if len(branches) < 2:
+        raise InvalidRequest("a project keeps at least one branch; this is the only one.")
+    children = [branch for branch in branches if branch.parent_branch_id == branch_id]
+    if children:
+        raise InvalidRequest(
+            f"{len(children)} branch(es) were forked from this one "
+            f"({', '.join(branch.name for branch in children)}); delete those first."
+        )
+    gone = next(branch for branch in branches if branch.id == branch_id)
+    repository.delete_branch(branch_id)
+    if project.active_branch_id == branch_id:
+        # Back to where it was forked from, or to whatever is left.
+        left = [branch for branch in branches if branch.id != branch_id]
+        parent = next((b for b in left if b.id == gone.parent_branch_id), None)
+        project.active_branch_id = (parent or left[0]).id
+        repository.save_project(project)
+    return build_document(root, repository, project)
+
+
 def _persist_document(parameters: Mapping[str, Any]) -> dict[str, Any]:
     """Write the client's whole document back, then re-read what was stored."""
     root = _root(parameters)
@@ -651,6 +743,12 @@ def dispatch(
         return _open(parameters)
     if method == "save_document":
         return _persist_document(parameters)
+    if method == "create_branch":
+        return _create_branch(parameters)
+    if method == "rename_branch":
+        return _rename_branch(parameters)
+    if method == "delete_branch":
+        return _delete_branch(parameters)
     if method == "plan_grid":
         return _plan_grid(parameters)
     if method == "set_grid":

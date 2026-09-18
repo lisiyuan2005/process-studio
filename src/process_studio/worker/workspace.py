@@ -404,6 +404,25 @@ class DigestCache:
                 (branch_id, step_id, digest),
             )
 
+    def copy(self, source_branch_id: str, branch_id: str, step_ids: Iterable[str]) -> None:
+        """Carry the digests of these steps onto a branch forked from them.
+
+        Without this a fork's inherited results would all read as stale:
+        the snapshots come across, but a snapshot with no digest beside it
+        is one nothing vouches for, and the flow would run again from the
+        first step to prove what it already knows.
+        """
+        ids = list(step_ids)
+        if not ids:
+            return
+        with self.repository.connect() as connection:
+            connection.execute(
+                f"""INSERT OR REPLACE INTO worker_step_digests(branch_id, step_id, digest)
+                SELECT ?, step_id, digest FROM worker_step_digests
+                WHERE branch_id=? AND step_id IN ({",".join("?" for _ in ids)})""",
+                [branch_id, source_branch_id, *ids],
+            )
+
     def forget(self, branch_id: str, step_ids: Iterable[str]) -> None:
         ids = list(step_ids)
         if not ids:

@@ -27,6 +27,7 @@ import {
   upsertSectionLine,
   upsertTool,
   recipeFromStep,
+  forksByStep,
   removeRecipe,
   removeStep,
   renameStep,
@@ -380,5 +381,53 @@ describe("loops", () => {
     expect(names(duplicated.document).filter((name) => name === "Trench Etch copy")).toHaveLength(3);
     // Deleting the loop's steps removes all of them.
     expect(names(removeSteps(document, [steps[1].id, steps[2].id]))).toEqual(["Lithography", "Conformal Al2O3"]);
+  });
+});
+
+
+describe("process splits", () => {
+  const forked = (parentStepId: string | null, name = "thick oxide"): WorkspaceDocument => {
+    const base = demoDocument();
+    const main = getActiveBranch(base);
+    return {
+      ...base,
+      branches: [
+        ...base.branches,
+        {
+          id: "branch-split",
+          name,
+          parentBranchId: main.id,
+          parentStepId,
+          steps: main.steps.slice(0, 2),
+        },
+      ],
+    };
+  };
+
+  it("says which step a branch was forked after", () => {
+    const main = getActiveBranch(demoDocument());
+    expect(forksByStep(forked(main.steps[1].id), main.id)).toEqual({
+      [main.steps[1].id]: ["thick oxide"],
+    });
+  });
+
+  it("counts several forks at one step", () => {
+    const main = getActiveBranch(demoDocument());
+    const one = forked(main.steps[0].id, "A");
+    const two: WorkspaceDocument = {
+      ...one,
+      branches: [...one.branches, { ...one.branches[1], id: "branch-b", name: "B" }],
+    };
+    expect(forksByStep(two, main.id)[main.steps[0].id]).toEqual(["A", "B"]);
+  });
+
+  it("only reports the branches forked from the branch being shown", () => {
+    const main = getActiveBranch(demoDocument());
+    expect(forksByStep(forked(main.steps[1].id), "branch-split")).toEqual({});
+  });
+
+  it("ignores a branch that was never forked from anything", () => {
+    const document = demoDocument();
+    expect(forksByStep(document, getActiveBranch(document).id)).toEqual({});
   });
 });

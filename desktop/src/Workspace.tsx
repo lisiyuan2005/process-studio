@@ -41,6 +41,7 @@ import {
   orderedSelection,
   removeSteps,
   setStepsEnabled,
+  forksByStep,
   getActiveBranch,
   newId,
   getSteps,
@@ -626,6 +627,86 @@ export function Workspace({
       setShowLog(true);
     }
   };
+
+  // -- process splits: one flow that forks at a step ------------------------
+  //
+  // The fork is the worker's to make -- it copies the steps and re-links
+  // the results they already have -- so these save what is on screen first
+  // and then take the document the worker hands back, the way a run does.
+  const failed = (what: string, reason: unknown) => {
+    setEvents((current) => [...current, { kind: "log", message: `${what}: ${errorMessage(reason)}` }]);
+    setShowLog(true);
+  };
+
+  const branchFromStep = async (stepId: string) => {
+    if (!document || !branch) return;
+    const step = steps.find((item) => item.id === stepId);
+    if (!step) return;
+    const suggestion = `Split ${document.branches.length + 1}`;
+    const name = window.prompt(
+      `Fork the flow after ${step.name}. The new branch keeps every step up to there, `
+        + "and what they have already computed. Name it:",
+      suggestion,
+    );
+    if (!name || !name.trim()) return;
+    try {
+      if (saveState === "unsaved") await saveNow();
+      const result = await bridge.createBranch(document.root, branch.id, stepId, name.trim());
+      skipNextAutosave.current = true;
+      setDocumentState(result);
+      setSaveState("saved");
+      setSelectedStepId(stepId);
+      setEvents((current) => [
+        ...current,
+        { kind: "log", message: `Forked after ${step.name} into ${name.trim()}` },
+      ]);
+    } catch (reason) {
+      failed("Could not fork the branch", reason);
+    }
+  };
+
+  const renameBranch = async () => {
+    if (!document || !branch) return;
+    const name = window.prompt("Name of this branch", branch.name);
+    if (!name || !name.trim() || name.trim() === branch.name) return;
+    try {
+      if (saveState === "unsaved") await saveNow();
+      const result = await bridge.renameBranch(document.root, branch.id, name.trim());
+      skipNextAutosave.current = true;
+      setDocumentState(result);
+      setSaveState("saved");
+    } catch (reason) {
+      failed("Could not rename the branch", reason);
+    }
+  };
+
+  const deleteBranch = async () => {
+    if (!document || !branch) return;
+    if (
+      !window.confirm(
+        `Delete the branch ${branch.name} and the results only it is holding? `
+          + "What it shares with the branch it was forked from is kept.",
+      )
+    ) {
+      return;
+    }
+    try {
+      if (saveState === "unsaved") await saveNow();
+      const result = await bridge.deleteBranch(document.root, branch.id);
+      skipNextAutosave.current = true;
+      viewCache.current.clear();
+      setDocumentState(result);
+      setSaveState("saved");
+      setSelectedStepId(getSteps(result)[0]?.id ?? "");
+    } catch (reason) {
+      failed("Could not delete the branch", reason);
+    }
+  };
+
+  const forks = useMemo(
+    () => (document && branch ? forksByStep(document, branch.id) : {}),
+    [document, branch],
+  );
 
   const removeStepById = (stepId: string) => {
     if (!document) return;
@@ -1519,6 +1600,36 @@ export function Workspace({
       ],
     },
     {
+      // A process split: the same flow up to a step, something else after
+      // it. Switching is also in the top bar; everything else is here.
+      label: "Branch",
+      items: [
+        ...document.branches.map((item) => ({
+          label: item.name,
+          checked: item.id === branch.id,
+          action: () => {
+            const next = setActiveBranch(document, item.id);
+            setDocument(next);
+            setSelectedStepId(getSteps(next)[0]?.id ?? "");
+          },
+        })),
+        {
+          label: selectedStep
+            ? `Fork after ${selectedStep.name}…`
+            : "Fork after the selected step…",
+          action: () => selectedStep && branchFromStep(selectedStep.id),
+          disabled: !selectedStep || busy,
+          separated: true,
+        },
+        { label: `Rename ${branch.name}…`, action: renameBranch, disabled: busy },
+        {
+          label: `Delete ${branch.name}…`,
+          action: deleteBranch,
+          disabled: busy || document.branches.length < 2,
+        },
+      ],
+    },
+    {
       label: "View",
       items: [
         { label: "3D surfaces", action: () => setMode("surfaces"), checked: mode === "surfaces" },
@@ -1806,6 +1917,8 @@ export function Workspace({
           canPaste={clipboardSize > 0}
           onSelect={selectStep}
           onClearSelection={clearSelection}
+          onBranch={branchFromStep}
+          forks={forks}
           onDuplicateSelected={duplicateSelected}
           onRemoveSelected={removeSelected}
           onMoveSelected={moveSelected}

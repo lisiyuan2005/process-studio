@@ -724,6 +724,95 @@ def cmd_tools_rm(session: Session, args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_branches_list(session: Session, args: argparse.Namespace) -> int:
+    document = session.document()
+    active = document["project"].get("activeBranchId")
+    names = {branch["id"]: branch["name"] for branch in document["branches"]}
+    rows = []
+    for branch in document["branches"]:
+        parent = names.get(branch.get("parentBranchId") or "", "")
+        forked_at = ""
+        if parent and branch.get("parentStepId"):
+            source = next(
+                (item for item in document["branches"] if item["id"] == branch["parentBranchId"]),
+                None,
+            )
+            steps = [step["id"] for step in (source or {}).get("steps", [])]
+            if branch["parentStepId"] in steps:
+                forked_at = f"after step {steps.index(branch['parentStepId']) + 1} of {parent}"
+        rows.append([
+            "*" if branch["id"] == active else "",
+            branch["name"],
+            str(len(branch["steps"])),
+            forked_at,
+        ])
+    session.emit(document["branches"], lambda: table(("", "Branch", "Steps", "Forked"), rows))
+    return EXIT_OK
+
+
+def cmd_branches_add(session: Session, args: argparse.Namespace) -> int:
+    """Fork the branch being worked on at a step: a process split."""
+    document = session.document()
+    branch = Session.branch(document)
+    step_id = steps_or_last(session, document, args.after)
+    result = session.call(
+        "create_branch",
+        root=str(session.root),
+        branchId=branch["id"],
+        stepId=step_id,
+        name=args.name,
+    )
+    made = next(item for item in result["branches"] if item["id"] == result["branchId"])
+    session.note(
+        f"Forked {branch['name']!r} after step {len(made['steps'])} into {made['name']!r}; "
+        "it is now the active branch."
+    )
+    session.emit(made, lambda: [f"{item['name']}" for item in result["branches"]])
+    return EXIT_OK
+
+
+def steps_or_last(session: Session, document: Mapping[str, Any], reference: str | None) -> str:
+    """The step a branch forks after: a number or name, the last one by default."""
+    steps = Session.steps(document)
+    if not steps:
+        raise InvalidRequest("this branch has no steps to fork at.")
+    if reference is None:
+        return steps[-1]["id"]
+    return steps[session.step_index(document, reference)]["id"]
+
+
+def cmd_branches_rename(session: Session, args: argparse.Namespace) -> int:
+    document = session.document()
+    branch = session.branch_by_name(document, args.branch)
+    result = session.call(
+        "rename_branch", root=str(session.root), branchId=branch["id"], name=args.name
+    )
+    session.note(f"Renamed {branch['name']!r} to {args.name!r}")
+    session.emit(result["branches"], lambda: [item["name"] for item in result["branches"]])
+    return EXIT_OK
+
+
+def cmd_branches_rm(session: Session, args: argparse.Namespace) -> int:
+    document = session.document()
+    branch = session.branch_by_name(document, args.branch)
+    result = session.call("delete_branch", root=str(session.root), branchId=branch["id"])
+    session.note(
+        f"Removed {branch['name']!r}; results the other branches share are kept."
+    )
+    session.emit(result["branches"], lambda: [item["name"] for item in result["branches"]])
+    return EXIT_OK
+
+
+def cmd_branches_use(session: Session, args: argparse.Namespace) -> int:
+    document = session.document()
+    branch = session.branch_by_name(document, args.branch)
+    document["project"]["activeBranchId"] = branch["id"]
+    session.save(document)
+    session.note(f"Working on {branch['name']!r}")
+    session.emit({"activeBranchId": branch["id"]}, [f"Working on {branch['name']}"])
+    return EXIT_OK
+
+
 def cmd_recipes_export(session: Session, args: argparse.Namespace) -> int:
     result = session.call("export_recipes_xlsx", root=str(session.root), destination=str(Path(args.file).resolve()))
     session.emit(result, [f"Wrote {result['path']}"])
@@ -1068,6 +1157,29 @@ def build_parser() -> argparse.ArgumentParser:
     recipe_import = recipe_commands.add_parser("import", help="read recipes from .xlsx")
     recipe_import.add_argument("file")
     recipe_import.set_defaults(handler=cmd_recipes_import)
+
+    branches = commands.add_parser("branches", help="process splits: one flow that forks at a step")
+    branch_commands = branches.add_subparsers(dest="branches_command", metavar="ACTION")
+    branch_commands.required = True
+    branch_commands.add_parser("list", help="every branch, and where it forked").set_defaults(
+        handler=cmd_branches_list
+    )
+    branch_add = branch_commands.add_parser("add", help="fork the active branch at a step")
+    branch_add.add_argument("name", help="what to call the new branch")
+    branch_add.add_argument(
+        "--after", metavar="STEP", help="fork after this step (number or name); the last one by default"
+    )
+    branch_add.set_defaults(handler=cmd_branches_add)
+    branch_use = branch_commands.add_parser("use", help="work on this branch from now on")
+    branch_use.add_argument("branch", help="a branch name or number from `branches list`")
+    branch_use.set_defaults(handler=cmd_branches_use)
+    branch_rename = branch_commands.add_parser("rename", help="give a branch another name")
+    branch_rename.add_argument("branch")
+    branch_rename.add_argument("name")
+    branch_rename.set_defaults(handler=cmd_branches_rename)
+    branch_rm = branch_commands.add_parser("rm", help="remove a branch and the results only it holds")
+    branch_rm.add_argument("branch")
+    branch_rm.set_defaults(handler=cmd_branches_rm)
 
     tools = commands.add_parser("tools", help="the tool library the Tool fields pick from")
     tool_commands = tools.add_subparsers(dest="tools_command", metavar="ACTION")

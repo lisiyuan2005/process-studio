@@ -33,6 +33,7 @@ import {
   Pencil,
   Play,
   Plus,
+  GitBranch,
   Repeat,
   Scissors,
   Sparkles,
@@ -74,6 +75,10 @@ interface StepListProps {
   onDuplicate: (stepId: string) => void;
   onMove: (stepId: string, direction: -1 | 1) => void;
   onRemove: (stepId: string) => void;
+  /** Fork the flow after this step into a branch of its own. */
+  onBranch: (stepId: string) => void;
+  /** For each step, the names of the branches that fork after it. */
+  forks: Record<string, string[]>;
   /** The batch actions work on `selectedIds`. */
   onDuplicateSelected: () => void;
   onRemoveSelected: () => void;
@@ -167,6 +172,8 @@ interface StepCardProps {
   onSelect: (modifiers: SelectModifiers) => void;
   onToggle: () => void;
   onMenu: (x: number, y: number) => void;
+  /** Names of the branches that fork after this step, if any. */
+  forkedInto?: string[];
 }
 
 /** A step in the list. Outside a loop it is wrapped to be dragged; inside one it sits still. */
@@ -180,6 +187,7 @@ function StepCard({
   onSelect,
   onToggle,
   onMenu,
+  forkedInto,
   handle,
   nodeRef,
   style,
@@ -217,6 +225,14 @@ function StepCard({
         <div className="step-subtitle">
           {step.processType.replace("_", " ")} · {mask}
           {step.enabled ? "" : " · skipped"}
+          {forkedInto?.length ? (
+            // The flow carries on elsewhere as well, which the list of one
+            // branch cannot otherwise show.
+            <span className="step-forks" title={`Forked into ${forkedInto.join(", ")}`}>
+              <GitBranch size={11} />
+              {forkedInto.length === 1 ? forkedInto[0] : `${forkedInto.length} branches`}
+            </span>
+          ) : null}
         </div>
       </div>
       <button
@@ -485,6 +501,7 @@ function StepMenu({
   onMove,
   onToggle,
   onRemove,
+  onBranch,
   onLoop,
   loopObstacle,
 }: {
@@ -498,6 +515,7 @@ function StepMenu({
   onDuplicate: () => void;
   onCopy: () => void;
   onPaste: () => void;
+  onBranch: () => void;
   canPaste: boolean;
   onMove: (direction: -1 | 1) => void;
   onToggle: () => void;
@@ -588,6 +606,12 @@ function StepMenu({
         step.enabled ? <Square size={13} /> : <SquareCheck size={13} />,
         onToggle,
       )}
+      {item("Fork a branch here…", <GitBranch size={13} />, onBranch, {
+        disabled: busy,
+        title:
+          "A process split: a new branch with every step up to here, and their results, "
+          + "to carry on differently",
+      })}
       {item("Repeat as a loop…", <Repeat size={13} />, onLoop, {
         disabled: loopObstacle !== null,
         title: loopObstacle ?? "Run this step several times in a row",
@@ -616,6 +640,8 @@ export function StepList({
   onDuplicate,
   onMove,
   onRemove,
+  onBranch,
+  forks,
   onDuplicateSelected,
   onRemoveSelected,
   onMoveSelected,
@@ -703,6 +729,7 @@ export function StepList({
       onSelect: (modifiers) => onSelect(step.id, modifiers),
       onToggle: () => onToggle(step.id),
       onMenu: (x, y) => setMenu({ stepId: step.id, x, y }),
+      forkedInto: forks[step.id],
     };
     return sortable ? <SortableStep key={step.id} {...props} /> : <StepCard key={step.id} {...props} />;
   };
@@ -840,6 +867,7 @@ export function StepList({
           onMove={(direction) => onMove(menuStep.id, direction)}
           onToggle={() => onToggle(menuStep.id)}
           onRemove={() => onRemove(menuStep.id)}
+          onBranch={() => onBranch(menuStep.id)}
           onLoop={() => setLoopDialog(true)}
           loopObstacle={loopObstacle}
         />

@@ -24,6 +24,24 @@ export function getActiveBranch(document: WorkspaceDocument): FlowBranch {
   return active ?? document.branches[0];
 }
 
+/**
+ * For each step of a branch, the names of the branches forked after it.
+ *
+ * A process split leaves the flow carrying on in two places, and a list
+ * that shows one branch cannot say so on its own.
+ */
+export function forksByStep(
+  document: WorkspaceDocument,
+  branchId: string,
+): Record<string, string[]> {
+  const byStep: Record<string, string[]> = {};
+  for (const branch of document.branches) {
+    if (branch.parentBranchId !== branchId || !branch.parentStepId) continue;
+    (byStep[branch.parentStepId] ??= []).push(branch.name);
+  }
+  return byStep;
+}
+
 export function getSteps(document: WorkspaceDocument): ProcessStep[] {
   return getActiveBranch(document)?.steps ?? [];
 }

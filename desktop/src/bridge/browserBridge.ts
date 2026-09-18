@@ -105,6 +105,18 @@ export class BrowserBridge implements DesktopBridge {
     return document;
   }
 
+  async createBranch(): Promise<{ branchId: string } & WorkspaceDocument> {
+    throw new Error(NO_KERNEL);
+  }
+
+  async renameBranch(): Promise<WorkspaceDocument> {
+    throw new Error(NO_KERNEL);
+  }
+
+  async deleteBranch(): Promise<WorkspaceDocument> {
+    throw new Error(NO_KERNEL);
+  }
+
   async planGrid(): Promise<GridPlan> {
     // Matching a spacing to the project bounds is the kernel's search, not a
     // rounding rule the preview could fake.

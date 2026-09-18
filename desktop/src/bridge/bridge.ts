@@ -77,6 +77,20 @@ export interface DesktopBridge {
   /** Open a workspace whose directory is already known, as on a reload. */
   openWorkspaceAt(root: string): Promise<WorkspaceDocument>;
   saveDocument(document: WorkspaceDocument): Promise<WorkspaceDocument>;
+  /**
+   * Fork a branch after one of its steps -- a process split. The new
+   * branch carries the steps up to there and the results already computed
+   * for them, and becomes the one being worked on.
+   */
+  createBranch(
+    root: string,
+    branchId: string,
+    stepId: string,
+    name: string,
+  ): Promise<{ branchId: string } & WorkspaceDocument>;
+  renameBranch(root: string, branchId: string, name: string): Promise<WorkspaceDocument>;
+  /** Remove a branch; results the others share are kept. */
+  deleteBranch(root: string, branchId: string): Promise<WorkspaceDocument>;
   /** `bounds` is the project window in µm; omitted means keep the current one. */
   /** `xyNm` is the slab kernel's XY arc sagitta; null lets it follow the z step. */
   planGrid(root: string, targetSpacingNm: number, bounds?: WindowBounds, xyNm?: number | null): Promise<GridPlan>;

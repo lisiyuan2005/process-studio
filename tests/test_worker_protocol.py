@@ -1084,6 +1084,83 @@ def test_the_slab_top_view_can_look_through_a_material(tmp_path):
     assert colors["Si"] in _top_view_colors(through)
 
 
+def _ran_workspace(tmp_path, name="Splits"):
+    root = str(tmp_path / "splits")
+    document = call("create_workspace", root=root, name=name, kernel="slab")
+    branch = document["branches"][0]
+    call("run_flow", root=root, branchId=branch["id"])
+    return root, call("open_workspace", root=root)
+
+
+def test_a_branch_forks_a_flow_at_a_step_and_inherits_its_results(tmp_path):
+    """A split is the same flow up to a step, and something else after it."""
+    root, document = _ran_workspace(tmp_path)
+    main = document["branches"][0]
+    fork_at = main["steps"][1]
+
+    forked = call(
+        "create_branch", root=root, branchId=main["id"], stepId=fork_at["id"], name="thick oxide"
+    )
+
+    branch = next(item for item in forked["branches"] if item["id"] == forked["branchId"])
+    assert [step["name"] for step in branch["steps"]] == [
+        step["name"] for step in main["steps"][:2]
+    ]
+    # The steps up to the fork are the same steps, so their results stand:
+    # only what is added after it has to run.
+    assert set(forked["stepStatuses"][branch["id"]].values()) == {"clean"}
+    # And the fork is where the work now happens.
+    assert forked["project"]["activeBranchId"] == branch["id"]
+    assert set(forked["stepStatuses"][main["id"]].values()) == {"clean"}
+
+
+def test_deleting_a_branch_keeps_what_the_others_are_still_using(tmp_path):
+    root, document = _ran_workspace(tmp_path)
+    main = document["branches"][0]
+    forked = call(
+        "create_branch", root=root, branchId=main["id"], stepId=main["steps"][1]["id"], name="split"
+    )
+
+    after = call("delete_branch", root=root, branchId=forked["branchId"])
+
+    assert [branch["id"] for branch in after["branches"]] == [main["id"]]
+    # The snapshots the fork was sharing are the ones main is standing on.
+    assert set(after["stepStatuses"][main["id"]].values()) == {"clean"}
+    assert after["project"]["activeBranchId"] == main["id"]
+
+
+def test_a_branch_needs_a_name_of_its_own_and_a_step_to_fork_at(tmp_path):
+    root, document = _ran_workspace(tmp_path)
+    main = document["branches"][0]
+    fork = {"root": root, "branchId": main["id"], "stepId": main["steps"][0]["id"]}
+
+    with pytest.raises(InvalidRequest, match="needs a name"):
+        call("create_branch", **fork, name="  ")
+    with pytest.raises(InvalidRequest, match="already has a branch"):
+        call("create_branch", **fork, name=main["name"])
+    with pytest.raises(InvalidRequest, match="not on the branch"):
+        call("create_branch", root=root, branchId=main["id"], stepId="nowhere", name="x")
+
+    made = call("create_branch", **fork, name="split")
+    with pytest.raises(InvalidRequest, match="already has a branch"):
+        call("rename_branch", root=root, branchId=made["branchId"], name=main["name"])
+    # Its own name back onto itself is not a clash.
+    assert call("rename_branch", root=root, branchId=made["branchId"], name="split")
+
+
+def test_the_last_branch_and_a_forked_from_branch_are_kept(tmp_path):
+    root, document = _ran_workspace(tmp_path)
+    main = document["branches"][0]
+    with pytest.raises(InvalidRequest, match="at least one branch"):
+        call("delete_branch", root=root, branchId=main["id"])
+
+    made = call("create_branch", root=root, branchId=main["id"], stepId=main["steps"][1]["id"], name="split")
+    call("create_branch", root=root, branchId=made["branchId"], stepId=main["steps"][0]["id"], name="split of a split")
+
+    with pytest.raises(InvalidRequest, match="delete those first"):
+        call("delete_branch", root=root, branchId=made["branchId"])
+
+
 def test_results_of_both_fidelities_are_kept_side_by_side(tmp_path):
     root = str(tmp_path / "slab")
     document = call("create_workspace", root=root, name="Both", kernel="slab")

@@ -77,6 +77,28 @@ export class TauriBridge implements DesktopBridge {
     return call<WorkspaceDocument>("save_document", { root: document.root, document });
   }
 
+  createBranch(
+    root: string,
+    branchId: string,
+    stepId: string,
+    name: string,
+  ): Promise<{ branchId: string } & WorkspaceDocument> {
+    return call<{ branchId: string } & WorkspaceDocument>("create_branch", {
+      root,
+      branchId,
+      stepId,
+      name,
+    });
+  }
+
+  renameBranch(root: string, branchId: string, name: string): Promise<WorkspaceDocument> {
+    return call<WorkspaceDocument>("rename_branch", { root, branchId, name });
+  }
+
+  deleteBranch(root: string, branchId: string): Promise<WorkspaceDocument> {
+    return call<WorkspaceDocument>("delete_branch", { root, branchId });
+  }
+
   planGrid(root: string, targetSpacingNm: number, bounds?: WindowBounds, xyNm?: number | null): Promise<GridPlan> {
     return call<GridPlan>("plan_grid", {
       root, targetSpacingNm, targetSpacingXyNm: xyNm ?? null, bounds: bounds ?? null,

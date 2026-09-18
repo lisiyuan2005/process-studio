@@ -157,6 +157,25 @@ class Session:
         return document.get("stepStatuses", {}).get(branch["id"], {}).get(step_id, "dirty")
 
     @classmethod
+    def branch_by_name(cls, document: Mapping[str, Any], reference: str) -> dict[str, Any]:
+        """A branch named by its name or its 1-based number in `branches list`."""
+        branches = document["branches"]
+        if reference.strip().isdigit():
+            number = int(reference)
+            if not 1 <= number <= len(branches):
+                raise InvalidRequest(
+                    f"branch {number} does not exist; the project has {len(branches)}."
+                )
+            return branches[number - 1]
+        wanted = reference.strip().lower()
+        matches = [branch for branch in branches if branch["name"].lower() == wanted]
+        if len(matches) == 1:
+            return matches[0]
+        if not matches:
+            raise InvalidRequest(f"no branch is named {reference!r}; see `branches list`.")
+        raise InvalidRequest(f"{len(matches)} branches are named {reference!r}; use the number.")
+
+    @classmethod
     def step_index(cls, document: Mapping[str, Any], reference: str) -> int:
         """The 0-based index of a step named by its 1-based number or its name."""
         steps = cls.steps(document)

@@ -534,7 +534,12 @@ class ProjectRepository:
                 WHERE branch_id = ?""",
                 (source_branch_id,),
             ).fetchall()
-            allowed = {step.id for step in branch.steps}
+            # Every fidelity's result comes across, not only the detailed
+            # one: the steps up to the fork are the same steps, so whatever
+            # was computed for them holds on this branch too. The files are
+            # shared rather than copied -- a snapshot is deleted when the
+            # last branch that links to it lets go.
+            allowed = {key for step in branch.steps for key in result_keys(step.id)}
             for link in source_links:
                 if link["step_id"] in allowed:
                     connection.execute(
@@ -542,6 +547,33 @@ class ProjectRepository:
                         (branch.id, link["step_id"], link["snapshot_id"]),
                     )
         return branch
+
+    def rename_branch(self, branch_id: str, name: str) -> FlowBranch:
+        """Give a branch another name; the name is a label, the id is what runs."""
+        branch = self.load_branch(branch_id)
+        with self.connect() as connection:
+            connection.execute("UPDATE branches SET name=? WHERE id=?", (name, branch_id))
+        branch.name = name
+        return branch
+
+    def delete_branch(self, branch_id: str) -> None:
+        """Forget a branch and the results only it was holding on to.
+
+        The steps and the links go with the row (both cascade); a snapshot
+        file goes only when nothing else points at it, because a branch
+        shares the results of everything before the fork with the branch it
+        was forked from.
+        """
+        with self.connect() as connection:
+            snapshot_ids = [
+                row[0]
+                for row in connection.execute(
+                    "SELECT snapshot_id FROM branch_snapshots WHERE branch_id=?", (branch_id,)
+                )
+            ]
+            connection.execute("DELETE FROM branches WHERE id=?", (branch_id,))
+        for snapshot_id in snapshot_ids:
+            self._delete_snapshot_if_unreferenced(snapshot_id)
 
     def save_snapshot(
         self,
