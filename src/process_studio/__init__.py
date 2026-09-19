@@ -1,3 +1,3 @@
 """Process Studio process-flow modeling and visualization prototype."""
 
-__version__ = "0.9.7"
+__version__ = "0.9.8"
