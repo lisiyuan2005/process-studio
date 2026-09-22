@@ -153,8 +153,8 @@ process-studio --root nand view top -o top.png                     # 俯视图
 ## 验证
 
 ```bash
-python -m pytest -q          # 207 项
-cd desktop && npm run test   # 77 项
+python -m pytest -q          # 216 项
+cd desktop && npm run test   # 100 项
 ```
 
 覆盖范围见[验证清单](docs/VALIDATION.md)：膜厚与 undercut、湿法前沿的屏障、CMP 高度、掩膜沉积、氧化、状态存档往返、3D 显示网格、共享库、工艺分叉、摘要缓存、RPC 协议与命令行。这些测试验证的是离散几何行为和数据一致性，不是工艺精度。

@@ -3,13 +3,13 @@
 ## 自动化测试
 
 ```bash
-python -m pytest -q          # 207 项
-cd desktop && npm run test   # 77 项
+python -m pytest -q          # 216 项
+cd desktop && npm run test   # 100 项
 ```
 
 Python 侧按文件覆盖：
 
-- **slab 内核**（`tests/test_slab_kernel.py`，27 项）：裸片厚度与高度换算、保形膜在沟槽内外都等厚、各向同性刻蚀的 undercut、CMP 平面按工程高度、状态存档往返、单步不修改输入状态、带掩膜的沉积（lift-off 语义，存档后仍然成立）、z 与 XY 两个分辨率各自的作用、俯视图看穿某种材料、氧化只吃该吃的材料，以及混合刻蚀剖面和图形化沉积**被拒绝而不是被近似**。
+- **slab 内核**（`tests/test_slab_kernel.py`，31 项）：裸片厚度与高度换算、保形膜在沟槽内外都等厚、各向同性刻蚀的 undercut、CMP 平面按工程高度、状态存档往返、单步不修改输入状态、带掩膜的沉积（lift-off 语义，存档后仍然成立）、z 与 XY 两个分辨率各自的作用、俯视图看穿某种材料、氧化只吃该吃的材料，以及混合刻蚀剖面和图形化沉积**被拒绝而不是被近似**。
 - **各向同性刻蚀**（`tests/test_isotropic_etch_speed.py`，18 项）：湿法前沿不穿过封闭的横向屏障、密封空洞不是刻蚀源、开壳之后才刻到目标；以及那轮提速本身的不变量——同一半径的膨胀只算一次、共用 reach 的相邻采样只施加一次、区域"几乎相同"的容差、深度对采样区间的约束、方形前沿与切片密度无关。
 - **3D 显示网格**（`tests/test_mesh_builder.py`、`tests/test_mesh_triangulation.py`、`tests/test_mesh_pool.py`，30 项）：每个面记住自己贴着哪种材料、看不见的面不进视图、自由表面与完整表面分开缓存、两种三角化都覆盖整张面、ear clipping 掉顶点时回退而不是失败、多进程池起不来时只是变慢。
 - **撤回**（`tests/test_cancellation.py`，4 项）：没装检查时没人能停下一步、沉积中途放弃、检查只在这一次调用里生效、被停的步骤报告 `Cancelled`。
@@ -25,9 +25,9 @@ Python 侧按文件覆盖：
 
 ## 桌面前端与 worker
 
-`tests/test_worker_protocol.py`（76 项）在 RPC 层覆盖：能力上报、建立/打开工作目录、document 往返、退役内核被拒绝并说明去哪里打开、整条流程与三种视图、任意 AA–BB 线的截面、改分辨率与改工程窗口（都丢弃结果）、按摘要缓存（改一步只重算其后、改名不失效、删步同时清快照和摘要、GDS 步骤把版图指纹算进摘要）、运行到指定步、工艺分叉（在某一步之后分出分支并带上已算好的结果、改名、删除只删独有结果）、GDS 导入、Excel 往返、逐行服务与错误码，以及视图请求的并发与 `Superseded`。
+`tests/test_worker_protocol.py`（78 项）在 RPC 层覆盖：能力上报、建立/打开工作目录、document 往返、退役内核被拒绝并说明去哪里打开、整条流程与三种视图、任意 AA–BB 线的截面、改分辨率与改工程窗口（都丢弃结果）、按摘要缓存（改一步只重算其后、改名不失效、删步同时清快照和摘要、GDS 步骤把版图指纹算进摘要）、运行到指定步、工艺分叉（在某一步之后分出分支并带上已算好的结果、改名、删除只删独有结果）、GDS 导入、Excel 往返、逐行服务与错误码，以及视图请求的并发与 `Superseded`。
 
-前端的纯函数在 vitest 下覆盖（9 个文件）：override 解析与回退、编辑/重排的失效范围、分叉关系（`project.test.ts`）、共享库的同步与删除（`library.test.ts`）、视口的相机与缩放记忆（`Viewport.test.ts`）、CLI 面板、数值输入框、剪贴板、版图坐标、标签页、样式。
+前端的纯函数在 vitest 下覆盖（12 个文件）：override 解析与回退、编辑/重排的失效范围、分叉关系（`project.test.ts`）、共享库的同步与删除（`library.test.ts`）、视口的相机与缩放记忆（`Viewport.test.ts`）、单位换算与记忆（`units.test.ts`）、参数默认值与 ALD 的周期写法（`parameters.test.ts`）、阵列节距的重叠判断（`sketch.test.ts`）、CLI 面板、数值输入框、剪贴板、版图坐标、标签页、样式。
 
 这些测试验证的是协议和状态一致性，不是工艺精度。
 
