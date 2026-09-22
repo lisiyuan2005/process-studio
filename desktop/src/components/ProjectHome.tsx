@@ -55,7 +55,7 @@ function UpdateCheck({
           <RefreshCw size={11} className="spin" /> {installProgress ?? "Installing…"} · the application
           restarts when it is done
         </span>
-      ) : state.kind === "done" && state.info.isNewer ? (
+      ) : state.kind === "done" && state.info.available ? (
         <>
           <span className="update-news">
             {state.info.latestVersion} is available

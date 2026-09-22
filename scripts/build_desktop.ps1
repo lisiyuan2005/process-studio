@@ -3,15 +3,8 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $ProjectRoot
 
-# Which kernels this build ships. PROCESS_STUDIO_KERNELS is what the worker
-# reads (a comma-separated list of ids, unset for both); the variant names the
-# product so two builds can sit side by side on one machine.
-$Kernels = if ($env:PROCESS_STUDIO_KERNELS) { $env:PROCESS_STUDIO_KERNELS } else { "levelset,slab" }
-switch ($Kernels) {
-  "slab"     { $Product = "Process Studio Slab";      $Identifier = "com.processstudio.desktop.slab" }
-  "levelset" { $Product = "Process Studio Level Set"; $Identifier = "com.processstudio.desktop.levelset" }
-  default    { $Product = "Process Studio";           $Identifier = "com.processstudio.desktop" }
-}
+$Product = "Process Studio"
+$Identifier = "com.processstudio.desktop"
 New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot "work") | Out-Null
 $VariantConfig = Join-Path $ProjectRoot "work/tauri-variant.json"
 @{
@@ -19,7 +12,7 @@ $VariantConfig = Join-Path $ProjectRoot "work/tauri-variant.json"
   identifier = $Identifier
   app = @{ windows = @(@{ title = $Product; width = 1440; height = 900; minWidth = 720; minHeight = 600; resizable = $true; fullscreen = $false; center = $true }) }
 } | ConvertTo-Json -Depth 5 | Set-Content -Path $VariantConfig -Encoding UTF8
-Write-Host "Building $Product with kernels: $Kernels"
+Write-Host "Building $Product"
 
 # The worker ships as an embeddable Python distribution with the package
 # installed into it as ordinary PyPI wheels, not a PyInstaller executable.
@@ -83,42 +76,17 @@ Write-Host "Installing the build backend into the embeddable Python"
 if ($LASTEXITCODE -ne 0) { throw "Installing setuptools into the embeddable Python failed." }
 
 Write-Host "Installing process-studio into the embeddable Python"
-if ($Kernels -eq "slab") {
-  # The slab-only build's own dependencies, minus everything only the
-  # level-set kernel reaches: scikit-fmm (its fast-marching solver),
-  # scikit-image and its own dependency tree (networkx, imageio, tifffile,
-  # lazy-loader — marching-cubes meshing for level-set's field grids).
-  # trimesh's mesh export needs scipy regardless of kernel (its own colour
-  # handling calls into scipy.sparse even for the slab kernel's exact
-  # meshes), so scipy stays; scikit-fmm and scikit-image are declared in
-  # pyproject.toml as a core dependency and an extra respectively, so
-  # installing this list explicitly and then the package itself with
-  # --no-deps is what keeps pip from pulling them back in. Keep this list
-  # in sync with pyproject.toml's [project] dependencies (minus
-  # scikit-fmm) if that ever changes.
-  & $PythonExe -m pip install --no-warn-script-location --no-build-isolation `
-    numpy scipy pillow gdstk openpyxl pyyaml shapely trimesh mapbox-earcut truststore certifi
-  if ($LASTEXITCODE -ne 0) { throw "Installing process-studio's dependencies into the embeddable Python failed." }
-  & $PythonExe -m pip install --no-warn-script-location --no-build-isolation --no-deps .
-} else {
-  & $PythonExe -m pip install --no-warn-script-location --no-build-isolation ".[render]"
-}
+# The worker's own dependencies, installed explicitly so the package itself
+# can go in with --no-deps. trimesh's mesh export reaches into scipy for its
+# colour handling, so scipy stays even though no kernel needs it any more.
+# Keep this list in sync with pyproject.toml's [project] dependencies.
+& $PythonExe -m pip install --no-warn-script-location --no-build-isolation `
+  numpy scipy pillow gdstk openpyxl pyyaml shapely trimesh mapbox-earcut truststore certifi
+if ($LASTEXITCODE -ne 0) { throw "Installing process-studio's dependencies into the embeddable Python failed." }
+& $PythonExe -m pip install --no-warn-script-location --no-build-isolation --no-deps .
 if ($LASTEXITCODE -ne 0) { throw "Installing process-studio into the embeddable Python failed." }
 
-# Which kernels this worker offers travels as a file, not just the
-# PROCESS_STUDIO_KERNELS this script set for itself: the end user's machine
-# never has that environment variable, so the registry falls back to reading
-# this beside it (see process_studio/kernels/__init__.py). shapely and
-# trimesh are core dependencies either way (the slab kernel needs them
-# unconditionally), so a level-set-only build still carries them; only the
-# kernels the registry offers depends on this file.
-$KernelsDir = Join-Path $PythonDir "Lib/site-packages/process_studio/kernels"
-if (-not (Test-Path $KernelsDir)) { throw "process_studio was not installed where expected: $KernelsDir" }
-Set-Content -Path (Join-Path $KernelsDir "enabled.txt") -Value $Kernels -NoNewline
-
-# Smoke-test the worker on its own before it is wrapped in the app. The
-# kernels are checked by name: a worker that lost one of them still answers
-# describe, and the shell would simply stop offering that kernel.
+# Smoke-test the worker on its own before it is wrapped in the app.
 $Response = '{"kind":"request","id":1,"method":"describe"}' | & $PythonExe -m process_studio.worker
 if ($LASTEXITCODE -ne 0 -or -not ($Response -match '"protocolVersion"')) {
   throw "The packaged worker failed its describe smoke test."
@@ -132,10 +100,10 @@ $Update = '{"kind":"request","id":2,"method":"check_update"}' | & $PythonExe -m 
 if ($Update -match '"ok":false' -and $Update -match 'certificate') {
   throw "The packaged worker cannot verify certificates: $Update"
 }
-foreach ($Kernel in $Kernels.Split(",")) {
-  if (-not ($Response -replace '\s', '' -match [regex]::Escape("`"id`":`"$Kernel`""))) {
-    throw "The packaged worker does not offer the $Kernel kernel."
-  }
+# The kernel is checked by name: a worker that lost it still answers
+# describe, and the shell would simply have nothing to run a project on.
+if (-not ($Response -replace '\s', '' -match '"id":"slab"')) {
+  throw "The packaged worker does not offer the slab kernel."
 }
 
 # The 3D view's mesh is built on several cores, which means the worker has to
@@ -149,10 +117,9 @@ $CoreReport = ($Cores -join "") -replace '\s', ''
 if ($CoreReport -notmatch '"workers":1,' -and $CoreReport -match '"pool":false') {
   throw "The packaged worker cannot build meshes on more than one core: $Cores"
 }
-# A build carrying the slab kernel must also be able to *build* a mesh in a
-# child. A level-set-only build leaves the geometry library out on purpose
-# and reports warmed=false, which is not a fault.
-if ($Kernels -match 'slab' -and $CoreReport -match '"warmed":false') {
+# And it must be able to *build* a mesh in one of those children, which is
+# the part that can be right in the source tree and lost in the packaging.
+if ($CoreReport -match '"warmed":false') {
   throw "The packaged worker's children cannot build a mesh: $Cores"
 }
 

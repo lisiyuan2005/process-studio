@@ -994,7 +994,7 @@ export function Workspace({
       .checkUpdate()
       .then((info) =>
         setNotice(
-          info.isNewer
+          info.available
             ? {
                 title: `Version ${info.latestVersion} is available`,
                 text: info.asset

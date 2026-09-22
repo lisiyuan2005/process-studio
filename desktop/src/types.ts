@@ -200,7 +200,14 @@ export type FlowExportFormat = "xlsx" | "csv" | "json" | "yaml";
 export interface UpdateInfo {
   currentVersion: string;
   latestVersion: string;
-  isNewer: boolean;
+  /**
+   * The latest release is a different build from this one. Not "greater":
+   * the version was reset when the project narrowed to one kernel, so the
+   * release to install can be a lower number than a machine is running.
+   */
+  available: boolean;
+  /** Whether that release is also a higher version than this build. */
+  newer: boolean;
   releaseUrl: string;
   publishedAt: string | null;
   notes: string;

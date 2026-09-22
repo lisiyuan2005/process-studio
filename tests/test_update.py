@@ -11,11 +11,11 @@ from process_studio.worker import update
 from process_studio.worker.errors import InvalidRequest, WorkerError
 
 
-def test_the_asset_follows_the_platform_and_the_edition():
-    assert update.asset_name("slab", "win32") == "ProcessStudio-Slab-Windows.zip"
-    assert update.asset_name("full", "darwin") == "ProcessStudio-macOS.zip"
-    assert update.asset_name("levelset", "win32") == "ProcessStudio-LevelSet-Windows.zip"
-    assert update.asset_name("slab", "linux") is None
+def test_the_asset_follows_the_platform():
+    """One edition is built, for two platforms."""
+    assert update.asset_name("win32") == "ProcessStudio-Windows.zip"
+    assert update.asset_name("darwin") == "ProcessStudio-macOS.zip"
+    assert update.asset_name("linux") is None
 
 
 def test_versions_compare_numerically():
@@ -24,7 +24,7 @@ def test_versions_compare_numerically():
 
 
 def test_a_release_is_described_against_this_build(monkeypatch):
-    monkeypatch.setattr(update, "asset_name", lambda *args: "ProcessStudio-Slab-Windows.zip")
+    monkeypatch.setattr(update, "asset_name", lambda *args: "ProcessStudio-Windows.zip")
     release = {
         "tag_name": "v9.0.0",
         "html_url": "https://github.com/lisiyuan2005/process-studio/releases/tag/v9.0.0",
@@ -32,15 +32,20 @@ def test_a_release_is_described_against_this_build(monkeypatch):
         "body": "notes",
         "assets": [
             {"name": "ProcessStudio-macOS.zip", "browser_download_url": "m", "size": 1},
-            {"name": "ProcessStudio-Slab-Windows.zip", "browser_download_url": "w", "size": 123},
+            {"name": "ProcessStudio-Windows.zip", "browser_download_url": "w", "size": 123},
         ],
     }
     described = update.describe_release(release)
     assert described["currentVersion"] == __version__
-    assert described["latestVersion"] == "9.0.0" and described["isNewer"]
-    assert described["asset"] == {"name": "ProcessStudio-Slab-Windows.zip", "url": "w", "sizeBytes": 123}
+    assert described["latestVersion"] == "9.0.0"
+    assert described["available"] and described["newer"]
+    assert described["asset"] == {"name": "ProcessStudio-Windows.zip", "url": "w", "sizeBytes": 123}
+    # A release below this build is still offered -- the version was reset,
+    # so the one to install is the latest one published, not the greatest.
     older = update.describe_release({"tag_name": "v0.0.1", "assets": []})
-    assert not older["isNewer"] and older["asset"] is None
+    assert older["available"] and not older["newer"] and older["asset"] is None
+    same = update.describe_release({"tag_name": f"v{__version__}", "assets": []})
+    assert not same["available"]
 
 
 def test_check_update_reads_the_latest_release(monkeypatch):

@@ -1,6 +1,6 @@
 [package]
 name = "process-studio-desktop"
-version = "0.9.8"
+version = "0.1.0"
 description = "Process Studio desktop shell"
 authors = ["Process Studio contributors"]
 edition = "2021"

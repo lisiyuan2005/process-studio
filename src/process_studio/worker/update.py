@@ -19,7 +19,6 @@ import webbrowser
 from typing import Any, Mapping
 
 from .. import __version__
-from ..kernels import build_variant
 from .errors import InvalidRequest, WorkerError
 
 #: The repository whose releases carry the packaged builds.
@@ -38,21 +37,17 @@ def version_tuple(text: str) -> tuple[int, ...]:
     return tuple(int(n) for n in numbers) or (0,)
 
 
-def asset_name(variant: str | None = None, platform: str | None = None) -> str | None:
-    """The release asset that matches this build, or None when there is none.
+def asset_name(platform: str | None = None) -> str | None:
+    """The release asset for this platform, or None when there is no build.
 
-    The workflow names the Windows and macOS zips by edition; other
-    platforms have no packaged build.
+    One edition is built, for Windows and macOS; other platforms run from a
+    checkout and have nothing to download.
     """
-    variant = variant or build_variant()
     platform = platform or sys.platform
-    edition = {"full": "", "slab": "Slab-", "levelset": "LevelSet-"}.get(variant)
-    if edition is None:
-        return None
     if platform.startswith("win"):
-        return f"ProcessStudio-{edition}Windows.zip"
+        return "ProcessStudio-Windows.zip"
     if platform == "darwin":
-        return f"ProcessStudio-{edition}macOS.zip"
+        return "ProcessStudio-macOS.zip"
     return None
 
 
@@ -70,10 +65,17 @@ def describe_release(release: Mapping[str, Any], *, current: str = __version__) 
                 "sizeBytes": int(item.get("size") or 0),
             }
             break
+    latest_numbers = version_tuple(latest)
+    current_numbers = version_tuple(current)
     return {
         "currentVersion": current,
         "latestVersion": latest,
-        "isNewer": version_tuple(latest) > version_tuple(current),
+        # Whether to offer it is whether it is a *different* build from this
+        # one, not whether it is a greater number: the version was reset from
+        # 0.9.8 to 0.1.0 when the project narrowed to one kernel, so the
+        # release to install is lower than what some machines are running.
+        "available": bool(latest) and latest_numbers != current_numbers,
+        "newer": latest_numbers > current_numbers,
         "releaseUrl": str(release.get("html_url") or f"https://github.com/{REPOSITORY}/releases"),
         "publishedAt": release.get("published_at"),
         "notes": str(release.get("body") or ""),

@@ -5,16 +5,8 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-# Which kernels this build ships. PROCESS_STUDIO_KERNELS is what the worker
-# reads (a comma-separated list of ids, unset for both); the variant names the
-# product so two builds can sit side by side on one machine.
-KERNELS="${PROCESS_STUDIO_KERNELS:-levelset,slab}"
-export PROCESS_STUDIO_KERNELS="$KERNELS"
-case "$KERNELS" in
-  slab)     PRODUCT="Process Studio Slab";      IDENTIFIER="com.processstudio.desktop.slab" ;;
-  levelset) PRODUCT="Process Studio Level Set"; IDENTIFIER="com.processstudio.desktop.levelset" ;;
-  *)        PRODUCT="Process Studio";           IDENTIFIER="com.processstudio.desktop" ;;
-esac
+PRODUCT="Process Studio"
+IDENTIFIER="com.processstudio.desktop"
 VARIANT_CONFIG="$PROJECT_ROOT/work/tauri-variant.json"
 mkdir -p "$PROJECT_ROOT/work"
 cat > "$VARIANT_CONFIG" <<JSON
@@ -24,7 +16,7 @@ cat > "$VARIANT_CONFIG" <<JSON
   "app": { "windows": [ { "title": "$PRODUCT", "width": 1440, "height": 900, "minWidth": 720, "minHeight": 600, "resizable": true, "fullscreen": false, "center": true } ] }
 }
 JSON
-echo "Building $PRODUCT with kernels: $KERNELS"
+echo "Building $PRODUCT"
 
 # The build's Python lives in its own virtual environment: a Homebrew or
 # Debian python3 refuses to install packages into itself (PEP 668), and a
@@ -43,7 +35,7 @@ fi
 echo "Using Python $(python3 -c 'import sys; print(sys.version.split()[0], sys.executable)')"
 
 python3 -m pip install --upgrade pip >/dev/null
-python3 -m pip install -e ".[render]"
+python3 -m pip install -e .
 python3 -m pip install 'pyinstaller>=6.10'
 
 # The shell spawns this binary for every RPC call, so it ships inside the bundle.
@@ -58,14 +50,12 @@ WORKER="desktop/src-tauri/resources/worker/process-studio-worker"
 test -x "$WORKER" || { echo "The packaged worker is missing at $WORKER"; exit 1; }
 
 # Smoke-test the worker on its own before it is wrapped in an installer. The
-# kernels are checked by name: a worker that lost one of them still answers
-# describe, and the shell would simply stop offering that kernel.
+# kernel is checked by name: a worker that lost it still answers describe,
+# and the shell would simply have nothing to run a project on.
 DESCRIBED="$(echo '{"kind":"request","id":1,"method":"describe"}' | "$WORKER")"
 echo "$DESCRIBED" | grep -q '"protocolVersion"'
-for kernel in $(echo "$KERNELS" | tr ',' ' '); do
-  echo "$DESCRIBED" | tr -d ' ' | grep -q "\"id\":\"$kernel\"" || {
-    echo "The packaged worker does not offer the $kernel kernel"; exit 1; }
-done
+echo "$DESCRIBED" | tr -d ' ' | grep -q '"id":"slab"' || {
+  echo "The packaged worker does not offer the slab kernel"; exit 1; }
 
 # The update check is the one thing that needs certificate authorities, and a
 # frozen build has none of its own unless certifi and truststore were
@@ -91,11 +81,10 @@ case "$REPORT" in
   *'"workers":1,'*) : ;;                       # nothing to spread over anyway
   *'"pool":false'*) echo "The packaged worker cannot build meshes on more than one core"; exit 1 ;;
 esac
-# A build carrying the slab kernel must also be able to *build* a mesh in a
-# child. A level-set-only build leaves the geometry library out on purpose
-# and reports warmed=false, which is not a fault.
-case "$KERNELS,$REPORT" in
-  *slab*'"warmed":false'*)
+# And it must be able to *build* a mesh in one of those children, which is
+# the part that can be right in the source tree and lost in the packaging.
+case "$REPORT" in
+  *'"warmed":false'*)
     echo "The packaged worker's children cannot build a mesh: $CORES"; exit 1 ;;
 esac
 
