@@ -216,9 +216,21 @@ class ProcessState:
                 # a snap step, so which of the two gives it up is beneath
                 # what the geometry can express, and the larger one is the
                 # one that cannot be left in pieces by the cut.
+                #
+                # The cut is against the whole of the other region, so the
+                # edge that comes back is that region's own, and it is not
+                # snapped afterwards. Snapping would move those vertices up
+                # to half a grid step off the line they were cut along, and
+                # half a picometre of void between two solids is a channel
+                # -- a wet etch creeps through void, and would find it.
                 loser, other = (i, j) if ga.area >= gb.area else (j, i)
                 material, region = items[loser]
-                trimmed = self.clean(region.difference(items[other][1]))
+                trimmed = P.as_multipolygon(
+                    shapely.make_valid(region.difference(items[other][1]))
+                )
+                trimmed = MultiPolygon(
+                    [part for part in trimmed.geoms if part.area > eps]
+                ) if not trimmed.is_empty else trimmed
                 items[loser] = (material, trimmed)
                 if trimmed.is_empty:
                     regions.pop(material, None)
