@@ -83,6 +83,7 @@ macOS/Linux 脚本先用 PyInstaller 把 worker 打成独立可执行文件；Wi
 - 垂直刻蚀与各向同性（湿法）刻蚀，湿法前沿认屏障：封闭空腔不是刻蚀源，开壳之后才刻得到
 - 氧化：露出表面向内一层原地变成氧化物，按各材料速率比例消耗，不模拟体积膨胀
 - 理想平面 CMP（对所有材料一视同仁）
+- **翻片（Flip wafer）**：把整片翻过来在背面做工艺（双面集成），体积逐位不变，翻两次回到原样；横向按翻转轴镜像，所以背面的掩膜和正面对得上
 - Step 自带工艺类型和参数；**Step template** 库（原 Recipe Library）只用于加载模板或保存可复用模板，加载即复制、不留引用
 - **Tool 自己的 recipe**：机器上装的那条配方（如 ALD 的 `Siva_HZO_300C`）属于工具，步骤在 experiment 参数里记下这次用的是哪条
 - 参数可以按自己习惯的单位输入（nm/µm、s/min/h、nm/s 等），存下来的永远是内核读的那个单位，换单位不会让步骤过期
@@ -165,7 +166,6 @@ cd desktop && npm run test   # 77 项
 - CMP 是理想平面截断，不含 dishing、erosion、pattern-density 或 pad/slurry 模型。
 - 方向性刻蚀沿垂直方向，不含角分布、shadowing、microloading、mask erosion 或 sidewall passivation。
 - 材料选择性是按材料给速率，适合流程可视化；复杂界面反应仍需后续物理模型。
-- 衬底是一整块，还不能在背面做工艺（双面集成）。
 - 当前是单机单用户桌面原型；按需求未加入多人协作、工艺报告和演化动画。
 
 设计与数据结构见 [docs/DESIGN.md](docs/DESIGN.md)，验证范围见 [docs/VALIDATION.md](docs/VALIDATION.md)。

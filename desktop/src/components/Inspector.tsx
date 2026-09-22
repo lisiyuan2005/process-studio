@@ -99,6 +99,7 @@ const TYPE_LABELS: Record<ProcessType, string> = {
   cmp: "CMP",
   no_geometry: "No geometry change",
   oxidation: "Oxidation",
+  flip: "Flip wafer",
 };
 
 function NumberInput({
@@ -518,7 +519,11 @@ export function Inspector({
           {activeSpecs.length === 0 && unknownParameters.length === 0 && (
             <div className="empty-result">
               <CircleAlert size={14} />
-              <span>This step currently has no process parameters.</span>
+              <span>
+                {step.processType === "flip"
+                  ? "A flip needs nothing: it turns the wafer over about the y axis. Add “Turned about” to turn it the other way."
+                  : "This step currently has no process parameters."}
+              </span>
             </div>
           )}
         </div>
@@ -568,6 +573,9 @@ export function Inspector({
           </div>
         )}
 
+        {/* A flip turns the whole wafer over; there is nothing for a mask
+            to hold back, so the section is not offered. */}
+        {step.processType !== "flip" && (
         <div className="form-section mask-section">
           <span className="section-label">MASK</span>
           <label className="field-row">
@@ -643,6 +651,7 @@ export function Inspector({
             </label>
           )}
         </div>
+        )}
       </div>
 
       <div className="inspector-actions">

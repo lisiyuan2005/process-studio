@@ -35,6 +35,7 @@ from deviceflow.cancellation import Cancelled as DeviceFlowCancelled, cancelling
 from deviceflow.exceptions import DeviceFlowError
 from deviceflow.mask import Mask
 from deviceflow.state_io import decode_state, encode_state
+from deviceflow._internal.geometry.state import Slab, znorm
 from deviceflow._internal.mesh.triangulate import DEFAULT_ENGINE, ENGINES
 
 from ..layout.quick_sketch import QuickSketch, SketchShape
@@ -710,6 +711,48 @@ def _oxidize(
     )
 
 
+def _flip(device, parameters: Mapping[str, Any], logger) -> None:
+    """Turn the wafer over: what was the backside is now the surface.
+
+    Double-sided integration is done by physically flipping the wafer, and
+    that is what this is: the stack is turned upside down, so the face that
+    was against the chuck is the one the next steps act on, and turning it
+    again brings the front back. Nothing is added or removed -- volumes are
+    the same afterwards, to the last bit.
+
+    Turning something over also mirrors it sideways, and leaving that out
+    would be a lie that shows up the moment a backside mask has to line up
+    with a front-side feature: a flip about the y axis (the default) mirrors
+    x, about the x axis mirrors y. Masks are always read in the frame you
+    are looking at, so a sketch drawn after a flip lands where it is drawn.
+    """
+    axis = str(parameters.get("axis", "y")).strip().lower()
+    if axis not in ("x", "y"):
+        raise SlabError(f"a flip turns the wafer about the x or the y axis, not {axis!r}")
+    state = device._state
+    top = state.top
+    if top is None:
+        raise SlabError("there is nothing to flip: this state has no material")
+    x_min, y_min, x_max, y_max = state.bounds
+    centre = ((x_min + x_max) / 2.0, (y_min + y_max) / 2.0)
+    scale = dict(xfact=-1.0, yfact=1.0) if axis == "y" else dict(xfact=1.0, yfact=-1.0)
+    flipped: list[Slab] = []
+    # Void above the stack is not carried over: the wafer lands on the chuck
+    # again, it does not hover over where its own headroom used to be.
+    for slab in reversed([item for item in state.slabs if not item.is_empty]):
+        regions = {
+            material: state.clean(
+                shapely.affinity.scale(region, origin=centre, zfact=1.0, **scale)
+            )
+            for material, region in slab.regions.items()
+        }
+        flipped.append(Slab(znorm(top - slab.z1), znorm(top - slab.z0), regions))
+    state._slabs = flipped
+    state.consolidate()
+    state.validate()
+    logger(f"SLAB flip about the {axis} axis; {len(flipped)} slabs, {top:g} um tall")
+
+
 def _cmp(device: Device, recipe: Recipe, parameters, z_offset: float, logger) -> None:
     selected = parameters.get("materials")
     stop = next(
@@ -909,7 +952,7 @@ class SlabKernel:
             "unselective CMP. No grid to converge; conformal deposition is "
             "walked at the set resolution."
         ),
-        process_types=("deposit", "etch", "cmp", "no_geometry", "oxidation"),
+        process_types=("deposit", "etch", "cmp", "no_geometry", "oxidation", "flip"),
         mask_sources=("none", "quick_sketch", "gds"),
         deposition_modes=("conformal", "planar"),
         directional_fractions=(0.0, 1.0),
@@ -982,6 +1025,8 @@ class SlabKernel:
                     _etch(device, step, recipe, parameters, mask, logger, project, materials)
                 elif recipe.process_type is ProcessType.CMP:
                     _cmp(device, recipe, parameters, state.z_offset, logger)
+                elif recipe.process_type is ProcessType.FLIP:
+                    _flip(device, parameters, logger)
                 elif recipe.process_type is ProcessType.OXIDATION:
                     mask = step_mask(
                         device, step, project=project, parameters=parameters, sketches=sketches

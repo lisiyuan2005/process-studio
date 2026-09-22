@@ -136,6 +136,7 @@ export const PROCESS_LABELS: Record<ProcessType, string> = {
   cmp: "CMP",
   no_geometry: "No geometry change",
   oxidation: "Oxidation",
+  flip: "Flip wafer",
 };
 
 const STATUS_LABELS: Record<StepStatus, string> = {
@@ -196,7 +197,14 @@ function StepCard({
   nodeRef?: (node: HTMLElement | null) => void;
   style?: CSSProperties;
 }) {
-  const mask = step.maskSource === "none" ? "no mask" : step.maskSource.replace("_", " ");
+  // A flip turns the whole wafer over; "no mask" would read as something
+  // missing rather than as something that does not apply.
+  const mask =
+    step.processType === "flip"
+      ? null
+      : step.maskSource === "none"
+        ? "no mask"
+        : step.maskSource.replace("_", " ");
 
   return (
     <div
@@ -223,7 +231,8 @@ function StepCard({
           <span className="step-index">{index + 1}</span>
         </div>
         <div className="step-subtitle">
-          {step.processType.replace("_", " ")} · {mask}
+          {step.processType.replace("_", " ")}
+          {mask ? ` · ${mask}` : ""}
           {step.enabled ? "" : " · skipped"}
           {forkedInto?.length ? (
             // The flow carries on elsewhere as well, which the list of one

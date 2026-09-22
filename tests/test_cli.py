@@ -291,6 +291,29 @@ def test_the_fidelity_is_a_project_setting_and_travels_in_flow_files(workspace: 
     assert as_json("fidelity", root=workspace) == {"fidelity": "simplified"}
 
 
+def test_a_flip_step_turns_the_wafer_over(tmp_path, workspace):
+    """Backside processing from the command line, and through a flow file."""
+    assert run("steps", "add", "flip", "--name", "Flip wafer", root=workspace)[0] == EXIT_OK
+    assert run("steps", "add", "deposit", "--name", "Backside nitride",
+               "--material", "SiN", "--set", "target=0.05", "--set", "mode=planar",
+               root=workspace)[0] == EXIT_OK
+    assert run("steps", "add", "flip", "--name", "Flip back", "--set", "axis=y",
+               root=workspace)[0] == EXIT_OK
+    listed = run("steps", "list", root=workspace)[1]
+    assert "Flip wafer" in listed and "flip" in listed
+
+    code, _, err = run("run", root=workspace)
+    assert code == EXIT_OK, err
+    assert "not run" not in run("status", root=workspace)[1]
+
+    flow = tmp_path / "flow.json"
+    assert run("flow", "dump", str(flow), root=workspace)[0] == EXIT_OK
+    assert '"flip"' in flow.read_text()
+    again = tmp_path / "again"
+    assert run("flow", "apply", str(flow), root=again)[0] == EXIT_OK
+    assert "Flip wafer" in run("steps", "list", root=again)[1]
+
+
 def test_a_tool_carries_the_recipes_loaded_on_it(tmp_path, workspace):
     """The machine's own recipe book, and the step that records one of them."""
     code, _, err = run("tools", "add", "Savannah ALD", "--group", "Deposition/ALD",

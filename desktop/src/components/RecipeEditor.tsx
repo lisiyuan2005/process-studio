@@ -27,13 +27,14 @@ interface RecipeEditorProps {
   onClose: () => void;
 }
 
-const PROCESS_TYPES: ProcessType[] = ["deposit", "etch", "cmp", "no_geometry", "oxidation"];
+const PROCESS_TYPES: ProcessType[] = ["deposit", "etch", "cmp", "no_geometry", "oxidation", "flip"];
 const TYPE_TITLES: Record<ProcessType, string> = {
   deposit: "Deposition",
   etch: "Etch",
   cmp: "CMP",
   no_geometry: "No geometry change",
   oxidation: "Oxidation",
+  flip: "Flip wafer",
 };
 
 /** One group of the library list, its recipes and then its subgroups, indented. */

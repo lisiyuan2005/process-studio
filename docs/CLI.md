@@ -36,7 +36,7 @@ cd ~/devices/dram
 | `info` | 工程、内核、窗口、精度、步骤数、材料 |
 | `status` | 每步的状态 |
 | `steps list` / `steps show STEP` | 步骤列表 / 一步的全部设置 |
-| `steps add TYPE [--after STEP\|--before STEP] [选项]` | 加一步；TYPE 是 deposit / etch / cmp / no_geometry / oxidation |
+| `steps add TYPE [--after STEP\|--before STEP] [选项]` | 加一步；TYPE 是 deposit / etch / cmp / no_geometry / oxidation / flip |
 | `steps set STEP [选项]` | 改一步 |
 | `steps rm STEP...` / `dup STEP` / `mv STEP POS` | 删除 / 原位复制 / 移到第 POS 位 |
 | `steps skip STEP...` / `include STEP...` | 跳过 / 放回运行 |
@@ -124,6 +124,8 @@ steps:
 循环（`loop` 条目）在工作目录里展开成真实的步骤：每一次都是列表里的一步，带着 `loop: {id, name, repeat, iteration}` 标记，`steps list` 的 Loop 列显示「ON pair 2/4」。`flow dump` 把同一个循环折回一个条目（只写第 1 次）；文件里循环可以嵌套，展开时内层并入外层。
 
 沉积的厚度有三种写法，内核按这个顺序读：`target`（直接给厚度）、`cycles × rate_per_cycle`（ALD 的写法）、`time_min × rate`。刻蚀和氧化同样可以给 `target` 或时间×速率。
+
+`flip`：把整片翻过来，之后的步骤做在原来的背面。没有参数，只有可选的 `axis`（`y` 默认，绕 y 轴翻，横向镜像 x；`x` 则镜像 y）。体积不变，翻两次回到原样。
 
 `oxidation`：`rates` 里列出会被氧化的材料，`parameters.target` 是被消耗的厚度（按各材料的 rate 比例），`material` 是生成的氧化物（默认 SiO2）。露出的表面向内 `target` 那一层原地变成氧化物，不模拟体积膨胀。
 

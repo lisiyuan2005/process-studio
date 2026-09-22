@@ -62,6 +62,7 @@ const STEP_NAMES: Record<ProcessType, string> = {
   cmp: "New CMP",
   no_geometry: "New process note",
   oxidation: "New oxidation",
+  flip: "Flip wafer",
 };
 
 function copyResponses(responses: Recipe["materialResponses"]) {

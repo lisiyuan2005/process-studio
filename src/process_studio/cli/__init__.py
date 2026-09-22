@@ -54,6 +54,7 @@ STEP_DEFAULTS: dict[str, tuple[str, dict[str, Any]]] = {
     "cmp": ("New CMP", {"target_z": 0.0}),
     "no_geometry": ("New process note", {}),
     "oxidation": ("New oxidation", {"target": 0.02}),
+    "flip": ("Flip wafer", {}),
 }
 
 #: A deposition on one of these is written in cycles, as its recipe is in

@@ -1,4 +1,4 @@
-export type ProcessType = "deposit" | "etch" | "cmp" | "no_geometry" | "oxidation";
+export type ProcessType = "deposit" | "etch" | "cmp" | "no_geometry" | "oxidation" | "flip";
 export type MaskSource = "none" | "quick_sketch" | "gds";
 export type MaskKeep = "inside" | "outside";
 /**

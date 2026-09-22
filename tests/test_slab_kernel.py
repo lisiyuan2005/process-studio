@@ -58,7 +58,12 @@ def sketches() -> dict[str, QuickSketch]:
         "default": QuickSketch(
             "default",
             [SketchShape("circle", parameters={"center": (0.0, 0.0), "radius": 0.22})],
-        )
+        ),
+        # Off to one side, so a mirror image is somewhere else.
+        "offset": QuickSketch(
+            "offset",
+            [SketchShape("circle", parameters={"center": (0.4, 0.0), "radius": 0.22})],
+        ),
     }
 
 
@@ -175,6 +180,83 @@ def test_a_conformal_film_has_its_nominal_thickness_everywhere(kernel, project, 
     assert section.surface_z(0.05) == pytest.approx(0.8 + 0.04)
     assert section.surface_z(0.8) == pytest.approx(0.5 + 0.04)
     assert grown.priority == ["Si", "Al2O3"]
+
+
+def test_turning_the_wafer_over_puts_the_backside_up(kernel, project, sketches):
+    """Double-sided processing: flip, work on the back, flip back.
+
+    Nothing is added or removed by a flip -- the volumes are the same to
+    the last bit -- but what the next step acts on is the other face, and
+    turning it over mirrors it sideways the way turning a wafer over does.
+    """
+    materials = default_materials()
+    state = kernel.initial_state(project, materials=materials)
+    # The section runs from x = -0.8 to x = 0.8, so its own coordinate is
+    # x + 0.8; the trench is at x = +0.4.
+    def surface(current, x):
+        return current.device.cross_section((-0.8, 0.0), (0.8, 0.0)).surface_z(x + 0.8)
+
+    def run(current, process_step):
+        return kernel.run_step(
+            current, process_step, project=project, recipes={}, sketches=sketches,
+            logger=lambda _message: None, materials=materials,
+        )
+
+    def volumes(current):
+        totals: dict[str, float] = {}
+        for slab in current.device._state.slabs:
+            for material, region in slab.regions.items():
+                totals[material.name] = totals.get(material.name, 0.0) + region.area * (
+                    slab.z1 - slab.z0
+                )
+        return {name: round(value, 12) for name, value in totals.items()}
+
+    trenched = run(
+        state,
+        step(
+            ProcessType.ETCH,
+            mask_source="quick_sketch",
+            parameters={"target": 0.2, "directional_fraction": 1.0, "sketch_id": "offset"},
+            material_responses={"Si": MaterialResponse("Si", 0.1)},
+        ),
+    )
+    before = volumes(trenched)
+    assert surface(trenched, 0.4) == pytest.approx(0.6)   # inside the trench
+    assert surface(trenched, -0.4) == pytest.approx(0.8)  # away from it
+
+    flipped = run(trenched, step(ProcessType.FLIP, name="Flip wafer"))
+    assert volumes(flipped) == before
+    # The face that is up is flat now: the trench is underneath.
+    assert surface(flipped, 0.4) == pytest.approx(0.8)
+    assert surface(flipped, -0.4) == pytest.approx(0.8)
+    # And it has moved to the other side, because turning a wafer over
+    # mirrors it: the hole in the bottom slab is at x = -0.4 now.
+    bottom = flipped.device._state.slabs[0]
+    assert bottom.material_at(-0.4, 0.0) is None
+    assert bottom.material_at(0.4, 0.0) is not None
+
+    # A film now lands on what used to be the backside.
+    coated = run(
+        flipped,
+        step(ProcessType.DEPOSIT, parameters={"target": 0.05, "mode": "planar"}, output_material="Al2O3"),
+    )
+    assert surface(coated, 0.0) == pytest.approx(0.85)
+
+    # Flipping back brings the front up again, trench and all, where it was.
+    again = run(coated, step(ProcessType.FLIP, name="Flip back"))
+    assert surface(again, 0.4) == pytest.approx(0.6 + 0.05)
+    assert surface(again, -0.4) == pytest.approx(0.8 + 0.05)
+
+
+def test_a_flip_about_an_axis_that_is_not_an_axis_is_refused(kernel, project, sketches):
+    materials = default_materials()
+    with pytest.raises(SlabError, match="x or the y axis"):
+        kernel.run_step(
+            kernel.initial_state(project, materials=materials),
+            step(ProcessType.FLIP, parameters={"axis": "z"}),
+            project=project, recipes={}, sketches=sketches,
+            logger=lambda _message: None, materials=materials,
+        )
 
 
 def test_a_stored_state_comes_back_unchanged(tmp_path, kernel, project):

@@ -47,10 +47,10 @@ UI 不自己算几何；它修改 Step/Recipe/Sketch，再由 worker 调用内�
 
 建议按价值排序：
 
-1. 背面工艺（翻片）与双面集成。
-2. 晶向相关湿法刻蚀与 facet velocity。
-3. CMP pattern-density、dishing 与 erosion。
-4. 方向分布、shadowing、loading 和 sidewall passivation。
-5. 基于实测数据的工艺标定和不确定度体系。
+1. 晶向相关湿法刻蚀与 facet velocity。
+2. CMP pattern-density、dishing 与 erosion。
+3. 方向分布、shadowing、loading 和 sidewall passivation。
+4. 基于实测数据的工艺标定和不确定度体系。
+5. 键合（把两片的正面对起来），翻片已经有了，缺的是把两个 state 合成一个。
 
 多人模式、自动报告和工艺演化动画不在当前范围内。

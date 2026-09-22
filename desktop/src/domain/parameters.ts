@@ -55,6 +55,16 @@ export const PARAMETER_SPECS: Record<ProcessType, ParameterSpec[]> = {
     { key: "time_min", label: "Time", unit: "min", initial: 1 },
     { key: "temperature_c", label: "Temperature", unit: "°C", initial: 900 },
   ],
+  flip: [
+    {
+      key: "axis",
+      label: "Turned about",
+      kind: "text",
+      options: ["y", "x"],
+      initial: "y",
+      hint: "About y turns it left to right (x mirrors); about x, front to back.",
+    },
+  ],
 };
 
 /** Settings a tool is given that no kernel reads.
@@ -109,6 +119,7 @@ const BY_TIME: Record<ProcessType, Record<string, ParameterValue>> = {
   cmp: { target_z: 0 },
   no_geometry: {},
   oxidation: { target: 0.02 },
+  flip: {},
 };
 
 const BY_CYCLE: Partial<Record<ProcessType, Record<string, ParameterValue>>> = {

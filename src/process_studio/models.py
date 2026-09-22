@@ -42,6 +42,9 @@ class ProcessType(str, Enum):
     #: The exposed skin of the listed materials becomes the output material
     #: (slab kernel only): rates and target as for an etch, no swelling.
     OXIDATION = "oxidation"
+    #: Turn the wafer over, so the steps that follow act on what was the
+    #: backside. Nothing is added or removed; the stack is mirrored.
+    FLIP = "flip"
 
 
 @dataclass
