@@ -26,10 +26,12 @@
    needed 1170, which is why anything past the window edge was simply cut. */
 html, body, #root { margin: 0; min-width: 720px; min-height: 600px; width: 100%; height: 100%; overflow: hidden; }
 
-button, input, select { font: inherit; }
+/* A textarea belongs here too: left out, it keeps the browser's own
+   monospace face and sits in a page written in Inter. */
+button, input, select, textarea { font: inherit; }
 button { color: inherit; }
 
-button:focus-visible, input:focus-visible, select:focus-visible {
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
   outline: 2px solid rgba(91, 158, 246, 0.82);
   outline-offset: 1px;
 }
@@ -232,8 +234,9 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .section-label { display: block; margin-bottom: 11px; }
 .field-row { display: grid; grid-template-columns: 1fr; gap: 6px; margin-bottom: 12px; color: #9ca9b5; font-size: 11.5px; }
 .field-row input, .field-row select { width: 100%; height: 33px; padding: 0 9px; border: 1px solid #303b46; border-radius: 6px; background: #11171d; color: #d8e0e7; font-size: 12px; }
-.field-row input:hover, .field-row select:hover { border-color: #3e4c59; }
-.field-row input:focus, .field-row select:focus { border-color: #558ed1; background: #141b22; }
+.field-row textarea { width: 100%; padding: 7px 9px; border: 1px solid #303b46; border-radius: 6px; background: #11171d; color: #d8e0e7; font-size: 12px; line-height: 1.5; resize: vertical; }
+.field-row input:hover, .field-row select:hover, .field-row textarea:hover { border-color: #3e4c59; }
+.field-row input:focus, .field-row select:focus, .field-row textarea:focus { border-color: #558ed1; background: #141b22; }
 .field-row small { color: #65727f; font-size: 11px; line-height: 1.45; }
 .recipe-template-section .numerics-note { margin: -3px 0 10px; }
 .recipe-load-row, .add-parameter-row {
@@ -413,7 +416,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .brand-glyph, .brand-mark { color: white; }
 .log-button span { background: #e8edf2; }
 .steps-panel, .inspector-panel { background: #ffffff; }
-.count-badge, .field-row input, .field-row select, .boolean-input, .materials-input { background: #f8fafb; }
+.count-badge, .field-row input, .field-row select, .field-row textarea, .boolean-input, .materials-input { background: #f8fafb; }
 .step-card { background: #f7f9fb; }
 .step-card:hover { background: #f1f5f8; border-color: #ccd6de; }
 .step-card.selected { background: #edf5fd; border-color: #6b9ed2; }
@@ -423,8 +426,8 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .status-stale { background: #fff8eb; }
 .status-dirty { background: #f6f8fa; }
 .add-step-control { background: #fafcfd; color: #617486; }
-.field-row input, .field-row select, .boolean-input, .materials-input { color: #263746; border-color: #ccd6de; }
-.field-row input:focus, .field-row select:focus { background: #ffffff; }
+.field-row input, .field-row select, .field-row textarea, .boolean-input, .materials-input { color: #263746; border-color: #ccd6de; }
+.field-row input:focus, .field-row select:focus, .field-row textarea:focus { background: #ffffff; }
 .materials-input button { background: #ffffff; color: #687989; border-color: #d2dbe2; }
 .materials-input button:hover { color: #344b60; border-color: #aebdca; }
 .materials-input button.active { background: #e8f2fd; color: #236cb7; }
@@ -673,8 +676,6 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .chip-row button.active { border-color: rgba(85, 142, 209, 0.65); background: var(--accent-soft); color: var(--accent); }
 
 .numerics-note { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
-.json-field textarea { width: 100%; min-height: 74px; padding: 8px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-raised); color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; line-height: 1.5; resize: vertical; }
-.json-field textarea:focus { border-color: #558ed1; background: var(--panel); }
 
 /* The extra column is the per-step enable toggle. */
 .step-card { grid-template-columns: 26px 3px minmax(0, 1fr) auto auto; }
