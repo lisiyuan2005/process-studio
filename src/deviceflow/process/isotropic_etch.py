@@ -328,12 +328,15 @@ def _live_void(state: ProcessState, covered) -> Front:
 def _open_overlap(a, b) -> bool:
     """Whether two XY regions share a finite opening, not only an edge.
 
-    The DE-9IM pattern says exactly that -- do the interiors meet in
-    something two-dimensional -- and asking it is much cheaper than
+    Two polygons' interiors are open sets, so they meet in something
+    two-dimensional exactly when they meet at all, and that is what
+    "intersects but does not touch" says -- touching is sharing a point
+    with disjoint interiors. Asking it that way is much cheaper than
     building the intersection to measure its area, because the answer does
-    not need the geometry. On a compounded etch front (50,000 vertices
-    between the two regions) it is 4.6 ms against 12.8 ms, and the
-    connectivity test is half of a long wet etch.
+    not need the geometry, and cheaper again than the DE-9IM pattern
+    ``2********``, which says the same thing but cannot use a prepared
+    geometry: ``intersects`` and ``touches`` both can, and the left-hand
+    side of every pair here is prepared once for the whole row.
 
     The area threshold this used to apply was below what the geometry can
     express in any case: regions are snapped to the grid, so a real opening
@@ -344,7 +347,7 @@ def _open_overlap(a, b) -> bool:
     """
     if _apart(a.bounds, b.bounds):
         return False
-    return shapely.relate_pattern(a, b, "2********")
+    return shapely.intersects(a, b) and not shapely.touches(a, b)
 
 
 def _connected_to_sources(pieces: Front, sources: Front) -> Front:
@@ -367,6 +370,11 @@ def _connected_to_sources(pieces: Front, sources: Front) -> Front:
     for z0, z1, region in pieces:
         components = list(region.geoms)
         if components:
+            # Each component is asked about every component of the next
+            # layer, so it pays to index its segments once: a prepared
+            # geometry answers the pair test from an STRtree instead of
+            # walking the other's outline.
+            shapely.prepare(components)
             layers.append((z0, z1, region, components, [c.bounds for c in components]))
     if not layers:
         return []
@@ -405,7 +413,7 @@ def _connected_to_sources(pieces: Front, sources: Front) -> Front:
             for ib, b in enumerate(components_b):
                 if _apart(box_a, bounds_b[ib]):
                     continue
-                if shapely.relate_pattern(a, b, "2********"):
+                if shapely.intersects(a, b) and not shapely.touches(a, b):
                     union(offsets[index] + ia, offsets[index + 1] + ib)
 
     seeded: set[int] = set()
