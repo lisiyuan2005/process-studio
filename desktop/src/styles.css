@@ -291,6 +291,14 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .number-input-wrap { position: relative; }
 .number-input-wrap input { padding-right: 45px; }
 .number-input-wrap span { position: absolute; top: 0; right: 9px; height: 33px; display: flex; align-items: center; color: #5f6e7b; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; pointer-events: none; }
+.number-input-wrap.with-units input { padding-right: 74px; }
+.number-input-wrap select.unit-picker {
+  position: absolute; top: 4px; right: 4px; height: 25px; width: auto; min-width: 58px;
+  padding: 0 18px 0 6px; border: 1px solid transparent; border-radius: 5px;
+  background-color: #eef2f6; color: #44525f;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px;
+}
+.number-input-wrap select.unit-picker:hover { border-color: var(--line); }
 .boolean-input { height: 33px; border: 1px solid #303b46; border-radius: 6px; background: #11171d; color: #7f8d99; text-align: left; padding: 0 9px; }
 .boolean-input.active { color: var(--green); border-color: rgba(107, 198, 154, 0.32); }
 .materials-input { display: flex; flex-wrap: wrap; gap: 5px; max-height: 112px; overflow-y: auto; padding: 7px; border: 1px solid #303b46; border-radius: 6px; background: #11171d; }
@@ -530,6 +538,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .shape-card header span:last-child { display: inline-flex; }
 .shape-card .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
 .shape-card .pair-note { color: #7b8b98; font-size: 10.5px; }
+.shape-card .shape-warning { margin: 4px 0 0; color: #a4671b; font-size: 10.5px; line-height: 1.45; }
 .shape-name { display: grid; gap: 4px; margin: 2px 0 10px; color: #778895; font-size: 10px; }
 .shape-name input { height: 27px; padding: 0 7px; border: 1px solid #cbd6de; border-radius: 4px; font-size: 11.5px; }
 .mask-number { width: 52px; height: 24px; margin: 0 4px; padding: 0 5px; border: 1px solid #cdd7df; border-radius: 4px; font-size: 11px; }
@@ -630,6 +639,10 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .window-grid .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
 .window-grid input { width: 100%; min-width: 0; height: 30px; padding: 0 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--text); font-size: 11.5px; }
 .window-note { display: block; margin: 8px 0 14px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.export-modal { width: 520px; }
+.export-modal .column-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; margin: 10px 0 14px; }
+.column-choice { display: flex; align-items: center; gap: 7px; padding: 4px 2px; font-size: 12px; color: var(--ink); }
+.column-choice input { width: 13px; height: 13px; }
 .grid-modal .modal-body { padding: 20px 24px; overflow-y: auto; }
 .grid-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
 .grid-summary { display: grid; grid-template-columns: 1fr auto; gap: 6px; margin-top: 16px; padding: 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-raised); font-size: 11.5px; }

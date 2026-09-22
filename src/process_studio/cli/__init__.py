@@ -1089,7 +1089,7 @@ def build_parser() -> argparse.ArgumentParser:
     window = commands.add_parser("window", help="show or change the project window and spacing")
     for axis in ("x", "y", "z"):
         window.add_argument(f"--{axis}", nargs=2, type=float, metavar=("MIN", "MAX"), help=f"the {axis} range in µm")
-    window.add_argument("--spacing", type=float, metavar="NM", help="grid spacing (level set) or the z step of the slab kernel, in nm")
+    window.add_argument("--spacing", type=float, metavar="NM", help="the z step the kernel samples height at, in nm")
     window.add_argument("--spacing-xy", type=float, metavar="NM",
                         help="slab kernel only: the XY arc sagitta in nm; 0 makes it follow the z step again")
     window.add_argument("--yes", action="store_true", help="do not remark that results are discarded")
@@ -1126,7 +1126,7 @@ def build_parser() -> argparse.ArgumentParser:
     mesh = view_commands.add_parser("mesh", help="the 3D surfaces as .glb, .gltf, .obj, .stl or .ply")
     _view_step(mesh)
     mesh.add_argument("--material", action="append", help="only these materials (repeatable)")
-    mesh.add_argument("--interpolation", type=int, default=1, help="surface upsampling factor (level set)")
+    mesh.add_argument("--interpolation", type=int, default=1, help="display upsampling factor")
     mesh.set_defaults(handler=cmd_view_mesh)
 
     materials = commands.add_parser("materials", help="the material library")

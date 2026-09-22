@@ -21,6 +21,7 @@ import { MaterialEditor } from "./components/MaterialEditor";
 import { ToolEditor } from "./components/ToolEditor";
 import { PanelResizer } from "./components/PanelResizer";
 import { ProjectHome } from "./components/ProjectHome";
+import { FlowExportDialog } from "./components/FlowExportDialog";
 import { RecipeEditor } from "./components/RecipeEditor";
 import { SketchEditor } from "./components/SketchEditor";
 import { MenuBar, type Menu } from "./components/MenuBar";
@@ -184,6 +185,8 @@ export function Workspace({
   const [showTools, setShowTools] = useState(false);
   const [showGrid, setShowGrid] = useState(false);
   const [showCli, setShowCli] = useState(false);
+  // A table export asks which columns first; a flow file carries everything.
+  const [exportingTable, setExportingTable] = useState<FlowExportFormat | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
   // A short message with an optional action, for menu commands that answer something.
   const [notice, setNotice] = useState<{
@@ -967,8 +970,10 @@ export function Workspace({
     }
   };
   const saveAs = () => withWorkspace("Save as", (root) => bridge.saveWorkspaceAs(root, document!.project.name));
-  const exportFlowAs = (format: FlowExportFormat) =>
-    withWorkspace(`Export flow (${format})`, (root) => bridge.exportFlow(root, format, document!.project.name));
+  const exportFlowAs = (format: FlowExportFormat, columns?: string[]) =>
+    withWorkspace(`Export flow (${format})`, (root) =>
+      bridge.exportFlow(root, format, document!.project.name, columns),
+    );
   const importFlowFile = () => withWorkspace("Apply flow file", (root) => bridge.importFlow(root));
   const exportLibraryAs = (kind: LibraryKind) =>
     withWorkspace(`Export ${kind}`, (root) => bridge.exportLibrary(root, kind, document!.project.name));
@@ -1559,8 +1564,8 @@ export function Workspace({
         { label: "Materials…", action: () => void importLibraryFrom("materials"), disabled: busy },
         { label: "Recipes…", action: () => void importLibraryFrom("recipes"), disabled: busy },
         { label: "Tools…", action: () => void importLibraryFrom("tools"), disabled: busy },
-        { label: "Flow as Excel…", heading: "Export", action: () => void exportFlowAs("xlsx"), separated: true, disabled: busy },
-        { label: "Flow as CSV…", action: () => void exportFlowAs("csv"), disabled: busy },
+        { label: "Flow as Excel…", heading: "Export", action: () => setExportingTable("xlsx"), separated: true, disabled: busy },
+        { label: "Flow as CSV…", action: () => setExportingTable("csv"), disabled: busy },
         { label: "Flow file (JSON)…", action: () => void exportFlowAs("json"), disabled: busy },
         { label: "Flow file (YAML)…", action: () => void exportFlowAs("yaml"), disabled: busy },
         { label: "Materials…", action: () => void exportLibraryAs("materials"), disabled: busy },
@@ -2104,11 +2109,26 @@ export function Workspace({
         />
       )}
 
+      {exportingTable && (
+        <FlowExportDialog
+          format={exportingTable}
+          columns={capabilities?.flowColumns ?? []}
+          busy={busy}
+          onExport={(columns) => {
+            const format = exportingTable;
+            setExportingTable(null);
+            void exportFlowAs(format, columns);
+          }}
+          onClose={() => setExportingTable(null)}
+        />
+      )}
+
       {showRecipes && (
         <RecipeEditor
           recipes={document.recipes}
           materials={document.materials}
           tools={document.tools}
+          depositionModes={projectKernel?.depositionModes}
           busy={busy}
           onSave={(recipe) => setDocument(upsertRecipe(document, recipe))}
           onDelete={(recipeId) => setDocument(removeRecipe(document, recipeId))}
@@ -2257,7 +2277,6 @@ export function Workspace({
           resolutionUm={document.project.resolutionUm}
           resolutionXyUm={document.project.resolutionXyUm}
           presetsNm={projectKernel?.spacingPresetsNm ?? [25, 10, 2]}
-          maximumNodes={projectKernel?.maximumNodes ?? null}
           busy={busy}
           onPlan={planGrid}
           onApply={handleApplyGrid}

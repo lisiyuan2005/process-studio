@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { NumberField } from "./NumberField";
+import { crowdedAxes, footprint } from "../domain/sketch";
 import type { GridDefinition, MaskKeep, MaskPreview, QuickSketch, SketchShape, TopViewDocument } from "../types";
 
 type Tool = "select" | "rectangle" | "circle" | "polygon" | "path";
@@ -86,6 +87,22 @@ function outline(shape: SketchShape, toPicture: (point: Point) => Point): string
     }
   }
   return paths;
+}
+
+/** Says when an array's pitch puts the copies inside one another. */
+function CrowdedArrayNote({ shape }: { shape: SketchShape }) {
+  const crowded = crowdedAxes(shape);
+  if (!crowded.x && !crowded.y) return null;
+  const size = footprint(shape);
+  const axes: string[] = [];
+  if (crowded.x) axes.push(`x: pitch ${shape.array[2]} µm under ${Number(size.width.toFixed(4))} µm wide`);
+  if (crowded.y) axes.push(`y: pitch ${shape.array[3]} µm under ${Number(size.height.toFixed(4))} µm tall`);
+  return (
+    <p className="shape-warning">
+      {axes.join(" · ")} — the copies overlap, so this array is one merged
+      shape rather than separate features.
+    </p>
+  );
 }
 
 export function SketchEditor({
@@ -610,6 +627,7 @@ export function SketchEditor({
                       />
                     </span>
                   </label>
+                  <CrowdedArrayNote shape={shape} />
                 </div>
               ))}
             </div>

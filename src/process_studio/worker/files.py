@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import IO, Any, Mapping
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.utils import get_column_letter
 
 from ..libraries import RecipeLibrary
 from ..models import MaterialDefinition, ToolDefinition
@@ -27,10 +28,31 @@ from .errors import InvalidRequest, WorkspaceError
 from .runner import build_document
 from .workspace import load_project, open_repository
 
-FLOW_COLUMNS = [
-    "#", "Step", "Type", "Tool", "Material", "Mode", "Target (um)", "Directional fraction",
-    "Mask", "Keep", "Rates (um/min)", "Stop layers", "Other parameters (JSON)", "Enabled", "Status", "Loop",
-]
+#: The columns a flow table can carry: an id the client asks for, the
+#: heading it is written under, and the column width a workbook gives it.
+#: A flow is exported for a reason -- a run sheet, a review, a tool list --
+#: and which of these belong depends on the reason, so the client names the
+#: ones it wants and gets them in this order.
+FLOW_FIELDS: tuple[tuple[str, str, int], ...] = (
+    ("index", "#", 4),
+    ("name", "Step", 30),
+    ("type", "Type", 12),
+    ("tool", "Tool", 16),
+    ("material", "Material", 12),
+    ("mode", "Mode", 11),
+    ("target", "Target (um)", 11),
+    ("directional_fraction", "Directional fraction", 10),
+    ("mask", "Mask", 18),
+    ("keep", "Keep", 8),
+    ("rates", "Rates (um/min)", 28),
+    ("stops", "Stop layers", 16),
+    ("other", "Other parameters (JSON)", 30),
+    ("enabled", "Enabled", 8),
+    ("status", "Status", 9),
+    ("loop", "Loop", 14),
+)
+FLOW_FIELD_IDS = tuple(field for field, _heading, _width in FLOW_FIELDS)
+FLOW_COLUMNS = [heading for _field, heading, _width in FLOW_FIELDS]
 MATERIAL_COLUMNS = ["Material", "Category", "Color", "Opacity"]
 TOOL_COLUMNS = ["Tool", "Group", "Notes"]
 LIBRARY_KINDS = ("materials", "tools", "recipes")
@@ -51,9 +73,29 @@ def _status_word(document: Mapping[str, Any], step_id: str) -> str:
     )
 
 
-def flow_rows(document: Mapping[str, Any]) -> list[list[Any]]:
-    """One row per step, the columns of ``FLOW_COLUMNS``."""
+def _chosen_fields(columns: Any) -> tuple[tuple[str, str, int], ...]:
+    """The fields to write, in canonical order; None means all of them."""
+    if columns is None:
+        return FLOW_FIELDS
+    if not isinstance(columns, (list, tuple)) or not all(isinstance(item, str) for item in columns):
+        raise InvalidRequest("export_flow columns must be a list of column names.")
+    wanted = set(columns)
+    unknown = sorted(wanted - set(FLOW_FIELD_IDS))
+    if unknown:
+        raise InvalidRequest(
+            f"export_flow does not have the column {unknown[0]!r}; it has "
+            + ", ".join(FLOW_FIELD_IDS)
+        )
+    chosen = tuple(field for field in FLOW_FIELDS if field[0] in wanted)
+    if not chosen:
+        raise InvalidRequest("export_flow needs at least one column.")
+    return chosen
+
+
+def flow_rows(document: Mapping[str, Any], columns: Any = None) -> list[list[Any]]:
+    """One row per step, holding the chosen columns in canonical order."""
     _, Session = _cli()
+    fields = _chosen_fields(columns)
     rows = []
     for index, step in enumerate(Session.steps(document), start=1):
         parameters = dict(step.get("parameters", {}))
@@ -75,14 +117,25 @@ def flow_rows(document: Mapping[str, Any]) -> list[list[Any]]:
             if not response.get("stopLayer")
         )
         stops = "; ".join(name for name, response in responses.items() if response.get("stopLayer"))
-        rows.append([
-            index, step["name"], step["processType"], step.get("tool", ""),
-            step.get("outputMaterial") or "", mode or "", target, fraction, mask,
-            step.get("keep", "inside") if mask else "", rates, stops,
-            json.dumps(parameters, ensure_ascii=False) if parameters else "",
-            bool(step.get("enabled", True)), _status_word(document, step["id"]),
-            _loop_word(step),
-        ])
+        values = {
+            "index": index,
+            "name": step["name"],
+            "type": step["processType"],
+            "tool": step.get("tool", ""),
+            "material": step.get("outputMaterial") or "",
+            "mode": mode or "",
+            "target": target,
+            "directional_fraction": fraction,
+            "mask": mask,
+            "keep": step.get("keep", "inside") if mask else "",
+            "rates": rates,
+            "stops": stops,
+            "other": json.dumps(parameters, ensure_ascii=False) if parameters else "",
+            "enabled": bool(step.get("enabled", True)),
+            "status": _status_word(document, step["id"]),
+            "loop": _loop_word(step),
+        }
+        rows.append([values[field] for field, _heading, _width in fields])
     return rows
 
 
@@ -93,8 +146,19 @@ def _loop_word(step: Mapping[str, Any]) -> str:
     return f"{loop.get('name') or 'Loop'} {int(loop.get('iteration', 0)) + 1}/{int(loop.get('repeat', 1))}"
 
 
-def export_flow(root: Path, destination: Path, fmt: str, project_id: str | None = None) -> dict[str, Any]:
-    """Write the flow as a table (xlsx, csv) or a flow file (json, yaml)."""
+def export_flow(
+    root: Path,
+    destination: Path,
+    fmt: str,
+    project_id: str | None = None,
+    columns: Any = None,
+) -> dict[str, Any]:
+    """Write the flow as a table (xlsx, csv) or a flow file (json, yaml).
+
+    ``columns`` names the table columns to write (see ``FLOW_FIELDS``); the
+    flow-file formats carry the whole flow and ignore it, since a flow file
+    is what the workspace is rebuilt from.
+    """
     flowfile, Session = _cli()
     repository = open_repository(root)
     document = build_document(root, repository, load_project(repository, project_id))
@@ -105,23 +169,24 @@ def export_flow(root: Path, destination: Path, fmt: str, project_id: str | None 
             flowfile.flow_from_document(document),
         )
     elif fmt == "xlsx":
+        fields = _chosen_fields(columns)
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = "Process flow"
-        sheet.append(FLOW_COLUMNS)
-        for row in flow_rows(document):
+        sheet.append([heading for _field, heading, _width in fields])
+        for row in flow_rows(document, columns):
             sheet.append(row)
         sheet.freeze_panes = "A2"
         sheet.auto_filter.ref = sheet.dimensions
-        widths = [4, 30, 12, 16, 12, 11, 11, 10, 18, 8, 28, 16, 30, 8, 9, 14]
-        for column, width in zip("ABCDEFGHIJKLMNOP", widths):
-            sheet.column_dimensions[column].width = width
+        for index, (_field, _heading, width) in enumerate(fields, start=1):
+            sheet.column_dimensions[get_column_letter(index)].width = width
         workbook.save(destination)
     elif fmt == "csv":
+        fields = _chosen_fields(columns)
         with destination.open("w", newline="", encoding="utf-8-sig") as handle:
             writer = csv.writer(handle)
-            writer.writerow(FLOW_COLUMNS)
-            writer.writerows(flow_rows(document))
+            writer.writerow([heading for _field, heading, _width in fields])
+            writer.writerows(flow_rows(document, columns))
     else:
         raise InvalidRequest("export_flow format must be xlsx, csv, json or yaml.")
     return {"path": str(destination), "steps": len(Session.steps(document))}

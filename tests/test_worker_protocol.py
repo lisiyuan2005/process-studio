@@ -1212,6 +1212,45 @@ def test_the_file_menu_methods_export_import_and_copy(tmp_path):
         call("export_library", root=root, kind="sketches", destination=str(tmp_path / "x.xlsx"))
 
 
+def test_a_flow_table_carries_the_columns_that_were_asked_for(tmp_path):
+    """A flow is exported for a purpose, so the columns are the client's choice.
+
+    The whole table is still the default, and a flow *file* is the workspace
+    itself, so it carries everything whatever is asked for.
+    """
+    root = str(tmp_path / "columns")
+    call("create_workspace", root=root, name="Columns", kernel="slab")
+    described = call("describe")
+    offered = [column["id"] for column in described["flowColumns"]]
+    assert offered[:3] == ["index", "name", "type"]
+
+    destination = str(tmp_path / "run-sheet.csv")
+    # Asked for out of order; written in the order of the table.
+    call("export_flow", root=root, destination=destination, format="csv",
+         columns=["tool", "name", "index"])
+    lines = Path(destination).read_text(encoding="utf-8-sig").splitlines()
+    assert lines[0] == "#,Step,Tool"
+    assert lines[1].count(",") == 2
+
+    call("export_flow", root=root, destination=destination, format="csv")
+    assert Path(destination).read_text(encoding="utf-8-sig").splitlines()[0].startswith("#,Step,Type,Tool")
+
+    with pytest.raises(InvalidRequest, match="does not have the column"):
+        call("export_flow", root=root, destination=destination, format="csv", columns=["tool", "vendor"])
+    with pytest.raises(InvalidRequest, match="at least one column"):
+        call("export_flow", root=root, destination=destination, format="csv", columns=[])
+    with pytest.raises(InvalidRequest, match="list of column names"):
+        call("export_flow", root=root, destination=destination, format="csv", columns="tool")
+
+    # An xlsx with a subset has exactly those headings.
+    workbook = str(tmp_path / "subset.xlsx")
+    call("export_flow", root=root, destination=workbook, format="xlsx", columns=["name", "target"])
+    from openpyxl import load_workbook
+
+    sheet = load_workbook(workbook).active
+    assert [cell.value for cell in sheet[1]] == ["Step", "Target (um)"]
+
+
 def test_the_protocol_and_the_mesh_code_agree_on_the_triangulators():
     """protocol.py spells the list out rather than importing it, because a
     level-set-only package has no shapely for deviceflow's mesh code."""

@@ -273,10 +273,11 @@ class ProjectDefinition:
     gds_path: str | None = None
     active_branch_id: str | None = None
     id: str = field(default_factory=new_id)
-    #: Which simulation kernel this project is built on. Chosen when the
-    #: project is created and never changed afterwards: the kernels store
-    #: geometry differently, so results cannot cross from one to the other.
-    kernel: str = "levelset"
+    #: Which simulation kernel this project is built on. Recorded when the
+    #: project is created and never changed afterwards, so a project made on
+    #: a kernel this build no longer has is refused instead of run on another
+    #: one. There is one kernel now; the field stays because the refusal does.
+    kernel: str = "slab"
     #: Length the kernel resolves geometry at when it is not the grid: the
     #: slab kernel's conformal-deposition resolution. None means its default.
     resolution_um: float | None = None

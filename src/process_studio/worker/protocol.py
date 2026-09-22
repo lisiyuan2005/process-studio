@@ -25,14 +25,22 @@ from ..libraries import RecipeLibrary
 from ..models import ProcessType
 from .errors import InvalidRequest, WorkerError, WorkspaceError
 
-#: Triangulators the slab kernel's 3D view can be built with. Spelt out
-#: rather than imported: this module is the entry point of every build,
-#: and the list lives in deviceflow's mesh code, which a level-set-only
-#: package has no shapely for. A test keeps the two the same.
+#: Triangulators the 3D view can be built with. Spelt out rather than
+#: imported: this module is the entry point of every build, and the list
+#: lives in deviceflow's mesh code, which a build missing shapely cannot
+#: import at all. A test keeps the two the same.
 MESH_ENGINES = ("ears", "delaunay")
 from .export import write_image, write_mesh
 from .render import sketch_preview_image
-from .files import copy_workspace, export_flow, export_library, import_flow, import_library, reveal_path
+from .files import (
+    FLOW_FIELDS,
+    copy_workspace,
+    export_flow,
+    export_library,
+    import_flow,
+    import_library,
+    reveal_path,
+)
 from .update import check_update, install_update, open_url
 from .runner import (
     apply_resolution,
@@ -165,6 +173,10 @@ def _describe() -> dict[str, Any]:
         "processTypes": [process_type.value for process_type in ProcessType],
         "maskSources": list(MASK_SOURCES),
         "sketch": {"shapes": list(SKETCH_SHAPES), "operations": list(SKETCH_OPERATIONS)},
+        # The columns a flow table can be exported with, so the client
+        # offers what this build actually writes rather than a copy of the
+        # list that drifts from it.
+        "flowColumns": [{"id": field, "label": heading} for field, heading, _width in FLOW_FIELDS],
         "kernels": [kernel.info.to_json() for kernel in available_kernels()],
         "defaultKernel": default_kernel(),
         "buildVariant": build_variant(),
@@ -774,7 +786,7 @@ def dispatch(
     if method == "export_flow":
         return export_flow(
             _root(parameters), _destination(parameters), str(parameters.get("format") or "xlsx"),
-            parameters.get("projectId"),
+            parameters.get("projectId"), parameters.get("columns"),
         )
     if method == "import_flow":
         return import_flow(_root(parameters), _source(parameters), output)

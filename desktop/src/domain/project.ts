@@ -11,6 +11,7 @@ import type {
   StepStatus,
   WorkspaceDocument,
 } from "../types";
+import { defaultParameters } from "./parameters";
 
 /** Every document edit goes through these pure helpers so the UI never mutates state in place. */
 
@@ -55,12 +56,12 @@ export function hasDirtySteps(document: WorkspaceDocument): boolean {
   return getSteps(document).some((step) => stepStatus(document, step.id) !== "clean");
 }
 
-const STEP_DEFAULTS: Record<ProcessType, { name: string; parameters: Record<string, ParameterValue> }> = {
-  deposit: { name: "New deposition", parameters: { target: 0.05 } },
-  etch: { name: "New etch", parameters: { target: 0.1, directional_fraction: 1 } },
-  cmp: { name: "New CMP", parameters: { target_z: 0 } },
-  no_geometry: { name: "New process note", parameters: {} },
-  oxidation: { name: "New oxidation", parameters: { target: 0.02 } },
+const STEP_NAMES: Record<ProcessType, string> = {
+  deposit: "New deposition",
+  etch: "New etch",
+  cmp: "New CMP",
+  no_geometry: "New process note",
+  oxidation: "New oxidation",
 };
 
 function copyResponses(responses: Recipe["materialResponses"]) {
@@ -109,14 +110,13 @@ export function addStep(
   processType: ProcessType,
   afterStepId?: string,
 ): { document: WorkspaceDocument; step: ProcessStep } {
-  const defaults = STEP_DEFAULTS[processType];
   const step: ProcessStep = {
     id: newId("step"),
-    name: defaults.name,
+    name: STEP_NAMES[processType],
     processType,
     tool: "",
     outputMaterial: processType === "oxidation" ? "SiO2" : null,
-    parameters: { ...defaults.parameters },
+    parameters: defaultParameters(processType),
     materialResponses: {},
     maskSource: "none",
     layer: null,
@@ -280,7 +280,7 @@ export function setStepProcessType(
     processType,
     tool: "",
     outputMaterial: null,
-    parameters: { ...STEP_DEFAULTS[processType].parameters },
+    parameters: defaultParameters(processType),
     materialResponses: {},
   });
 }

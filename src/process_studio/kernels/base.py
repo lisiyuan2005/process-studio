@@ -1,10 +1,9 @@
 """What every simulation kernel must offer the workspace.
 
-A project names one kernel when it is created and keeps it for life. The two
-kernels do not share a state representation: one carries level-set fields on a
-uniform grid, the other exact slab polygons, and neither can read the other's
-snapshots. Everything above this module works through the interface here, so
-the runner, the views and the RPC surface never branch on the kernel id.
+A project names the kernel it was created on and keeps it for life: kernels
+do not share a state representation, so one cannot read another's snapshots.
+Everything above this module works through the interface here, so the runner,
+the views and the RPC surface never branch on the kernel id.
 """
 
 from __future__ import annotations
@@ -132,11 +131,10 @@ class Kernel(Protocol):
         project: ProjectDefinition,
         interpolation: int = 1,
         materials: Sequence[str] | None = None,
-        #: Which triangulator built the mesh; only the slab kernel
-        #: has a choice, and the level-set kernel marches cubes.
+        #: Which triangulator built the mesh, for a kernel that offers
+        #: more than one way to cover a face.
         triangulation: str | None = None,
         #: Include the faces that lie against another material.
-        #: Only the slab kernel can leave them out.
         buried: bool = False,
     ) -> dict[str, Any]:
         """Triangles for the 3D view, one entry per material."""

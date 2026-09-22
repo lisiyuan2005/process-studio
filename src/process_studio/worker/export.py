@@ -27,7 +27,7 @@ def write_mesh(
     try:
         import numpy as np
         import trimesh
-    except ImportError as error:  # pragma: no cover - the level-set-only build
+    except ImportError as error:  # pragma: no cover - a build without trimesh
         raise WorkspaceError(
             "Exporting a mesh needs the trimesh package, which this build does not include."
         ) from error

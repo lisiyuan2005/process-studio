@@ -105,6 +105,7 @@ sketches:
 steps:
   - {name: Trench Etch, type: etch, mask: sketch:default, parameters: {target: 0.3, directional_fraction: 1.0}, rates: {Si: 0.12}}
   - {name: Liner, type: deposit, material: TiN, parameters: {target: 0.02, mode: conformal}}
+  - {name: HZO, type: deposit, material: HZO, tool: ALD, parameters: {cycles: 240, rate_per_cycle: 0.0009, mode: conformal}}
   - {name: Fill, type: deposit, material: W, parameters: {target: 0.2, mode: conformal}}
   - {name: CMP, type: cmp, parameters: {target_z: 0.0}}
   - {name: Gate oxide, type: oxidation, material: SiO2, parameters: {target: 0.005}, rates: {Si: 1}}
@@ -116,6 +117,8 @@ steps:
 ```
 
 循环（`loop` 条目）在工作目录里展开成真实的步骤：每一次都是列表里的一步，带着 `loop: {id, name, repeat, iteration}` 标记，`steps list` 的 Loop 列显示「ON pair 2/4」。`flow dump` 把同一个循环折回一个条目（只写第 1 次）；文件里循环可以嵌套，展开时内层并入外层。
+
+沉积的厚度有三种写法，内核按这个顺序读：`target`（直接给厚度）、`cycles × rate_per_cycle`（ALD 的写法）、`time_min × rate`。刻蚀和氧化同样可以给 `target` 或时间×速率。
 
 `oxidation`：`rates` 里列出会被氧化的材料，`parameters.target` 是被消耗的厚度（按各材料的 rate 比例），`material` 是生成的氧化物（默认 SiO2）。露出的表面向内 `target` 那一层原地变成氧化物，不模拟体积膨胀。
 

@@ -91,6 +91,53 @@ def test_the_bare_wafer_fills_the_window_up_to_zero(kernel, project):
     assert kernel.surfaces(state, project=project)["bounds"]["zMin"] == pytest.approx(-0.8)
 
 
+def test_a_film_can_be_asked_for_in_cycles_or_in_time(kernel, project, sketches):
+    """The three ways to spell one thickness, all 20 nm of TiN.
+
+    A step written the way an ALD recipe is written -- 100 cycles at 0.2 nm
+    per cycle -- used to fail with "thickness must be greater than zero",
+    because only ``target`` was read.
+    """
+    materials = default_materials()
+    heights = []
+    for parameters in (
+        {"target": 0.02, "mode": "conformal"},
+        {"cycles": 100, "rate_per_cycle": 0.0002, "mode": "conformal"},
+        {"time_min": 2, "rate": 0.01, "mode": "conformal"},
+    ):
+        grown = kernel.run_step(
+            kernel.initial_state(project, materials=materials),
+            step(ProcessType.DEPOSIT, parameters=parameters, output_material="Al2O3"),
+            project=project,
+            recipes={},
+            sketches=sketches,
+            logger=lambda _message: None,
+            materials=materials,
+        )
+        heights.append(grown.device.cross_section((-0.8, 0.0), (0.8, 0.0)).surface_z(0.0))
+    assert heights[0] == pytest.approx(0.8 + 0.02)
+    assert heights[1] == pytest.approx(heights[0])
+    assert heights[2] == pytest.approx(heights[0])
+
+
+def test_a_deposition_with_no_thickness_at_all_says_what_it_needs(kernel, project, sketches):
+    materials = default_materials()
+    with pytest.raises(SlabError, match="cycles"):
+        kernel.run_step(
+            kernel.initial_state(project, materials=materials),
+            step(
+                ProcessType.DEPOSIT,
+                parameters={"mode": "conformal", "temperature_c": 300},
+                output_material="Al2O3",
+            ),
+            project=project,
+            recipes={},
+            sketches=sketches,
+            logger=lambda _message: None,
+            materials=materials,
+        )
+
+
 def test_a_conformal_film_has_its_nominal_thickness_everywhere(kernel, project, sketches):
     materials = default_materials()
     state = kernel.initial_state(project, materials=materials)

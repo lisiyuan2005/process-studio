@@ -194,8 +194,10 @@ class ProjectRepository:
                 );
                 """
             )
-            # Databases written before the kernel was a choice have neither
-            # column; they are level-set projects, which is the default.
+            # Databases written before the kernel was recorded have neither
+            # column. Those projects were made on the level-set kernel, so the
+            # added column says so and opening one is refused with a message
+            # naming the version that can still read it.
             columns = {
                 row["name"]
                 for row in connection.execute("PRAGMA table_info(projects)").fetchall()

@@ -1,12 +1,16 @@
-import { CircleAlert, FileSpreadsheet, Plus, Trash2, Upload, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { FileSpreadsheet, Plus, Trash2, Upload, X } from "lucide-react";
+import { useMemo, useState } from "react";
 import { groupRecipes, newId, type RecipeGroup } from "../domain/project";
 import { ToolPicker } from "./ToolPicker";
 import type { MaterialDefinition, ParameterValue, ProcessType, Recipe, ToolDefinition } from "../types";
 import { NumberField } from "./NumberField";
+import { ParameterEditor } from "./ParameterRows";
+import { PARAMETER_SPECS, defaultParameters, defaultsForNewTool, depositThickness } from "../domain/parameters";
 
 interface RecipeEditorProps {
   recipes: Recipe[];
+  /** Deposition modes the kernel offers, for the mode row. */
+  depositionModes?: string[];
   materials: MaterialDefinition[];
   tools: ToolDefinition[];
   busy: boolean;
@@ -66,55 +70,22 @@ function GroupBranch({
   );
 }
 
-function ParameterField({
-  recipe,
-  onSave,
-}: {
-  recipe: Recipe;
-  onSave: (recipe: Recipe) => void;
-}) {
-  const [draft, setDraft] = useState(JSON.stringify(recipe.parameters, null, 2));
-  const [error, setError] = useState<string>();
-  useEffect(() => {
-    setDraft(JSON.stringify(recipe.parameters, null, 2));
-    setError(undefined);
-  }, [recipe.id, JSON.stringify(recipe.parameters)]);
-
+/** What a deposition recipe's film works out to, the way the kernel reads it. */
+function ThicknessNote({ parameters }: { parameters: Record<string, ParameterValue> }) {
+  const resolved = depositThickness(parameters);
+  if (!resolved || resolved.from === "target") return null;
+  const nm = Number((resolved.um * 1000).toPrecision(6));
   return (
-    <label className="field-row json-field">
-      <span>Parameters (JSON)</span>
-      <textarea
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={() => {
-          try {
-            const parsed = draft.trim() ? JSON.parse(draft) : {};
-            if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-              throw new Error("Parameters must be a JSON object.");
-            }
-            setError(undefined);
-            onSave({ ...recipe, parameters: parsed as Record<string, ParameterValue> });
-          } catch (reason) {
-            setError(reason instanceof Error ? reason.message : String(reason));
-          }
-        }}
-      />
-      <small>
-        target and time_min drive depth or thickness; rate, directional_fraction and mode are
-        read by the kernel when present.
-      </small>
-      {error && (
-        <div className="error-box">
-          <CircleAlert size={13} />
-          <span>{error}</span>
-        </div>
-      )}
-    </label>
+    <p className="numerics-note">
+      {resolved.from === "cycles" ? "Cycles × rate per cycle" : "Time × rate"}: {nm} nm of film.
+      A target thickness, if the recipe has one, wins over this.
+    </p>
   );
 }
 
 export function RecipeEditor({
   recipes,
+  depositionModes = ["conformal", "planar"],
   materials,
   tools,
   busy,
@@ -150,7 +121,7 @@ export function RecipeEditor({
       tool: "",
       group: selected?.group ?? "",
       outputMaterial: materials[0]?.name ?? null,
-      parameters: { target: 0.05, rate: 0.01 },
+      parameters: defaultParameters(selected?.processType ?? "deposit", selected?.tool),
       materialResponses: {},
     };
     onSave(recipe);
@@ -220,7 +191,15 @@ export function RecipeEditor({
                 <span>Process type</span>
                 <select
                   value={selected.processType}
-                  onChange={(event) => update({ processType: event.target.value as ProcessType })}
+                  onChange={(event) => {
+                    const processType = event.target.value as ProcessType;
+                    const swap = defaultsForNewTool(processType, selected.tool, selected.parameters);
+                    update(
+                      swap
+                        ? { processType, parameters: swap }
+                        : { processType },
+                    );
+                  }}
                 >
                   {PROCESS_TYPES.map((type) => (
                     <option key={type} value={type}>
@@ -251,7 +230,21 @@ export function RecipeEditor({
 
               <label className="field-row">
                 <span>Tool</span>
-                <ToolPicker value={selected.tool} tools={tools} onChange={(tool) => update({ tool })} />
+                <ToolPicker
+                  value={selected.tool}
+                  tools={tools}
+                  onChange={(tool) => {
+                    // A recipe for an ALD tool is written in cycles and a
+                    // rate per cycle. Only untouched defaults are swapped
+                    // over; a recipe with numbers in it keeps them.
+                    const swap = defaultsForNewTool(
+                      selected.processType,
+                      tool,
+                      selected.parameters,
+                    );
+                    update(swap ? { tool, parameters: swap } : { tool });
+                  }}
+                />
               </label>
 
               {selected.processType === "deposit" && (
@@ -273,7 +266,23 @@ export function RecipeEditor({
                 </label>
               )}
 
-              <ParameterField recipe={selected} onSave={onSave} />
+              <div className="form-section">
+                <span className="section-label">PARAMETERS</span>
+                <ParameterEditor
+                  key={selected.id}
+                  specs={PARAMETER_SPECS[selected.processType]}
+                  parameters={selected.parameters}
+                  depositionModes={depositionModes}
+                  onPatch={(patch) => {
+                    const merged = { ...selected.parameters, ...patch };
+                    for (const [key, value] of Object.entries(patch)) {
+                      if (value === null || value === "") delete merged[key];
+                    }
+                    update({ parameters: merged });
+                  }}
+                />
+                {selected.processType === "deposit" && <ThicknessNote parameters={selected.parameters} />}
+              </div>
 
               <div className="form-section">
                 <span className="section-label">MATERIAL RESPONSES</span>

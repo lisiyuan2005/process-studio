@@ -1,4 +1,4 @@
-import { BookDown, CircleAlert, Layers, PenLine, Play, Plus, Repeat, Save, Trash2, Ungroup, Wrench, X } from "lucide-react";
+import { BookDown, CircleAlert, Layers, PenLine, Play, Plus, Repeat, Save, Trash2, Ungroup, Wrench } from "lucide-react";
 import { ToolPicker } from "./ToolPicker";
 import { useEffect, useMemo, useState } from "react";
 import type {
@@ -17,6 +17,8 @@ import type {
   ToolDefinition,
 } from "../types";
 import { NumberField } from "./NumberField";
+import { ParameterEditor } from "./ParameterRows";
+import { PARAMETER_SPECS, defaultsForNewTool, depositThickness } from "../domain/parameters";
 
 /** What the inspector shows for a selected loop. */
 export interface LoopSummary {
@@ -69,64 +71,20 @@ interface InspectorProps {
   onRemove: () => void;
 }
 
-interface ParameterSpec {
-  key: string;
-  label: string;
-  unit?: string;
-  kind?: "number" | "text" | "mode";
-  initial: ParameterValue;
-  hint?: string;
-  /** Kernels that read this parameter; absent means every kernel does. */
-  kernels?: string[];
+/** What a deposition's film will be, worked out the way the kernel does. */
+function ThicknessNote({ parameters }: { parameters: Record<string, ParameterValue> }) {
+  const resolved = depositThickness(parameters);
+  if (!resolved || resolved.from === "target") return null;
+  const nm = Number((resolved.um * 1000).toPrecision(6));
+  return (
+    <p className="numerics-note">
+      {resolved.from === "cycles"
+        ? `Cycles × rate per cycle: ${nm} nm of film.`
+        : `Time × rate: ${nm} nm of film.`}{" "}
+      A target thickness, if you add one, wins over this.
+    </p>
+  );
 }
-
-const PARAMETER_SPECS: Record<ProcessType, ParameterSpec[]> = {
-  deposit: [
-    {
-      key: "target",
-      label: "Target thickness",
-      unit: "µm",
-      initial: 0.05,
-      hint: "Micrometres: 50 nm is 0.05.",
-    },
-    { key: "rate", label: "Deposition rate", unit: "µm/min", initial: 0.01 },
-    { key: "time_min", label: "Time", unit: "min", initial: 1 },
-    { key: "temperature_c", label: "Temperature", unit: "°C", initial: 25 },
-    { key: "mode", label: "Deposition mode", kind: "mode", initial: "conformal" },
-  ],
-  etch: [
-    { key: "target", label: "Target depth", unit: "µm", initial: 0.1, hint: "Micrometres: 100 nm is 0.1." },
-    { key: "time_min", label: "Time", unit: "min", initial: 1 },
-    { key: "temperature_c", label: "Temperature", unit: "°C", initial: 25 },
-    {
-      key: "directional_fraction",
-      label: "Directional fraction",
-      initial: 1,
-      hint: "1 is vertical; 0 is isotropic.",
-    },
-  ],
-  cmp: [
-    { key: "target_z", label: "Planarize to z", unit: "µm", initial: 0 },
-    { key: "removal_amount", label: "Removal amount", unit: "µm", initial: 0.05 },
-  ],
-  no_geometry: [
-    { key: "time_min", label: "Time", unit: "min", initial: 1 },
-    { key: "temperature_c", label: "Temperature", unit: "°C", initial: 25 },
-  ],
-  oxidation: [
-    { key: "target", label: "Consumed thickness", unit: "µm", initial: 0.02 },
-    { key: "time_min", label: "Time", unit: "min", initial: 1 },
-    { key: "temperature_c", label: "Temperature", unit: "°C", initial: 900 },
-  ],
-};
-
-const MODE_LABELS: Record<string, string> = {
-  conformal: "Conformal",
-  planar: "Planar",
-  directional: "Directional prism",
-  evaporation: "Evaporation",
-  fill: "Fill",
-};
 
 const TYPE_LABELS: Record<ProcessType, string> = {
   deposit: "Deposition",
@@ -167,89 +125,6 @@ function NumberInput({
       />
       {unit && <span>{unit}</span>}
     </span>
-  );
-}
-
-function ParameterRow({
-  spec,
-  value,
-  depositionModes,
-  onChange,
-  onRemove,
-}: {
-  spec: ParameterSpec;
-  value: ParameterValue;
-  depositionModes: string[];
-  onChange: (value: ParameterValue) => void;
-  onRemove: () => void;
-}) {
-  return (
-    <div className="field-row parameter-row">
-      <div className="parameter-heading">
-        {spec.label}
-        <button type="button" title={`Remove ${spec.label}`} onClick={onRemove}>
-          <X size={11} />
-        </button>
-      </div>
-      {spec.kind === "mode" ? (
-        <select value={String(value)} onChange={(event) => onChange(event.target.value)}>
-          {depositionModes.map((mode) => (
-            <option key={mode} value={mode}>
-              {MODE_LABELS[mode] ?? mode}
-            </option>
-          ))}
-        </select>
-      ) : spec.kind === "text" ? (
-        <input value={String(value)} onChange={(event) => onChange(event.target.value)} />
-      ) : (
-        <NumberInput
-          value={value}
-          unit={spec.unit}
-          onCommit={(next) => onChange(next)}
-        />
-      )}
-      {spec.hint && <small>{spec.hint}</small>}
-    </div>
-  );
-}
-
-function UnknownParameterRow({
-  name,
-  value,
-  onChange,
-  onRemove,
-}: {
-  name: string;
-  value: ParameterValue;
-  onChange: (value: ParameterValue) => void;
-  onRemove: () => void;
-}) {
-  const [draft, setDraft] = useState(JSON.stringify(value));
-  const [error, setError] = useState(false);
-  useEffect(() => setDraft(JSON.stringify(value)), [JSON.stringify(value)]);
-  return (
-    <div className="field-row parameter-row">
-      <div className="parameter-heading">
-        {name}
-        <button type="button" title={`Remove ${name}`} onClick={onRemove}>
-          <X size={11} />
-        </button>
-      </div>
-      <input
-        className={error ? "invalid-input" : ""}
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={() => {
-          try {
-            onChange(JSON.parse(draft) as ParameterValue);
-            setError(false);
-          } catch {
-            setError(true);
-          }
-        }}
-      />
-      {error && <small>Use JSON syntax: 1, true, "text", or [24,24,24].</small>}
-    </div>
   );
 }
 
@@ -376,12 +251,10 @@ export function Inspector({
   const [name, setName] = useState(step?.name ?? "");
   const [libraryRecipeId, setLibraryRecipeId] = useState("");
   const [saveName, setSaveName] = useState(step?.name ?? "");
-  const [parameterToAdd, setParameterToAdd] = useState("");
   useEffect(() => {
     setName(step?.name ?? "");
     setSaveName(step?.name ?? "");
     setLibraryRecipeId("");
-    setParameterToAdd("");
     // The name changes under the same id when a CLI command or a pasted
     // flow rewrites the step; the field must show what is stored.
   }, [step?.id, step?.name]);
@@ -450,7 +323,6 @@ export function Inspector({
     );
   const knownKeys = new Set(specs.map((spec) => spec.key));
   const activeSpecs = specs.filter((spec) => spec.key in step.parameters);
-  const missingSpecs = specs.filter((spec) => !(spec.key in step.parameters));
   const unknownParameters = Object.entries(step.parameters).filter(
     ([key]) => !knownKeys.has(key) && key !== "sketch_id",
   );
@@ -583,7 +455,21 @@ export function Inspector({
                 value={step.tool}
                 tools={tools}
                 placeholder="optional"
-                onChange={(tool) => onDefinitionChange({ tool })}
+                onChange={(tool) => {
+                  onDefinitionChange({ tool });
+                  // An ALD tool is written in cycles. Swap the numbers over
+                  // only while they are still the untouched defaults of the
+                  // other kind, never over something typed.
+                  const swap = defaultsForNewTool(step.processType, tool, step.parameters);
+                  if (swap) {
+                    const cleared = Object.fromEntries(
+                      Object.keys(step.parameters)
+                        .filter((key) => key !== "sketch_id")
+                        .map((key) => [key, null]),
+                    );
+                    onParameter({ ...cleared, ...swap } as Record<string, ParameterValue>);
+                  }
+                }}
               />
               <button type="button" className="secondary-button" title="Add, group or rename tools" onClick={onManageTools}>
                 <Wrench size={13} /> Manage
@@ -607,44 +493,14 @@ export function Inspector({
             </label>
           )}
 
-          {activeSpecs.map((spec) => (
-            <ParameterRow
-              key={spec.key}
-              spec={spec}
-              value={step.parameters[spec.key]}
-              depositionModes={depositionModes}
-              onChange={(value) => onParameter({ [spec.key]: value })}
-              onRemove={() => onParameter({ [spec.key]: null })}
-            />
-          ))}
-          {unknownParameters.map(([key, value]) => (
-            <UnknownParameterRow
-              key={key}
-              name={key}
-              value={value}
-              onChange={(next) => onParameter({ [key]: next })}
-              onRemove={() => onParameter({ [key]: null })}
-            />
-          ))}
-          {missingSpecs.length > 0 && (
-            <div className="add-parameter-row">
-              <select value={parameterToAdd} onChange={(event) => setParameterToAdd(event.target.value)}>
-                <option value="">Add a parameter…</option>
-                {missingSpecs.map((spec) => (
-                  <option key={spec.key} value={spec.key}>{spec.label}</option>
-                ))}
-              </select>
-              <button
-                type="button"
-                disabled={!parameterToAdd}
-                onClick={() => {
-                  const spec = missingSpecs.find((item) => item.key === parameterToAdd);
-                  if (spec) onParameter({ [spec.key]: spec.initial });
-                  setParameterToAdd("");
-                }}
-              >Add</button>
-            </div>
-          )}
+          <ParameterEditor
+            key={step.id}
+            specs={specs}
+            parameters={step.parameters}
+            depositionModes={depositionModes}
+            onPatch={onParameter}
+          />
+          {step.processType === "deposit" && <ThicknessNote parameters={step.parameters} />}
           {activeSpecs.length === 0 && unknownParameters.length === 0 && (
             <div className="empty-result">
               <CircleAlert size={14} />

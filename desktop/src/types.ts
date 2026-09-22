@@ -358,6 +358,12 @@ export interface GdsImportResult {
   document: WorkspaceDocument;
 }
 
+/** One column of the exported flow table. */
+export interface FlowColumn {
+  id: string;
+  label: string;
+}
+
 export interface WorkerCapabilities {
   workerVersion: string;
   protocolVersion: number;
@@ -366,6 +372,8 @@ export interface WorkerCapabilities {
   sketch: { shapes: string[]; operations: string[] };
   kernels: KernelDescription[];
   defaultKernel: string;
+  /** The columns a flow table can be exported with, in table order. */
+  flowColumns?: FlowColumn[];
   /** "full" when the build ships every kernel it knows of. */
   buildVariant?: string;
   rendering: { surfaces: boolean; maximumInterpolation: number };

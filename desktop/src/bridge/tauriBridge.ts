@@ -151,7 +151,12 @@ export class TauriBridge implements DesktopBridge {
     return invoke<void>("quit_for_update");
   }
 
-  async exportFlow(root: string, format: FlowExportFormat, projectName: string): Promise<string | null> {
+  async exportFlow(
+    root: string,
+    format: FlowExportFormat,
+    projectName: string,
+    columns?: string[],
+  ): Promise<string | null> {
     const names: Record<FlowExportFormat, [string, string]> = {
       xlsx: ["Excel workbook", "xlsx"],
       csv: ["CSV table", "csv"],
@@ -165,7 +170,12 @@ export class TauriBridge implements DesktopBridge {
       filters: [{ name: label, extensions: [extension] }],
     });
     if (!destination) return null;
-    const result = await call<{ path: string }>("export_flow", { root, destination, format });
+    const result = await call<{ path: string }>("export_flow", {
+      root,
+      destination,
+      format,
+      columns: columns ?? null,
+    });
     return result.path;
   }
 

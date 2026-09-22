@@ -114,8 +114,17 @@ export interface DesktopBridge {
   installUpdate(url: string): Promise<void>;
   /** Leave so the updater can replace the application. */
   quitForUpdate(): Promise<void>;
-  /** Write the flow as a table or a flow file; the user picks the place. Null when they cancel. */
-  exportFlow(root: string, format: FlowExportFormat, projectName: string): Promise<string | null>;
+  /**
+   * Write the flow as a table or a flow file; the user picks the place. Null
+   * when they cancel. `columns` names the table columns to write (the whole
+   * table when it is left out); a flow file always carries everything.
+   */
+  exportFlow(
+    root: string,
+    format: FlowExportFormat,
+    projectName: string,
+    columns?: string[],
+  ): Promise<string | null>;
   /** Make the workspace match a flow file the user picks. Null when they cancel. */
   importFlow(root: string): Promise<WorkspaceDocument | null>;
   exportLibrary(root: string, kind: LibraryKind, projectName: string): Promise<string | null>;

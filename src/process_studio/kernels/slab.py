@@ -7,12 +7,12 @@ edge is where the mask says it is, with no grid to converge. What it cannot
 do is anything the slab model has no room for: a partly directional etch, a
 patterned deposition, a selective polish.
 
-Heights differ between the two kernels and are translated here. The level-set
-project puts the wafer surface at z = 0 with the substrate below it, down to
-the project's ``z_min``. A DeviceFlow device stands on its floor at z = 0 and
-grows upward. The substrate is therefore ``|z_min|`` thick, and every height
-this module reports to the client has ``z_min`` added, so both kernels show a
-wafer surface at 0 and the same deposit at the same height.
+Heights are translated here. A project puts the wafer surface at z = 0 with
+the substrate below it, down to the project's ``z_min``. A DeviceFlow device
+stands on its floor at z = 0 and grows upward. The substrate is therefore
+``|z_min|`` thick, and every height this module reports to the client has
+``z_min`` added, so the client sees a wafer surface at 0 and a deposit at the
+height the project says.
 """
 
 from __future__ import annotations
@@ -483,7 +483,7 @@ def step_mask(
 
 
 def _etch_rates(recipe: Recipe, parameters: Mapping[str, Any]) -> dict[str, float]:
-    """The same rate table the level-set engine builds, from the same fields."""
+    """The per-material rate table, from the recipe and the step's overrides."""
     rates = {
         name: response.rate_um_per_min
         for name, response in recipe.material_responses.items()
@@ -506,6 +506,32 @@ def _etch_rates(recipe: Recipe, parameters: Mapping[str, Any]) -> dict[str, floa
     return rates
 
 
+def _deposit_thickness(parameters: Mapping[str, Any]) -> float:
+    """How thick a film this step grows, however the step spells it.
+
+    A deposition can be given its thickness outright, as the cycles and the
+    rate per cycle an ALD recipe is actually written in, or as a time at a
+    rate. Etching has always accepted a time and a rate; a deposition used
+    to demand ``target`` and report "thickness must be greater than zero"
+    for a step whose numbers were all there in another form.
+    """
+    for key in ("target", "thickness"):
+        if parameters.get(key) is not None:
+            return float(parameters[key])
+    cycles = parameters.get("cycles")
+    per_cycle = parameters.get("rate_per_cycle")
+    if cycles is not None and per_cycle is not None:
+        return float(cycles) * float(per_cycle)
+    minutes = parameters.get("time_min")
+    rate = parameters.get("rate")
+    if minutes is not None and rate is not None:
+        return float(minutes) * float(rate)
+    raise SlabError(
+        "a deposition step needs a target thickness, or cycles and a rate per "
+        "cycle, or a time and a rate"
+    )
+
+
 def _deposit(
     device: Device,
     step: ProcessStep,
@@ -519,16 +545,16 @@ def _deposit(
     material = str(parameters.get("material") or recipe.output_material or "")
     if not material:
         raise SlabError("a deposition step needs an output material")
-    thickness = float(parameters.get("target", parameters.get("thickness", 0.0)))
+    thickness = _deposit_thickness(parameters)
     if thickness <= 0.0:
         raise SlabError("deposition thickness must be greater than zero")
     _check_length(thickness, "A film", project)
     mode = str(parameters.get("mode", "conformal")).strip().lower()
     if mode in {"directional", "evaporation", "fill", "directional prism"}:
         raise SlabError(
-            f"the slab kernel cannot deposit in {mode!r} mode; it offers 'conformal' "
+            f"this kernel cannot deposit in {mode!r} mode; it offers 'conformal' "
             "(equal thickness on every surface) and 'planar' (from straight above, "
-            "no sidewall coverage). Use a level-set project for the other modes."
+            "sidewalls covered, nothing under an overhang)."
         )
     if mode not in {"conformal", "planar"}:
         raise SlabError(f"unknown deposition mode {mode!r}; expected 'conformal' or 'planar'")
@@ -602,9 +628,9 @@ def _etch(
     fraction = float(parameters.get("directional_fraction", 1.0))
     if fraction not in (0.0, 1.0):
         raise SlabError(
-            f"the slab kernel etches either straight down (directional_fraction 1) or "
-            f"isotropically (0); this step asks for {fraction:g}. Use a level-set "
-            "project for a mixed profile."
+            f"this kernel etches either straight down (directional_fraction 1) or "
+            f"isotropically (0); this step asks for {fraction:g}. A mixed profile "
+            "has to be built as the two steps it is made of."
         )
     if fraction == 1.0:
         etch = device.etch

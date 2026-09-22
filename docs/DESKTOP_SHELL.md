@@ -99,7 +99,7 @@ slab 工程有两档**膜模型**（fidelity），顶栏精度按钮旁边的按
 
 界面上有两处，含义完全不同：
 
-- **Project window**（同一个对话框）：x、y、z 范围，单位 µm。晶圆表面固定在 z = 0，所以 z 范围必须跨过 0；每轴最大 200 µm，超过多半是把 nm 当 µm 填了。改窗口和改分辨率一样丢弃全部已存结果；**衬底厚度就是窗口的深度 |zMin|**，想要 200 nm 的衬底就把 z min 填成 −0.2。`plan_grid` 和 `set_grid` 都接受 `bounds`。
+- **Project window**（同一个对话框）：x、y、z 范围，单位 µm。晶圆表面固定在 z = 0，所以 z 范围必须跨过 0；每轴最大 200 µm，超过多半是把 nm 当 µm 填了。改窗口和改分辨率一样丢弃全部已存结果。**衬底厚度就是窗口的深度 |zMin|**，所以对话框里直接有一个 **Substrate thickness** 字段（带 nm/µm 单位下拉），填 200 nm 就把 z min 写成 −0.2，两个数始终是同一个数的两种说法；摘要里也实时显示当前衬底多厚。`plan_grid` 和 `set_grid` 都接受 `bounds`。
 - **Geometry resolution**（顶栏间距按钮）：改的是几何采样，不是网格——这个内核没有场，所以对话框里没有节点数和内存估计。两个数：z 步长（保形沉积和各向同性刻蚀沿高度的采样步长）和 XY 弧线弦高。**垂直刻蚀、平面沉积和 CMP 与这两个数无关**，任何分辨率下逐位相同，所以调了它却什么也没变是正常的：变的只有圆角、斜面和各向同性前沿。应用后会丢弃全部已存结果，流程从裸片按新分辨率重放。
 - **Steps**（俯视图底栏，默认开）：俯视图按每列最上层材料的颜色画，所以看不出**同一种材料自己的台阶**——晶圆和刻进它的沟底都是同一块硅，同一个颜色。打开这个开关就在两者之间画一条线，颜色是该材料自己的颜色压暗到 45%（不是黑色：这张图是按材料读的，台阶是这个材料的特征，不是压在它上面的另一样东西）。**不同材料之间不画**，那里颜色本来就变了。RPC `get_top_view` 的 `steps: true|false`，命令行 `view top --no-steps`。
   - **slab 内核**是精确的矢量线：把同一材料里高度相同的碎片先合并，剩下的边界减掉这个材料的外轮廓，剩下的就正好是不同高度之间的边（`_step_lines`）。代价随可见高度数线性增长——一个 200 级的台阶金字塔实测 45 ms，而整张图本身就要几百 ms。
@@ -263,6 +263,18 @@ Ctrl+C / Ctrl+V 现在**跨标签、跨窗口**都能用，因为放上系统剪
 
 RPC：`create_branch`（root、branchId=要分的分支、stepId=分叉点、name，返回 `branchId` 加整份 document，并且已经把新分支设为活动分支）、`rename_branch`、`delete_branch`。
 
+## 参数、单位和 ALD 的写法
+
+**Step 和 Recipe 用同一批参数行**（`components/ParameterRows.tsx`）：工艺类型认得的参数各一行，`Add a parameter…` 加上没填的，流程文件或导入带来的别的键按 JSON 显示。Recipe 编辑器原来是一整块 JSON 文本框，现在和 Inspector 一样。参数表（哪种工艺有哪些参数、各自的单位和初值）在 `domain/parameters.ts` 一处。
+
+**单位是打字的人的事，不是流程的事**（`domain/units.ts`）：存下来的值永远是内核读的那个单位——长度 µm、时间 min、速率 µm/min、每周期 µm/cycle。字段旁边的下拉只改**显示和输入**：nm/µm、s/min/h、nm/min · µm/min · nm/s · µm/h、nm/cycle · µm/cycle。选择按参数记在 `localStorage` 里，所有显示这个参数的地方一起跟着。因为存的值没变，**换单位不会让步骤过期**——顺手一提，输入框只在数字真的变了时才上报（一个编辑会让这一步及其之后全部 stale，所以"点进去又出来"不能算编辑）。
+
+**ALD 按周期写**：工具名或分组里带 ALD/ALE/MLD 时（`cyclic()`），沉积的默认参数是 **Cycles** 和 **Rate per cycle**，而不是目标厚度——recipe 在 fab 里本来就是这么写的。换工具或换工艺类型时，**只有还是某一套默认值的参数会被换掉**；有人动过的数字一个都不碰。下面实时显示乘出来的膜厚（`240 × 0.9 nm = 216 nm`），省得手算。
+
+内核这边跟着放宽了：沉积的厚度可以是 `target`，也可以是 `cycles × rate_per_cycle`，也可以是 `time_min × rate`（刻蚀一直支持时间×速率）。以前只读 `target`，一个数字都填好的 ALD 步骤会得到"thickness must be greater than zero"，现在三种写法逐位等价（`_deposit_thickness`）。
+
+**Quick Sketch 的阵列会说"你把它们叠在一起了"**：`n > 1` 且节距小于图形自己的尺寸时，图形卡片下面写出是哪个方向、节距多少、图形多宽。这不是错误——一排叠起来的圆就是一条槽，梳齿也是这么画的——但它同样是节距填错的样子，而图上不一定看得出来（两个并起来的圆看着就是个槽），所以说出来，不拦着。判断在 `domain/sketch.ts`（矩形按 size、圆按直径、多边形按包围盒、路径再加上自己的线宽）。
+
 ## Step 与 Recipe Library
 
 Recipe 有一个 `group` 字段：Recipe Library 先按工艺类型（Deposition、Etch、CMP、No geometry change）分顶层，再按 `group` 路径分组，斜杠表示子组（`ALD/Oxides`）。在 Recipe 的 Group 框里输入名字即新建组，不需要单独管理组；Inspector 的模板下拉按同样的组分段。Excel 导出多一列 Group，导入时没有这列也能读。
@@ -271,7 +283,7 @@ Recipe 有一个 `group` 字段：Recipe Library 先按工艺类型（Deposition
 
 **步骤多选**：点选一步，Ctrl（Mac 上 Cmd）+点加选/去选，Shift+点选一段，Ctrl+A 全选，Esc 只留当前步。选中两步以上时列表上方出现操作条（Duplicate / ↑ / ↓ / Delete / ×），右键菜单也切换成批量版；Ctrl+C 把选中步骤放进应用内剪贴板（同时以 JSON 写到系统剪贴板），Ctrl+V 粘到当前步之后（新 id，状态 not run），Ctrl+D 原位复制，Delete 删除（会确认），Alt+↑/↓ 整体上下移动（被挡住的不动）。所有编辑都进撤销栈（30 步，Ctrl+Z / Ctrl+Y）。
 
-**导入导出**走 worker 的 `export_flow`（xlsx/csv 一行一步：序号、名字、类型、工具、材料、模式、目标、方向性、掩膜、保留侧、速率、停止层、其他参数 JSON、启用、状态；json/yaml 就是流程文件）、`import_flow`（等于 `flow apply`）、`export_library` / `import_library`（materials/tools 的 xlsx 或 csv，recipes 的 xlsx；导入按名字覆盖同名项）、`copy_workspace`（Save as：复制整个目录并把快照的绝对路径改到新目录）、`reveal_path`（系统文件管理器）。
+**导入导出**走 worker 的 `export_flow`（xlsx/csv 一行一步；json/yaml 就是流程文件）。**导出表格时先问要哪些列**：序号、名字、类型、工具、材料、模式、目标、方向性、掩膜、保留侧、速率、停止层、其他参数 JSON、启用、状态、循环，勾选之后按表格自己的顺序写；另有 All / Run sheet / Review 三个预设，选择记在 `localStorage` 里。列的清单由 worker 的 `describe`（`flowColumns`）给出，不在前端写死；RPC 是 `export_flow` 的 `columns`，不给就是全列。流程文件不受影响——它是工作目录本身，永远带全部内容、`import_flow`（等于 `flow apply`）、`export_library` / `import_library`（materials/tools 的 xlsx 或 csv，recipes 的 xlsx；导入按名字覆盖同名项）、`copy_workspace`（Save as：复制整个目录并把快照的绝对路径改到新目录）、`reveal_path`（系统文件管理器）。
 
 **自动更新**：首页检查到新版本后点 **Update now**，worker 的 `install_update` 下载本平台本版本的 zip（进度以日志事件回报）、解包到应用旁边的临时目录、写一个更新脚本（Windows 是 .cmd：等应用和 worker 两个进程退出，robocopy 覆盖，重新启动；macOS 是 shell 脚本：ditto 覆盖 .app 再 open），以分离进程启动它，然后壳调用 Tauri 的 `quit_for_update` 退出。源码运行没有可覆盖的安装，会拒绝。**Download only** 仍然只用浏览器下载。
 

@@ -1,15 +1,15 @@
 import { LoaderCircle, TriangleAlert, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { GridDefinition, GridEstimate, GridPlan, KernelDescription, WindowBounds } from "../types";
+import { UnitNumber } from "./UnitNumber";
+import type { GridDefinition, GridPlan, KernelDescription, WindowBounds } from "../types";
 
 interface GridEditorProps {
   grid: GridDefinition;
   kernel?: KernelDescription;
   resolutionUm: number | null;
-  /** The slab kernel's XY arc sagitta when set apart from the z step. */
+  /** The XY arc sagitta when it is set apart from the z step. */
   resolutionXyUm: number | null;
   presetsNm: number[];
-  maximumNodes: number | null;
   busy: boolean;
   onPlan: (targetSpacingNm: number, bounds: WindowBounds, xyNm: number | null) => Promise<GridPlan>;
   onApply: (targetSpacingNm: number, bounds: WindowBounds, xyNm: number | null) => void;
@@ -32,48 +32,41 @@ function sameBounds(a: WindowBounds, b: WindowBounds) {
 
 const PRESET_LABELS: Record<number, string> = {
   25: "Draft",
-  12.5: "Standard",
   10: "Standard",
-  6.25: "Accurate",
   2: "Accurate",
 };
 
-function gigabytes(bytes: number) {
-  return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
-}
-
-/** A kernel without a field reports the spacing alone, and costs no nodes. */
-function fieldEstimate(plan: GridPlan | undefined): GridEstimate | undefined {
-  if (!plan || plan.spacingRole !== "grid") return undefined;
-  return plan.estimate as GridEstimate;
-}
-
+/**
+ * The geometry resolution and the project window.
+ *
+ * The kernel keeps exact polygons, so neither number is a lattice: the
+ * resolution is how finely a curve is walked, and the window is the piece of
+ * wafer being built on -- including, below zero, the substrate itself. Both
+ * discard every stored result, which is why the dialog says what would
+ * change before it changes anything.
+ */
 export function GridEditor({
   grid,
   kernel,
   resolutionUm,
   resolutionXyUm,
   presetsNm,
-  maximumNodes,
   busy,
   onPlan,
   onApply,
   onClose,
 }: GridEditorProps) {
-  // On a gridless kernel the same number is the length geometry is resolved
-  // at, not a lattice: there is no node count and no ceiling to respect.
-  const onGrid = (kernel?.spacingRole ?? "grid") === "grid";
-  const currentNm = (onGrid ? grid.spacingUm : resolutionUm ?? grid.spacingUm) * 1000;
+  const currentNm = (resolutionUm ?? grid.spacingUm) * 1000;
   const [spacing, setSpacing] = useState(String(Number(currentNm.toFixed(4))));
-  // The XY arc sagitta of the slab kernel: empty follows the z step.
+  // The XY arc sagitta: empty follows the z step.
   const [spacingXy, setSpacingXy] = useState(
     resolutionXyUm === null ? "" : String(Number((resolutionXyUm * 1000).toFixed(4))),
   );
   const xyNm = useMemo((): number | null | undefined => {
-    if (onGrid || spacingXy.trim() === "") return null;
+    if (spacingXy.trim() === "") return null;
     const value = Number(spacingXy);
     return Number.isFinite(value) && value > 0 ? value : undefined;
-  }, [onGrid, spacingXy]);
+  }, [spacingXy]);
   // The window as text, so a half-typed "-0." does not snap to a number.
   const [window_, setWindow] = useState<Record<keyof WindowBounds, string>>(() => {
     const current = boundsOf(grid);
@@ -92,13 +85,14 @@ export function GridEditor({
   const [planning, setPlanning] = useState(false);
   const [error, setError] = useState<string>();
 
-  // The spacing has to divide every project extent, so the worker searches for
-  // the nearest lattice that does. Ask it on every edit instead of guessing.
+  // What a value would mean is the worker's answer, not a guess here: it
+  // knows whether this is the resolution and window already in use, and
+  // applying one that changes nothing would still throw the results away.
   useEffect(() => {
     const value = Number(spacing);
     if (!Number.isFinite(value) || value <= 0) {
       setPlan(undefined);
-      setError("Enter a spacing in nanometres.");
+      setError("Enter a resolution in nanometres.");
       return;
     }
     if (!bounds) {
@@ -133,17 +127,21 @@ export function GridEditor({
     };
   }, [spacing, bounds, xyNm, onPlan]);
 
-  const estimate = fieldEstimate(plan);
   const spacingNm = plan?.estimate.spacingNm;
-  const applicable = !!plan && !!bounds && plan.withinLimit && (!plan.unchanged || windowChanged) && !busy;
+  const applicable = !!plan && !!bounds && (!plan.unchanged || windowChanged) && !busy;
+  // The substrate is the part of the window below the wafer surface, so its
+  // thickness is z min -- the one number somebody asking for a 200 nm wafer
+  // is actually after.
+  const substrateUm = bounds ? -bounds.zMin : null;
+  const zCrossesZero = bounds ? bounds.zMin < 0 && bounds.zMax > 0 : true;
 
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Simulation grid">
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Geometry resolution">
       <div className="modal-card grid-modal">
         <header className="modal-header">
           <div>
             <span className="eyebrow">NUMERICS</span>
-            <h2>{onGrid ? "Simulation grid" : "Geometry resolution"}</h2>
+            <h2>Geometry resolution</h2>
           </div>
           <button type="button" className="icon-button" aria-label="Close" onClick={onClose}>
             <X size={16} />
@@ -151,9 +149,7 @@ export function GridEditor({
         </header>
 
         <div className="modal-body">
-          <span className="section-label">
-            {onGrid ? "TARGET SPACING" : "TARGET RESOLUTION"}
-          </span>
+          <span className="section-label">TARGET RESOLUTION</span>
           <div className="chip-row">
             {presetsNm.map((preset) => (
               <button
@@ -168,7 +164,7 @@ export function GridEditor({
           </div>
 
           <label className="field-row">
-            <span>{onGrid ? "Spacing" : "Resolution"}</span>
+            <span>Resolution</span>
             <span className="number-input-wrap">
               <input
                 autoFocus
@@ -180,33 +176,32 @@ export function GridEditor({
               <span>nm</span>
             </span>
             <small>
-              {onGrid
-                ? "Project bounds are preserved, so the closest spacing that divides every extent is used. This is the solver grid, not image resolution."
-                : `${kernel?.name ?? "This kernel"} keeps exact geometry and has no grid. This is the z step it samples a conformal film or an isotropic etch in: the height of the staircase on a rounded shoulder. Planar deposition, vertical etching and CMP are exact whatever it is.`}
+              {kernel?.name ?? "This kernel"} keeps exact geometry and has no grid. This is the z
+              step it samples a conformal film or an isotropic etch in: the height of the staircase
+              on a rounded shoulder. Planar deposition, vertical etching and CMP are identical to
+              the last bit whatever it is, so a flow made of those will not change when this does.
             </small>
           </label>
 
-          {!onGrid && (
-            <label className="field-row">
-              <span>XY arcs</span>
-              <span className="number-input-wrap">
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  placeholder="same as z"
-                  value={spacingXy}
-                  onChange={(event) => setSpacingXy(event.target.value)}
-                />
-                <span>nm</span>
-              </span>
-              <small>
-                How far a rounded corner in plan may deviate from a true arc: the chord sagitta,
-                which sets the vertex count of every ring. Leave it empty to follow the z step.
-                A fine z step with a coarser XY value shrinks the staircase without making every
-                ring more expensive.
-              </small>
-            </label>
-          )}
+          <label className="field-row">
+            <span>XY arcs</span>
+            <span className="number-input-wrap">
+              <input
+                type="text"
+                inputMode="decimal"
+                placeholder="same as z"
+                value={spacingXy}
+                onChange={(event) => setSpacingXy(event.target.value)}
+              />
+              <span>nm</span>
+            </span>
+            <small>
+              How far a rounded corner in plan may deviate from a true arc: the chord sagitta,
+              which sets the vertex count of every ring. Leave it empty to follow the z step.
+              A fine z step with a coarser XY value shrinks the staircase without making every
+              ring more expensive.
+            </small>
+          </label>
 
           <span className="section-label">PROJECT WINDOW (µm)</span>
           <div className="window-grid">
@@ -230,18 +225,32 @@ export function GridEditor({
               </label>
             ))}
           </div>
+
+          <label className="field-row">
+            <span>Substrate thickness</span>
+            <UnitNumber
+              field="substrate_thickness"
+              unit="µm"
+              value={substrateUm}
+              onCommit={(thickness) =>
+                setWindow({ ...window_, zMin: String(Number((-Math.abs(thickness)).toPrecision(12))) })
+              }
+            />
+            <small>
+              The same number as z min, from the other side: the wafer is as thick as the window is
+              deep. Type 200 nm here and z min becomes −0.2.
+            </small>
+          </label>
+
           <small className="window-note">
-            The wafer surface is z = 0: below it is substrate down to z min, above it is room for
-            what the flow builds. Make z max taller for a thicker stack.
-            {onGrid ? "" : " The slab wafer is as thick as the window is deep."}
+            The wafer surface is z = 0: below it is substrate, above it is room for what the flow
+            builds. Make z max taller for a thicker stack.
           </small>
 
           <dl className="grid-summary">
             <dt>Current</dt>
             <dd>
-              {onGrid
-                ? `${currentNm.toFixed(3)} nm · ${grid.nx}×${grid.ny}×${grid.nz}`
-                : `z ${currentNm.toFixed(3)} nm · XY ${((resolutionXyUm ?? currentNm / 1000) * 1000).toFixed(3)} nm`}
+              {`z ${currentNm.toFixed(3)} nm · XY ${((resolutionXyUm ?? currentNm / 1000) * 1000).toFixed(3)} nm`}
             </dd>
             <dt>Proposed</dt>
             <dd>
@@ -249,24 +258,18 @@ export function GridEditor({
                 <LoaderCircle className="spin" size={11} />
               ) : spacingNm === undefined ? (
                 "—"
-              ) : estimate ? (
-                `${estimate.spacingNm.toFixed(3)} nm · ${estimate.shape.join("×")}`
               ) : (
                 `z ${spacingNm.toFixed(3)} nm · XY ${(
                   (plan?.estimate as { spacingXyNm?: number } | undefined)?.spacingXyNm ?? spacingNm
                 ).toFixed(3)} nm`
               )}
             </dd>
-            {onGrid && (
-              <>
-                <dt>Nodes</dt>
-                <dd>{estimate ? estimate.nodeCount.toLocaleString() : "—"}</dd>
-                <dt>Saved state</dt>
-                <dd>{estimate ? gigabytes(estimate.stateBytes) : "—"}</dd>
-                <dt>Memory to run</dt>
-                <dd>{estimate ? gigabytes(estimate.recommendedBytes) : "—"}</dd>
-              </>
-            )}
+            <dt>Substrate</dt>
+            <dd>
+              {substrateUm === null
+                ? "—"
+                : `${Number((substrateUm * 1000).toPrecision(6))} nm thick`}
+            </dd>
           </dl>
 
           {error && (
@@ -276,41 +279,31 @@ export function GridEditor({
             </div>
           )}
 
-          {plan && !plan.withinLimit && estimate && (
+          {!zCrossesZero && (
             <div className="error-box">
               <TriangleAlert size={13} />
               <span>
-                This grid needs {estimate.nodeCount.toLocaleString()} nodes; the ceiling is{" "}
-                {(maximumNodes ?? 0).toLocaleString()}. Use a coarser spacing or smaller project
-                bounds.
+                The z range has to cross zero: the substrate is what lies below the wafer surface,
+                and the flow builds above it.
               </span>
             </div>
           )}
 
           {plan?.unchanged && !windowChanged && (
-            <p className="numerics-note">
-              This is the {onGrid ? "grid" : "resolution"} already in use.
-            </p>
+            <p className="numerics-note">This is the resolution already in use.</p>
           )}
 
           <div className="warning-box">
             <TriangleAlert size={13} />
             <span>
-              {onGrid
-                ? "Changing the grid discards every stored result: the flow is replayed from the bare wafer on the new grid rather than interpolating the old one."
-                : "Changing the resolution discards every stored result: the flow is replayed from the bare wafer at the new resolution."}
+              Changing the resolution or the window discards every stored result: the flow is
+              replayed from the bare wafer at the new resolution.
             </span>
           </div>
         </div>
 
         <div className="modal-actions">
-          <span>
-            {applicable
-              ? "Ready to apply"
-              : onGrid
-                ? "Pick a spacing that fits"
-                : "Pick a different resolution"}
-          </span>
+          <span>{applicable ? "Ready to apply" : "Pick a different resolution or window"}</span>
           <button type="button" className="secondary-button" onClick={onClose}>
             Cancel
           </button>
@@ -320,7 +313,7 @@ export function GridEditor({
             disabled={!applicable}
             onClick={() => bounds && xyNm !== undefined && onApply(Number(spacing), bounds, xyNm)}
           >
-            {onGrid ? "Apply grid" : "Apply resolution"}
+            Apply resolution
           </button>
         </div>
       </div>
