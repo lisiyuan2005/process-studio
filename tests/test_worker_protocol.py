@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import shutil
 import os
 import time
 
@@ -1219,6 +1220,62 @@ def test_the_file_menu_methods_export_import_and_copy(tmp_path):
         call("copy_workspace", root=root, destination=root)
     with pytest.raises(InvalidRequest):
         call("export_library", root=root, kind="sketches", destination=str(tmp_path / "x.xlsx"))
+
+
+def test_a_workspace_without_its_snapshot_files_runs_again(tmp_path):
+    """What a zipped-and-sent project looks like: the flow, without results.
+
+    The database remembers which step produced which file; the files are a
+    folder beside it that an archive, a cleanup or a copy can leave behind.
+    That used to surface as a bare FileNotFoundError from the middle of a
+    run -- for a workspace that is entirely intact as a flow.
+    """
+    root = str(tmp_path / "sent")
+    document = call("create_workspace", root=root, name="Sent", kernel="slab")
+    branch = document["branches"][0]
+    first, second = branch["steps"][0]["id"], branch["steps"][1]["id"]
+    call("run_flow", root=root, branchId=branch["id"], throughStepId=second)
+    assert call("open_workspace", root=root)["stepStatuses"][branch["id"]][first] == "clean"
+
+    # The folder the results live in does not travel with the database.
+    snapshots = tmp_path / "sent" / "process_studio_snapshots"
+    assert list(snapshots.glob("*"))
+    shutil.rmtree(snapshots)
+
+    # A view of a step whose file is gone says so, in words.
+    with pytest.raises(InvalidRequest, match="missing"):
+        call("get_section", root=root, branchId=branch["id"], stepId=first, axis="y")
+
+    # And the flow simply runs again.
+    result = call("run_flow", root=root, branchId=branch["id"], throughStepId=second)
+    assert result["executedStepIds"] == [first, second]
+    assert call("get_section", root=root, branchId=branch["id"], stepId=first, axis="y")["image"]
+
+
+def test_a_step_that_fails_says_so_in_the_log_as_well(tmp_path):
+    """The window that was told may be closed; the log is what is left."""
+    root = str(tmp_path / "failing")
+    document = call("create_workspace", root=root, name="Failing", kernel="slab")
+    branch = document["branches"][0]
+    steps = branch["steps"]
+    # A deposition with a thickness taller than the window is refused by the
+    # kernel, which is a step failing in the middle of a run.
+    steps[0]["processType"] = "deposit"
+    steps[0]["name"] = "Too thick"
+    steps[0]["outputMaterial"] = "Si"
+    steps[0]["parameters"] = {"target": 40.0, "mode": "planar"}
+    call("save_document", root=root, document=document)
+    with pytest.raises(Exception):
+        call("run_flow", root=root, branchId=branch["id"], throughStepId=steps[0]["id"])
+
+    # The log table the Process Log panel and `process-studio log` read.
+    with open_repository(Path(root)).connect() as connection:
+        rows = connection.execute(
+            "SELECT level, message FROM process_logs ORDER BY id DESC LIMIT 5"
+        ).fetchall()
+    failures = [row for row in rows if row["level"] == "ERROR"]
+    assert failures, [dict(row) for row in rows]
+    assert "Too thick failed" in failures[0]["message"]
 
 
 def test_the_experiment_values_travel_but_never_reach_the_kernel(tmp_path):

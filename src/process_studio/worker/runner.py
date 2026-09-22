@@ -202,8 +202,18 @@ def run_flow(
         if redo_from is not None and index >= redo_from:
             reusable = False
         if reusable and stored.get(key) == digest:
+            # A step counts as done only when its result is on disk. The
+            # digest can outlive the file -- a workspace zipped without its
+            # snapshot folder, a folder cleaned out -- and the in-memory
+            # state cache can answer for a file that is no longer there, so
+            # the file itself is what is asked. Recompute rather than fail:
+            # the flow is all there.
             try:
-                state = _load_state(kernel, repository.snapshot_path(branch.id, key))
+                path = repository.snapshot_path(branch.id, key)
+            except KeyError:
+                path = None
+            if path is not None and path.is_file():
+                state = _load_state(kernel, path)
                 cached.append(step.id)
                 emit(
                     {
@@ -215,9 +225,7 @@ def run_flow(
                     }
                 )
                 continue
-            except KeyError:
-                # The digest survived but the snapshot file did not; recompute.
-                reusable = False
+            reusable = False
         reusable = False
         emit(
             {
@@ -229,16 +237,31 @@ def run_flow(
             }
         )
         started_step = time.perf_counter()
-        state = kernel.run_step(
-            state,
-            step,
-            project=project,
-            recipes=by_id,
-            sketches=sketches,
-            logger=logger,
-            materials=materials,
-            should_cancel=cancelled,
-        )
+        try:
+            state = kernel.run_step(
+                state,
+                step,
+                project=project,
+                recipes=by_id,
+                sketches=sketches,
+                logger=logger,
+                materials=materials,
+                should_cancel=cancelled,
+            )
+        except Cancelled:
+            raise
+        except Exception as error:
+            # The client is told, but the client is a window that gets
+            # closed. Write it down too, so reopening the project still
+            # says which step failed and what it said.
+            repository.log(
+                project.id,
+                f"{step.name} failed: {error}",
+                step_id=step.id,
+                level="ERROR",
+                elapsed_ms=(time.perf_counter() - started_step) * 1000.0,
+            )
+            raise
         repository.save_snapshot(
             project.id,
             branch.id,
@@ -348,6 +371,14 @@ def state_for_step(
         raise InvalidRequest(
             "This step has no stored result yet in the project's current fidelity. Run the flow first."
         ) from error
+    if not path.is_file():
+        # The database remembers the result; the file is not there. A
+        # workspace copied or zipped without its snapshot folder looks
+        # exactly like this, and so does one whose folder was cleaned out.
+        raise InvalidRequest(
+            f"The stored result for this step is missing ({path.name}). The flow is "
+            "intact -- run it again to rebuild the results."
+        )
     return _load_state(kernel, path), repository, project, kernel
 
 
