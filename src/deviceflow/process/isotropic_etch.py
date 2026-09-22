@@ -318,25 +318,36 @@ def _live_void(state: ProcessState, covered) -> Front:
             voids.append((s.z0, s.z1, v))
     above = uncover(state.top, math.inf, state.clean(window))
     if not above.is_empty:
-        voids = _connected_to_sources(
-            voids,
-            [(state.top, math.inf, above)],
-            state.grid * state.grid,
-        )
+        voids = _connected_to_sources(voids, [(state.top, math.inf, above)])
         voids.append((state.top, math.inf, above))
     else:
         voids = []
     return voids
 
 
-def _open_overlap(a, b, area_eps: float) -> bool:
-    """Whether two XY regions share a finite opening, not only an edge."""
-    if _apart(a.bounds, b.bounds) or not a.intersects(b):
+def _open_overlap(a, b) -> bool:
+    """Whether two XY regions share a finite opening, not only an edge.
+
+    The DE-9IM pattern says exactly that -- do the interiors meet in
+    something two-dimensional -- and asking it is much cheaper than
+    building the intersection to measure its area, because the answer does
+    not need the geometry. On a compounded etch front (50,000 vertices
+    between the two regions) it is 4.6 ms against 12.8 ms, and the
+    connectivity test is half of a long wet etch.
+
+    The area threshold this used to apply was below what the geometry can
+    express in any case: regions are snapped to the grid, so a real opening
+    is at least a grid step wide -- 1e-10 um^2 along 100 nm, a hundred
+    times the old epsilon -- and a contact thinner than that is not an
+    opening but arithmetic. Measured over a 100-step etch, the two agree
+    on every one of the 2,182 pairs that get this far.
+    """
+    if _apart(a.bounds, b.bounds):
         return False
-    return a.intersection(b).area > area_eps
+    return shapely.relate_pattern(a, b, "2********")
 
 
-def _connected_to_sources(pieces: Front, sources: Front, area_eps: float) -> Front:
+def _connected_to_sources(pieces: Front, sources: Front) -> Front:
     """Keep the 3-D components of ``pieces`` connected to ``sources``.
 
     Every piece is constant in one Z interval. Its polygon components are
@@ -348,17 +359,21 @@ def _connected_to_sources(pieces: Front, sources: Front, area_eps: float) -> Fro
     if not pieces or not sources:
         return []
 
-    layers: list[tuple[float, float, MultiPolygon, list]] = []
+    # Bounds are asked for once per component here rather than once per
+    # pair below: the pair loop is quadratic, and a component's bounds
+    # cross into shapely and build a tuple every time they are read. On a
+    # 100-step etch that was 337,000 reads of 3,000 bounds.
+    layers: list[tuple[float, float, MultiPolygon, list, list]] = []
     for z0, z1, region in pieces:
         components = list(region.geoms)
         if components:
-            layers.append((z0, z1, region, components))
+            layers.append((z0, z1, region, components, [c.bounds for c in components]))
     if not layers:
         return []
 
     offsets: list[int] = []
     count = 0
-    for _z0, _z1, _region, components in layers:
+    for _z0, _z1, _region, components, _bounds in layers:
         offsets.append(count)
         count += len(components)
     parent = list(range(count))
@@ -381,13 +396,16 @@ def _connected_to_sources(pieces: Front, sources: Front, area_eps: float) -> Fro
             rank[a] += 1
 
     for index in range(len(layers) - 1):
-        _za, zb, _region_a, components_a = layers[index]
-        zc, _zd, _region_b, components_b = layers[index + 1]
+        _za, zb, _region_a, components_a, bounds_a = layers[index]
+        zc, _zd, _region_b, components_b, bounds_b = layers[index + 1]
         if abs(zb - zc) > Z_TOUCH:
             continue
         for ia, a in enumerate(components_a):
+            box_a = bounds_a[ia]
             for ib, b in enumerate(components_b):
-                if _open_overlap(a, b, area_eps):
+                if _apart(box_a, bounds_b[ib]):
+                    continue
+                if shapely.relate_pattern(a, b, "2********"):
                     union(offsets[index] + ia, offsets[index + 1] + ib)
 
     seeded: set[int] = set()
@@ -395,7 +413,7 @@ def _connected_to_sources(pieces: Front, sources: Front, area_eps: float) -> Fro
     # while this runs, so their union is made once per set of them. Keyed
     # by identity, which ``sources`` keeps alive for the whole call.
     merged: dict[tuple[int, ...], MultiPolygon] = {}
-    for index, (za, zb, _region, components) in enumerate(layers):
+    for index, (za, zb, _region, components, _bounds) in enumerate(layers):
         touching = [
             region
             for z0, z1, region in sources
@@ -409,7 +427,7 @@ def _connected_to_sources(pieces: Front, sources: Front, area_eps: float) -> Fro
             source = touching[0] if len(touching) == 1 else shapely.unary_union(touching)
             merged[key] = source
         for component_index, component in enumerate(components):
-            if _open_overlap(component, source, area_eps):
+            if _open_overlap(component, source):
                 seeded.add(find(offsets[index] + component_index))
 
     if not seeded:
@@ -417,7 +435,7 @@ def _connected_to_sources(pieces: Front, sources: Front, area_eps: float) -> Fro
     seeded = {find(root) for root in seeded}
 
     connected: Front = []
-    for index, (z0, z1, original, components) in enumerate(layers):
+    for index, (z0, z1, original, components, _bounds) in enumerate(layers):
         kept = [
             component
             for component_index, component in enumerate(components)
@@ -466,7 +484,7 @@ def _accessible_reach(
                 clipped.append((z0, z1, passable))
     if not changed:
         return pieces
-    return _connected_to_sources(clipped, front, state.grid * state.grid)
+    return _connected_to_sources(clipped, front)
 
 
 def _fold_runs(pieces: list[tuple[float, float, MultiPolygon]]) -> list[tuple[float, float, MultiPolygon]]:

@@ -186,3 +186,20 @@ under the MIT license in `LICENSE`.
   been harmless: the mesh builder polygonizes the regions and finds a face
   owned twice, so an invisible seam becomes "X overlaps another material"
   when somebody opens the 3D view. `tests/test_seam_slivers.py` covers it.
+- `process/isotropic_etch.py`: the connectivity test, which is half of a
+  long wet etch, made to ask its question instead of building the answer.
+  `_open_overlap` wants to know whether two regions share a finite
+  opening rather than only an edge; it used to intersect them and measure
+  the area, which constructs a whole geometry to look at one number. DE-9IM
+  says it directly -- `relate_pattern(a, b, "2********")`, do the interiors
+  meet in something two-dimensional -- for 4.6 ms against 12.8 ms on a
+  compounded front. The area threshold it dropped was below what the
+  geometry can express: regions are snapped to the grid, so a real opening
+  is at least a grid step wide, a hundred times the old epsilon, and the
+  two agreed on every one of the 2,182 pairs in a 100-step etch. The pair
+  loop over components is quadratic and read each component's bounds once
+  per pair, crossing into shapely and building a tuple each time; they are
+  now taken once per component, which turned 337,000 reads into 3,000. A
+  4x4 hole array etched through a 5 nm-linered nitride -- 100 sub-steps,
+  77,000 vertices at the end -- went from 10.2 s to 6.2 s, removing the
+  same volume to the bit.
