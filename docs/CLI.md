@@ -6,14 +6,13 @@
 
 ```bash
 pip install -e .            # 在仓库根目录；装完就有 process-studio 命令
-pip install -e ".[yaml]"    # 流程文件要用 YAML 的话
 ```
 
 打包好的桌面版也带着它：worker 二进制不带参数时是 RPC 服务，带参数时就是这个命令行。桌面顶栏的 **CLI** 按钮打开一个控制台：把命令（一行一条）或整个流程文件粘进去点 Run，就在桌面打开的工作目录里执行，界面跟着更新；下面还把当前状态对应的常用命令连同程序的完整路径列出来，点 Copy 粘到终端就能跑。
 
 ```bash
 # macOS
-"/Applications/Process Studio Slab.app/Contents/Resources/worker/process-studio-worker" steps list
+"/Applications/Process Studio.app/Contents/Resources/worker/process-studio-worker" steps list
 # Windows
 .\resources\worker\process-studio-worker.exe steps list
 ```
@@ -23,7 +22,7 @@ pip install -e ".[yaml]"    # 流程文件要用 YAML 的话
 大多数命令要在一个工作目录里执行。查找顺序：`--root DIR`，环境变量 `PROCESS_STUDIO_ROOT`，然后从当前目录向上找带 `process_studio.sqlite3` 的目录（和 git 找仓库一样）。
 
 ```bash
-process-studio new ~/devices/dram --kernel slab --name "1T1C"
+process-studio new ~/devices/dram --name "1T1C"
 cd ~/devices/dram
 ```
 
@@ -31,20 +30,20 @@ cd ~/devices/dram
 
 | 命令 | 作用 |
 | --- | --- |
-| `new DIR [--name N] [--kernel slab\|levelset]` | 新建工作目录；内核只能在这里选 |
-| `kernels` | 这份构建带的内核 |
+| `new DIR [--name N]` | 新建工作目录 |
+| `kernels` | 这份构建带的内核（只有 slab；`0.9.8` 之后 level set 已删除，用它建的工程会被拒绝并说明去哪个版本打开）|
 | `cores` | 3D 网格能用几个核；池起不来时说明原因（见桌面文档「网格建在几个核上」）|
 | `info` | 工程、内核、窗口、精度、步骤数、材料 |
 | `status` | 每步的状态 |
 | `steps list` / `steps show STEP` | 步骤列表 / 一步的全部设置 |
-| `steps add TYPE [--after STEP\|--before STEP] [选项]` | 加一步；TYPE 是 deposit / etch / cmp / no_geometry / oxidation（slab 内核） |
+| `steps add TYPE [--after STEP\|--before STEP] [选项]` | 加一步；TYPE 是 deposit / etch / cmp / no_geometry / oxidation |
 | `steps set STEP [选项]` | 改一步 |
 | `steps rm STEP...` / `dup STEP` / `mv STEP POS` | 删除 / 原位复制 / 移到第 POS 位 |
 | `steps skip STEP...` / `include STEP...` | 跳过 / 放回运行 |
 | `steps loop STEP... [--repeat N] [--name NAME]` / `steps unloop STEP` | 把相邻的几步做成重复 N 次的循环（这几步是第 1 次，后面接上 N−1 份副本）/ 拆开循环，各次留下成为普通步骤 |
 | `run [--through STEP] [--force]` | 运行；结果还有效的步骤直接复用 |
-| `fidelity [detailed\|simplified]` | 看或切换 slab 内核的膜模型：detailed 圆角、按分辨率采样；simplified 直角、每个平面一段，快得多。两档的结果分开保存，切回去不用重算 |
-| `window [--x A B] [--y A B] [--z A B] [--spacing NM] [--spacing-xy NM]` | 看或改工程窗口和精度（改动会丢弃全部结果）；slab 工程 `--spacing` 是 z 步长，`--spacing-xy` 是 XY 弧线弦高，0 表示跟随 z |
+| `fidelity [detailed\|simplified]` | 看或切换膜模型：detailed 圆角、按分辨率采样；simplified（默认）直角、每个平面一段，快得多。两档的结果分开保存，切回去不用重算 |
+| `window [--x A B] [--y A B] [--z A B] [--spacing NM] [--spacing-xy NM]` | 看或改工程窗口和几何分辨率（改动会丢弃全部结果）：`--spacing` 是 z 步长，`--spacing-xy` 是 XY 弧线弦高（0 表示跟随 z）；衬底厚度就是窗口的深度，`--z -0.2 0.4` 就是 200 nm 的衬底 |
 | `view section --step STEP [--axis x\|y --at UM \| --line X0 Y0 X1 Y1] -o cut.png` | 截面 PNG |
 | `view top --step STEP [--no-steps] -o top.png` | 俯视图 PNG，按每点最上层材料的颜色画；同一材料自己的高度分界默认画一条压暗的线，`--no-steps` 关掉 |
 | `view mesh --step STEP -o step.glb` | 3D 表面，.glb / .gltf / .obj / .stl / .ply |
@@ -88,15 +87,15 @@ done
 
 ## 流程文件
 
-`flow dump flow.yaml` 把工程写成下面这样；`flow apply flow.yaml` 反过来（`cat flow.json | process-studio flow apply -` 也行）。`apply` 时步骤按位置保留身份：只改了第 4 步参数的文件，重新运行时前 3 步直接复用，和在桌面里改一样。`--root DIR` 指向还不存在的目录时会先按文件里的 `kernel` 建好工作目录。
+`flow dump flow.yaml` 把工程写成下面这样；`flow apply flow.yaml` 反过来（`cat flow.json | process-studio flow apply -` 也行）。`apply` 时步骤按位置保留身份：只改了第 4 步参数的文件，重新运行时前 3 步直接复用，和在桌面里改一样。`--root DIR` 指向还不存在的目录时会先建好工作目录。
 
 ```yaml
 name: 1T1C
 kernel: slab
 window: {x: [-0.8, 0.8], y: [-0.8, 0.8], z: [-0.8, 0.4]}
-resolution_nm: 10          # slab 的 z 步长；level set 内核写 spacing_nm
-resolution_xy_nm: 10       # slab 的 XY 弧线弦高，省略则跟随 z
-fidelity: detailed         # slab 的膜模型：detailed 或 simplified
+resolution_nm: 10          # z 步长（保形沉积和各向同性刻蚀沿高度的采样）
+resolution_xy_nm: 10       # XY 弧线弦高，省略则跟随 z
+fidelity: detailed         # 膜模型：detailed 或 simplified（默认）
 materials:
   - {name: W, category: Metal, color: "#7f8790"}
 sketches:
@@ -118,6 +117,6 @@ steps:
 
 循环（`loop` 条目）在工作目录里展开成真实的步骤：每一次都是列表里的一步，带着 `loop: {id, name, repeat, iteration}` 标记，`steps list` 的 Loop 列显示「ON pair 2/4」。`flow dump` 把同一个循环折回一个条目（只写第 1 次）；文件里循环可以嵌套，展开时内层并入外层。
 
-`oxidation`（slab 内核）：`rates` 里列出会被氧化的材料，`parameters.target` 是被消耗的厚度（按各材料的 rate 比例），`material` 是生成的氧化物（默认 SiO2）。露出的表面向内 `target` 那一层原地变成氧化物，不模拟体积膨胀。
+`oxidation`：`rates` 里列出会被氧化的材料，`parameters.target` 是被消耗的厚度（按各材料的 rate 比例），`material` 是生成的氧化物（默认 SiO2）。露出的表面向内 `target` 那一层原地变成氧化物，不模拟体积膨胀。
 
 JSON 和 TOML 也能读；`dump` 写 JSON 或 YAML。

@@ -2,56 +2,31 @@
 
 ## 自动化测试
 
-运行 `python -m pytest -q`。测试覆盖：
+```bash
+python -m pytest -q          # 207 项
+cd desktop && npm run test   # 77 项
+```
 
-- Level Set：Godunov 梯度、平面平移、圆形扩张/收缩、重初始化。
-- 3D Etch：mask 保护、目标深度、干法方向性、混合刻蚀、湿法 undercut。
-- Deposition：顶面/底面/侧壁等厚、CD 缩小、reentrant pinch-off 与封闭空洞。
-- Multi-material：覆盖优先级、选择性响应、stop material、方向性图形沉积、CMP。
-- Layout：Quick Sketch 四种图形、布尔运算、阵列、JSON round-trip、GDS layer/datatype 栅格化。
-- Library：简化 Excel Recipe 导入导出。
-- Persistence：项目、分支、共享快照、级联失效和无引用文件删除。
-- Engine：Recipe + Step override、mask 解析、多步运行和快照记录。
-- Slab 内核（`tests/test_slab_kernel.py`）：裸片厚度与高度换算、保形膜在沟槽内外都等厚、各向同性刻蚀的 undercut 宽度、CMP 平面按工程高度、状态存档往返、单步不修改输入状态，以及混合刻蚀剖面和图形化沉积被拒绝而不是被近似。
+Python 侧按文件覆盖：
+
+- **slab 内核**（`tests/test_slab_kernel.py`，27 项）：裸片厚度与高度换算、保形膜在沟槽内外都等厚、各向同性刻蚀的 undercut、CMP 平面按工程高度、状态存档往返、单步不修改输入状态、带掩膜的沉积（lift-off 语义，存档后仍然成立）、z 与 XY 两个分辨率各自的作用、俯视图看穿某种材料、氧化只吃该吃的材料，以及混合刻蚀剖面和图形化沉积**被拒绝而不是被近似**。
+- **各向同性刻蚀**（`tests/test_isotropic_etch_speed.py`，18 项）：湿法前沿不穿过封闭的横向屏障、密封空洞不是刻蚀源、开壳之后才刻到目标；以及那轮提速本身的不变量——同一半径的膨胀只算一次、共用 reach 的相邻采样只施加一次、区域"几乎相同"的容差、深度对采样区间的约束、方形前沿与切片密度无关。
+- **3D 显示网格**（`tests/test_mesh_builder.py`、`tests/test_mesh_triangulation.py`、`tests/test_mesh_pool.py`，30 项）：每个面记住自己贴着哪种材料、看不见的面不进视图、自由表面与完整表面分开缓存、两种三角化都覆盖整张面、ear clipping 掉顶点时回退而不是失败、多进程池起不来时只是变慢。
+- **撤回**（`tests/test_cancellation.py`，4 项）：没装检查时没人能停下一步、沉积中途放弃、检查只在这一次调用里生效、被停的步骤报告 `Cancelled`。
+- **版图与库**（`tests/test_layout_inputs.py`、`tests/test_libraries.py`）：Quick Sketch 四种图形、布尔运算、阵列、JSON round-trip、GDS layer/datatype 栅格化、简化 Excel Recipe 往返。
+- **持久化**（`tests/test_storage.py`、`tests/test_shared_library.py`，15 项）：工程/分支/共享快照、级联失效、无引用文件删除、工作目录搬走之后结果仍然找得到；共享库（材料/工具/Recipe 在用户目录里一份）的身份戳、删除不复活、多窗口不互相覆盖。
+- **更新**（`tests/test_update.py`，13 项）：平台对应的资产名、版本号数值比较、把最新 release 和当前构建对照（版本号可以往下走，见下）、解压到应用旁边、失败留下的目录下次清掉、只信系统信任库并在取不到时回退到打包的 CA。
+- **打包**（`tests/test_packaging.py`）：把 `scipy` / `skimage` / `skfmm` 的 import 变成失败（它们是 level set 的求解与建面，已经随它一起不装了），再从零重新 import worker 启动时会加载的每个模块并发一次 `describe`。谁不小心在模块顶层 import 了它们，这里就会红，而不是等到打包版在真机上炸。
+
+**版本号重置**（`0.9.8` → `0.1.0`）：更新检查因此不能只比"更大"。`describe_release` 同时给出 `available`（最新 release 与当前构建**不同**）和 `newer`（严格更大），界面用前者，所以从 `0.9.8` 装上来的用户仍然能看到 `0.1.0`。
 
 ## 桌面前端与 worker
 
-`tests/test_worker_protocol.py` 在 RPC 层覆盖：能力上报与内核列表、按内核建工作区、内核不可更改、slab 工程的整条流程与三种视图、两个内核沿任意 AA–BB 线的截面、无网格内核改分辨率、工作目录创建与打开、document 往返、Recipe 与材料删除、网格更换与非法网格拒绝、按摘要缓存（改一步只重算其后、改名不失效、删步同时清快照和摘要）、运行到指定步、表面/截面/俯视图的数组长度与索引范围、GDS 导入、Excel 往返，以及逐行服务和错误码。
+`tests/test_worker_protocol.py`（76 项）在 RPC 层覆盖：能力上报、建立/打开工作目录、document 往返、退役内核被拒绝并说明去哪里打开、整条流程与三种视图、任意 AA–BB 线的截面、改分辨率与改工程窗口（都丢弃结果）、按摘要缓存（改一步只重算其后、改名不失效、删步同时清快照和摘要、GDS 步骤把版图指纹算进摘要）、运行到指定步、工艺分叉（在某一步之后分出分支并带上已算好的结果、改名、删除只删独有结果）、GDS 导入、Excel 往返、逐行服务与错误码，以及视图请求的并发与 `Superseded`。
 
-前端的纯函数在 `desktop/src/domain/project.test.ts` 里用 vitest 覆盖：override 解析、清空 override 回退到 Recipe 值、编辑与重排的失效范围、重命名不失效、步骤增删和配色。
-
-```bash
-python -m pytest -q
-cd desktop && npm run test
-```
+前端的纯函数在 vitest 下覆盖（9 个文件）：override 解析与回退、编辑/重排的失效范围、分叉关系（`project.test.ts`）、共享库的同步与删除（`library.test.ts`）、视口的相机与缩放记忆（`Viewport.test.ts`）、CLI 面板、数值输入框、剪贴板、版图坐标、标签页、样式。
 
 这些测试验证的是协议和状态一致性，不是工艺精度。
-
-## 通用引擎回归
-
-`tests/test_general_engine.py` 另行覆盖 4 种偏移图形 × 3 种刻蚀模式的局部/全域一致性、跨区域多步流程、区域递归合并、GDS 实例旋转与单位、布尔孔洞及反向掩膜、旧材料界面不变性、封闭孔洞不被后续沉积填充、二阶距离重建的网格收敛，以及超出资源预算时拒绝计算。
-
-局部/全域测试比较 core 内的原始浮点场，不比较经过平滑的图片。更多执行约束见 [通用引擎说明](GENERAL_ENGINE.md)。
-
-### 1T1C 原始场复测
-
-固定 x 中心 −0.315 µm、AA 的 y=0.225 µm，比较 W 外轮廓左右半宽差；两次真实网格间距都是 6.25 nm。下表不经过镜像或平滑：
-
-| z (µm) | 旧独立单元块 (nm) | 通用引擎全域重算 (nm) |
-| --- | ---: | ---: |
-| −0.025 | 1.250 | 1.529 |
-| −0.050 | 14.462 | 2.106 |
-| −0.100 | 1.225 | 0.000738 |
-| −0.200 | 1.161 | 0.000738 |
-| −0.300 | 1.162 | 0.000342 |
-
-旧的大幅局部不对称显著减小，但上部拐角仍有约 1.5–2.1 nm 的离散误差，不能宣称每处都更精确或已经零误差。这里测量的是对称性，不是绝对工艺尺寸准确度。原始数字在 `assets/symmetry-before.json`、`assets/symmetry-after.json`，测量脚本为 `examples/measure_section_symmetry.py`。
-
-## 同步分块与二阶推进回归
-
-`tests/test_synchronized_transport.py` 验证一阶/二阶方案在二维和三维中的分块/全域逐点一致性，含尺寸不整除、很小的块、逆序遍历和非法参数；还验证偏移圆扩张/收缩、偏移球扩张、非圆图形斜向移动的解析误差及网格收敛。
-
-Engine 测试同时检查二阶选项能从步骤传入刻蚀内核，且局部细化规划器会扩大影响范围以覆盖全部 RK 子步；还增加了非光滑柱体初始场的混合运动解析对照。完整测试共 **93 项**。详见 [方案和原始数值](SYNCHRONIZED_SOLVER.md)。
 
 ## 打包冒烟测试
 
@@ -59,8 +34,15 @@ Engine 测试同时检查二阶选项能从步骤传入刻蚀内核，且局部�
 
 ## 端到端示例
 
-`examples/build_1t1c_demo.py` 从 Si 初始衬底开始运行 9 步流程，并检查最终输出可以保存为 NPZ、SQLite 和三视图图片。示例工程可再次由桌面 UI 打开，证明计算结果与交互层使用同一数据格式。
+`examples/3d-nand/` 是一条 34 步的替代栅 3D NAND 流程，命令行可以直接跑：
+
+```bash
+process-studio --root nand flow apply examples/3d-nand/flow.json
+process-studio --root nand run
+```
+
+`tests/test_cli.py` 会把这个流程文件套进一个临时工作目录，验证它仍然能被应用（步骤数、材料、循环折叠）。
 
 ## 物理解释边界
 
-测试验证的是离散几何行为、数据一致性和流程复用，不代表工艺结果已经对某一 fab/tool 标定。若用于实际工艺决策，应使用截面 SEM/TEM、膜厚、CD 和刻蚀速率数据标定 Recipe，并把网格收敛性作为 acceptance criterion。
+测试验证的是离散几何行为、数据一致性和流程复用，不代表工艺结果已经对某一 fab/tool 标定。若用于实际工艺决策，应使用截面 SEM/TEM、膜厚、CD 和刻蚀速率数据标定 Recipe。

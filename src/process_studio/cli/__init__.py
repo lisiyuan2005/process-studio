@@ -212,10 +212,6 @@ def cmd_cores(session: Session, args: argparse.Namespace) -> int:
     child -- would only be slow, never broken. This is how a build says so
     out loud, and it is what the packaging script checks.
 
-    A build without the slab kernel has no display mesh at all and leaves
-    the geometry library out; the pool still comes up (the machine is no
-    less able to run processes) and ``warmed`` says there was nothing in it
-    to warm.
     """
     import time
 
@@ -1031,10 +1027,10 @@ def build_parser() -> argparse.ArgumentParser:
     new = commands.add_parser("new", help="create a workspace")
     new.add_argument("directory")
     new.add_argument("--name", help="the project name; default: the directory name")
-    new.add_argument("--kernel", help="slab or levelset; default: the build's default")
+    new.add_argument("--kernel", help="the kernel to build on; slab is the only one")
     new.set_defaults(handler=cmd_new, needs_root=False)
 
-    commands.add_parser("kernels", help="the kernels this build offers").set_defaults(handler=cmd_kernels, needs_root=False)
+    commands.add_parser("kernels", help="the kernel this build runs on").set_defaults(handler=cmd_kernels, needs_root=False)
     commands.add_parser(
         "cores", help="how many cores the 3D mesh is built on"
     ).set_defaults(handler=cmd_cores, needs_root=False)
