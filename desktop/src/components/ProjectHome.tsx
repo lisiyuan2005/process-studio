@@ -217,8 +217,8 @@ export function ProjectHome({
           {kernels.length === 1 && (
             <p className="kernel-lock">
               <Lock size={12} />
-              This build ships the {kernels[0].name} kernel only. New workspaces use it, and a
-              workspace made with another kernel needs the build that includes that kernel.
+              Every workspace runs on the {kernels[0].name} kernel. A project made with the
+              level-set kernel, which this no longer ships, opens in Process Studio 0.9.8.
             </p>
           )}
 

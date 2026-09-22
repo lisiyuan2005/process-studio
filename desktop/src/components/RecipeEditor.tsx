@@ -100,8 +100,8 @@ function ParameterField({
         }}
       />
       <small>
-        target and time_min drive depth or thickness; rate, directional_fraction, mode, base_z,
-        solver_order and tile_shape are read by the kernel when present.
+        target and time_min drive depth or thickness; rate, directional_fraction and mode are
+        read by the kernel when present.
       </small>
       {error && (
         <div className="error-box">

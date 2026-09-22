@@ -1,14 +1,15 @@
-"""The simulation kernels a project can be built on.
+"""The simulation kernel a project is built on.
 
-A project names its kernel when it is created and keeps it: the two kernels
-represent geometry differently, so a stored result of one is not readable by
-the other, and switching would silently change what every earlier step meant.
+There is one: the slab kernel, exact polygon slabs from the DeviceFlow
+core. The level-set kernel lived here until 0.9.8 and was removed -- it is
+on the ``archive/levelset`` branch -- so a project made with it is refused
+with a message saying where to open it, never silently run on this one.
 
-A build may ship a subset. ``PROCESS_STUDIO_KERNELS`` (a comma-separated list
-of ids) or a bundled ``enabled.txt`` beside this file names the kernels this
-worker offers; a kernel whose dependencies are missing is left out the same
-way. A project made with a kernel this build lacks is refused with a message
-that says which build to open it in, never silently run on the other one.
+The registry is kept for the shape of the interface (a project names its
+kernel and keeps it, and the desktop reads what the kernel offers) and
+because a kernel whose dependencies a build left out has to be reported
+rather than crash. ``PROCESS_STUDIO_KERNELS`` or a bundled ``enabled.txt``
+beside this file still names what this worker offers.
 """
 
 from __future__ import annotations
@@ -22,9 +23,18 @@ from .base import Kernel, KernelInfo
 #: Every kernel this source tree knows, in offering order, with the module
 #: that provides it. Import failures mean the build left its dependencies out.
 _KNOWN: tuple[tuple[str, str, str], ...] = (
-    ("levelset", "process_studio.kernels.levelset", "LevelSetKernel"),
     ("slab", "process_studio.kernels.slab", "SlabKernel"),
 )
+
+#: Kernels that were here and are not any more, and where to open a project
+#: that names one. Without this the message would be "unknown kernel", which
+#: reads as a corrupt file rather than as a version that no longer ships it.
+_RETIRED = {
+    "levelset": (
+        "the level-set kernel was removed after 0.9.8; open this project in "
+        "Process Studio 0.9.8 or earlier, or rebuild the flow on the slab kernel"
+    ),
+}
 
 _KERNELS: dict[str, Kernel] = {}
 _UNAVAILABLE: dict[str, str] = {}
@@ -81,7 +91,7 @@ def default_kernel() -> str:
 
 
 def build_variant() -> str:
-    """What this worker ships: ``full``, or the id of its only kernel."""
+    """What this worker ships: ``full`` when it has every kernel it knows."""
     ids = tuple(_KERNELS)
     return "full" if len(ids) == len(_KNOWN) else "+".join(ids)
 
@@ -95,6 +105,8 @@ def get_kernel(kernel_id: str | None) -> Kernel:
         pass
     known = {kernel_id for kernel_id, _, _ in _KNOWN}
     offered = ", ".join(_KERNELS)
+    if resolved in _RETIRED:
+        raise KeyError(f"kernel {resolved!r} is not in this build: {_RETIRED[resolved]}.")
     if resolved in known:
         raise KeyError(
             f"kernel {resolved!r} is not in this build ({_UNAVAILABLE.get(resolved, 'unavailable')}); "

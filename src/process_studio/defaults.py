@@ -6,7 +6,7 @@ one of them is the same project when opened in the other.
 
 from __future__ import annotations
 
-from .kernel.grid import UniformGrid3D
+from .grid import UniformGrid3D
 from .models import (
     FlowBranch,
     MaterialDefinition,
@@ -46,13 +46,13 @@ def default_tools() -> list[ToolDefinition]:
     ]
 
 
-def default_recipes(kernel: str = "levelset") -> list[Recipe]:
-    """The starter library, written for the kernel the project runs on.
+def default_recipes(kernel: str = "slab") -> list[Recipe]:
+    """The starter library.
 
-    The slab kernel etches either straight down or isotropically, so its
-    starter etch asks for a fully directional profile rather than the mixed
-    one the level-set kernel can resolve, and its CMP does not name materials
-    because that kernel polishes everything above the plane.
+    The kernel etches either straight down or isotropically, so the starter
+    etch asks for a fully directional profile, and the CMP names no
+    materials because this kernel polishes everything above the plane. The
+    argument is kept so a future kernel can be written for again.
     """
     slab = kernel == "slab"
     return [
@@ -114,7 +114,7 @@ def default_recipes(kernel: str = "levelset") -> list[Recipe]:
     ]
 
 
-def default_branch(kernel: str = "levelset") -> FlowBranch:
+def default_branch(kernel: str = "slab") -> FlowBranch:
     recipes = {recipe.id: recipe for recipe in default_recipes(kernel)}
     return FlowBranch(
         "main",

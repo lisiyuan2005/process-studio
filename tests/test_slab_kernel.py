@@ -37,6 +37,17 @@ def project() -> ProjectDefinition:
 
 
 @pytest.fixture()
+def detailed_project(project) -> ProjectDefinition:
+    """A project that asks for rounded films, which a new one does not.
+
+    New projects are simplified -- square corners, one sample per plane --
+    so a test about what the resolution does to an arc has to say so.
+    """
+    project.fidelity = "detailed"
+    return project
+
+
+@pytest.fixture()
 def kernel():
     return get_kernel("slab")
 
@@ -533,6 +544,7 @@ def test_the_xy_resolution_shapes_the_arcs_and_the_z_resolution_the_bands(kernel
             "Split", grid_dict(default_grid()), kernel="slab",
             resolution_um=z_nm / 1000.0,
             resolution_xy_um=None if xy_nm is None else xy_nm / 1000.0,
+            fidelity="detailed",
         )
         assert resolution_xy_um(project) == pytest.approx((z_nm if xy_nm is None else xy_nm) / 1000.0)
         state = kernel.initial_state(project, materials=materials)
@@ -596,7 +608,8 @@ def test_a_fine_z_step_rounds_a_shoulder_whatever_the_xy_value(kernel):
 
     materials = default_materials()
     project = ProjectDefinition(
-        "Mesa", grid_dict(default_grid()), kernel="slab", resolution_um=0.001, resolution_xy_um=0.02
+        "Mesa", grid_dict(default_grid()), kernel="slab", resolution_um=0.001,
+        resolution_xy_um=0.02, fidelity="detailed",
     )
     sketches = {
         "mesa": QuickSketch("mesa", [SketchShape("rectangle", parameters={"center": (0.0, 0.0), "size": (0.4, 0.4)})])
@@ -917,7 +930,10 @@ def test_the_top_view_can_look_through_a_material(kernel, project, sketches):
     assert empty.area(None) == pytest.approx(device.top_view().area("W"))
 
 
-def test_the_detailed_planar_film_grows_lips_on_both_sides_of_a_mouth(kernel, project, sketches):
+def test_the_detailed_planar_film_grows_lips_on_both_sides_of_a_mouth(
+    kernel, detailed_project, sketches
+):
+    project = detailed_project
     materials = default_materials()
     state = _undercut(kernel, project, materials)
     covered = run(

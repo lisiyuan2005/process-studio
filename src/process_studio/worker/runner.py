@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from ..kernel.grid import UniformGrid3D
+from ..grid import UniformGrid3D
 from ..kernels import Kernel, get_kernel
 from ..layout.quick_sketch import QuickSketch
 from ..models import FlowBranch, ProjectDefinition, Recipe
@@ -373,18 +373,6 @@ def discard_results(repository: ProjectRepository, project: ProjectDefinition) -
     for branch in repository.list_branches(project.id):
         loaded = repository.load_branch(branch.id)
         cache.forget(branch.id, [key for step in loaded.steps for key in result_keys(step.id)])
-
-
-def apply_grid(
-    repository: ProjectRepository,
-    project: ProjectDefinition,
-    grid: UniformGrid3D,
-) -> ProjectDefinition:
-    """Change the project grid and drop every result computed on the old one."""
-    project.grid = grid_dict(grid)
-    repository.save_project(project)
-    discard_results(repository, project)
-    return project
 
 
 def apply_resolution(

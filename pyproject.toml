@@ -11,8 +11,6 @@ license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
   "numpy>=2.0",
-  "scipy>=1.14",
-  "scikit-fmm>=2025.6.23",
   "gdstk>=1.0",
   "openpyxl>=3.1",
   "pillow>=10",
@@ -42,7 +40,6 @@ process-studio = "process_studio.cli:main"
 
 [project.optional-dependencies]
 test = ["pytest>=8"]
-render = ["scikit-image>=0.25"]
 # Kept for older install commands; pyyaml is a core dependency now.
 yaml = ["pyyaml>=6"]
 

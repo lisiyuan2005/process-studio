@@ -1,7 +1,7 @@
 import gdstk
 import numpy as np
 
-from process_studio.kernel.grid import UniformGrid2D
+from process_studio.grid import UniformGrid2D
 from process_studio.layout.gds import available_gds_layers, rasterize_gds
 from process_studio.layout.quick_sketch import QuickSketch, SketchShape
 

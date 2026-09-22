@@ -18,12 +18,11 @@ from pathlib import Path
 from typing import Any, IO, Mapping
 
 from . import PROTOCOL_VERSION, __version__
-from ..kernel.grid import UniformGrid3D
+from ..grid import UniformGrid3D, window_grid
 from ..kernels import available_kernels, build_variant, default_kernel, get_kernel
 from ..layout.gds import available_gds_layers
 from ..libraries import RecipeLibrary
 from ..models import ProcessType
-from ..simulation_settings import MAXIMUM_NODES, estimate_grid, grid_for_target_spacing
 from .errors import InvalidRequest, WorkerError, WorkspaceError
 
 #: Triangulators the slab kernel's 3D view can be built with. Spelt out
@@ -32,11 +31,10 @@ from .errors import InvalidRequest, WorkerError, WorkspaceError
 #: package has no shapely for. A test keeps the two the same.
 MESH_ENGINES = ("ears", "delaunay")
 from .export import write_image, write_mesh
-from .render import MAXIMUM_INTERPOLATION, MESHES_AVAILABLE, sketch_preview_image
+from .render import sketch_preview_image
 from .files import copy_workspace, export_flow, export_library, import_flow, import_library, reveal_path
 from .update import check_update, install_update, open_url
 from .runner import (
-    apply_grid,
     apply_resolution,
     build_document,
     project_kernel,
@@ -64,6 +62,22 @@ from .workspace import (
     sketch_from_payload,
 )
 
+#: How far the flat views may magnify their own raster. It costs no
+#: computation -- the geometry is exact, only the picture gets more pixels.
+MAXIMUM_INTERPOLATION = 4
+
+
+def _checked_interpolation(value: Any) -> int:
+    """A sampling factor a view may ask for."""
+    try:
+        factor = int(value)
+    except (TypeError, ValueError) as error:
+        raise InvalidRequest(f"interpolation must be a whole number, got {value!r}.") from error
+    if not 1 <= factor <= MAXIMUM_INTERPOLATION:
+        raise InvalidRequest(
+            f"interpolation must be between 1 and {MAXIMUM_INTERPOLATION}, got {factor}."
+        )
+    return factor
 MASK_SOURCES = ("none", "quick_sketch", "gds")
 SKETCH_SHAPES = ("rectangle", "circle", "polygon", "path")
 SKETCH_OPERATIONS = ("merge", "subtract", "intersect")
@@ -155,15 +169,11 @@ def _describe() -> dict[str, Any]:
         "defaultKernel": default_kernel(),
         "buildVariant": build_variant(),
         "rendering": {
-            "surfaces": MESHES_AVAILABLE,
+            # The kernel hands over its own triangles, so a 3D view needs
+            # nothing else installed; sampling is the raster density of the
+            # flat views, which magnifies a picture without recomputing it.
+            "surfaces": True,
             "maximumInterpolation": MAXIMUM_INTERPOLATION,
-        },
-        "numerics": {
-            "solverOrders": [1, 2],
-            "refinementFactors": [2, 4, 8],
-            "defaultMaxNodes": MAXIMUM_NODES,
-            "maximumNodes": MAXIMUM_NODES,
-            "spacingPresetsNm": [25.0, 12.5, 6.25],
         },
         "limits": {
             "interpolationIsDisplayOnly": True,
@@ -474,21 +484,21 @@ def _same_bounds(a: UniformGrid3D, b: UniformGrid3D) -> bool:
     )
 
 
-def _fit_grid(window: UniformGrid3D, spacing_nm: float) -> UniformGrid3D:
-    try:
-        return grid_for_target_spacing(window, spacing_nm)
-    except ValueError as error:
-        raise InvalidRequest(str(error)) from error
+def _as_window(window: UniformGrid3D) -> UniformGrid3D:
+    """The window as a project stores it: bounds, with plausible node counts."""
+    return window_grid(
+        window.x_min, window.x_max, window.y_min, window.y_max, window.z_min, window.z_max
+    )
 
 
 def _plan_grid(parameters: Mapping[str, Any]) -> dict[str, Any]:
-    """Report what a target spacing would mean, and what it would cost.
+    """Report what a target resolution and window would mean.
 
-    On the level-set kernel the spacing is the grid, and it has to divide
-    every project extent, so the requested value is matched to the nearest
-    lattice that does rather than rounded per axis. On a kernel without a
-    field the same number is a resolution, which any positive value satisfies
-    and which costs no nodes.
+    The kernel has no lattice: the number is the conformal walk step and the
+    XY arc sagitta, which any positive value satisfies and which costs no
+    nodes. So this exists to say whether it would change anything at all --
+    applying it discards every stored result, and doing that for a value the
+    project already has is the one outcome worth preventing.
     """
     root = _root(parameters)
     repository = open_repository(root)
@@ -497,87 +507,56 @@ def _plan_grid(parameters: Mapping[str, Any]) -> dict[str, Any]:
     current = UniformGrid3D(**project.grid)
     window = _window_from(parameters, current)
     same_window = _same_bounds(window, current)
-    if kernel.info.spacing_role != "grid":
-        spacing = _target_spacing(parameters)
-        spacing_xy = _target_spacing_xy(parameters)
-        # The slab kernel has no lattice, but the stored grid must still be a
-        # valid one; any modest spacing over the new window serves.
-        proposed = current if same_window else _fit_grid(window, 25.0)
-        current_xy = project.resolution_xy_um
-        return {
-            "kernel": kernel.info.id,
-            "spacingRole": kernel.info.spacing_role,
-            "grid": grid_to_json(proposed),
-            "estimate": {
-                "spacingNm": spacing,
-                "spacingXyNm": spacing if spacing_xy is None else spacing_xy,
-            },
-            "maximumNodes": None,
-            "withinLimit": True,
-            "unchanged": same_window
-            and abs(spacing / 1000.0 - (project.resolution_um or 0.0)) < 1e-12
-            and (
-                (spacing_xy is None and current_xy is None)
-                or (
-                    spacing_xy is not None and current_xy is not None
-                    and abs(spacing_xy / 1000.0 - current_xy) < 1e-12
-                )
-            ),
-        }
-    proposed = _fit_grid(window, _target_spacing(parameters))
-    estimate = estimate_grid(proposed, len(repository.load_materials()))
+    spacing = _target_spacing(parameters)
+    spacing_xy = _target_spacing_xy(parameters)
+    current_xy = project.resolution_xy_um
     return {
         "kernel": kernel.info.id,
         "spacingRole": kernel.info.spacing_role,
-        "grid": grid_to_json(proposed),
+        "grid": grid_to_json(current if same_window else _as_window(window)),
         "estimate": {
-            "spacingNm": estimate.spacing_nm,
-            "shape": list(estimate.shape),
-            "nodeCount": estimate.node_count,
-            "stateBytes": estimate.state_bytes,
-            "recommendedBytes": estimate.recommended_bytes,
+            "spacingNm": spacing,
+            "spacingXyNm": spacing if spacing_xy is None else spacing_xy,
         },
-        "maximumNodes": MAXIMUM_NODES,
-        "withinLimit": estimate.node_count <= MAXIMUM_NODES,
-        "unchanged": proposed == current,
+        "maximumNodes": None,
+        "withinLimit": True,
+        "unchanged": same_window
+        and abs(spacing / 1000.0 - (project.resolution_um or 0.0)) < 1e-12
+        and (
+            (spacing_xy is None and current_xy is None)
+            or (
+                spacing_xy is not None and current_xy is not None
+                and abs(spacing_xy / 1000.0 - current_xy) < 1e-12
+            )
+        ),
     }
 
 
 def _set_grid(parameters: Mapping[str, Any]) -> dict[str, Any]:
-    """Apply a grid by target spacing, or by an explicit lattice."""
+    """Apply a resolution, and a window when one is given.
+
+    Both discard every stored result: the resolution is what the conformal
+    walk and the arcs were computed at, and the window is the wafer itself
+    (the substrate is as thick as the window is deep).
+    """
     root = _root(parameters)
     repository = open_repository(root)
     project = load_project(repository, parameters.get("projectId"))
     kernel = project_kernel(project)
     current = UniformGrid3D(**project.grid)
     window = _window_from(parameters, current)
-    if kernel.info.spacing_role != "grid":
-        if parameters.get("targetSpacingNm") is None:
-            raise InvalidRequest(
-                f"The {kernel.info.name} kernel has no grid to set; give targetSpacingNm "
-                "to change the resolution it works at."
-            )
-        if not _same_bounds(window, current):
-            # A new window is a new wafer: the substrate is as thick as the
-            # window is deep, so the stored results are gone either way.
-            project.grid = grid_dict(_fit_grid(window, 25.0))
-        spacing_xy = _target_spacing_xy(parameters)
-        apply_resolution(
-            repository, project, _target_spacing(parameters) / 1000.0,
-            None if spacing_xy is None else spacing_xy / 1000.0,
-        )
-        return build_document(root, repository, project)
-    if parameters.get("targetSpacingNm") is not None:
-        grid = _fit_grid(window, _target_spacing(parameters))
-    else:
-        grid = grid_from_json(parameters.get("grid", {}))
-    node_count = grid.nx * grid.ny * grid.nz
-    if node_count > MAXIMUM_NODES:
+    if parameters.get("targetSpacingNm") is None:
         raise InvalidRequest(
-            f"That grid needs {node_count:,} nodes; the desktop ceiling is "
-            f"{MAXIMUM_NODES:,}. Use a coarser spacing or smaller project bounds."
+            f"The {kernel.info.name} kernel has no grid to set; give targetSpacingNm "
+            "to change the resolution it works at."
         )
-    apply_grid(repository, project, grid)
+    if not _same_bounds(window, current):
+        project.grid = grid_dict(_as_window(window))
+    spacing_xy = _target_spacing_xy(parameters)
+    apply_resolution(
+        repository, project, _target_spacing(parameters) / 1000.0,
+        None if spacing_xy is None else spacing_xy / 1000.0,
+    )
     return build_document(root, repository, project)
 
 
@@ -844,7 +823,7 @@ def dispatch(
         payload = kernel.surfaces(
             state,
             project=project,
-            interpolation=parameters.get("interpolation", 1),
+            interpolation=_checked_interpolation(parameters.get("interpolation", 1)),
             materials=None if materials is None else [str(name) for name in materials],
             triangulation=triangulation,
             buried=buried,
@@ -863,15 +842,18 @@ def dispatch(
         return payload
     if method == "get_section":
         state, repository, project, kernel = _view_state(parameters)
+        axis = str(parameters.get("axis", "y"))
+        if axis not in ("x", "y", "line"):
+            raise InvalidRequest("get_section axis must be 'x', 'y' or 'line'.")
         return kernel.section(
             state,
             _material_colors(repository),
             project=project,
-            axis=str(parameters.get("axis", "y")),
+            axis=axis,
             position=(
                 None if parameters.get("position") is None else float(parameters["position"])
             ),
-            interpolation=parameters.get("interpolation", 1),
+            interpolation=_checked_interpolation(parameters.get("interpolation", 1)),
             line=_section_line(parameters.get("line")),
         )
     if method == "get_top_view":
@@ -892,7 +874,7 @@ def dispatch(
         return write_mesh(
             kernel, state, project, _material_colors(repository), Path(destination),
             materials=None if materials is None else [str(name) for name in materials],
-            interpolation=parameters.get("interpolation", 1),
+            interpolation=_checked_interpolation(parameters.get("interpolation", 1)),
         )
     if method == "save_image":
         destination = parameters.get("destination")

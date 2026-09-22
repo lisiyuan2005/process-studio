@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from ..kernel.grid import UniformGrid3D
+from ..grid import UniformGrid3D
 from ..kernels import default_kernel
 from ..models import (
     FIDELITIES,
@@ -359,7 +359,7 @@ def project_from_json(payload: Mapping[str, Any]) -> ProjectDefinition:
         raise InvalidRequest("project id cannot be empty")
     resolution = payload.get("resolutionUm")
     resolution_xy = payload.get("resolutionXyUm")
-    fidelity = str(payload.get("fidelity") or "detailed")
+    fidelity = str(payload.get("fidelity") or "simplified")
     if fidelity not in FIDELITIES:
         raise InvalidRequest(f"project fidelity must be one of {FIDELITIES}, got {fidelity!r}.")
     return ProjectDefinition(

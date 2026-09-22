@@ -359,16 +359,9 @@ export interface WorkerCapabilities {
   sketch: { shapes: string[]; operations: string[] };
   kernels: KernelDescription[];
   defaultKernel: string;
-  /** "full", or the id of the one kernel a single-kernel build ships. */
+  /** "full" when the build ships every kernel it knows of. */
   buildVariant?: string;
   rendering: { surfaces: boolean; maximumInterpolation: number };
-  numerics: {
-    solverOrders: number[];
-    refinementFactors: number[];
-    defaultMaxNodes: number;
-    maximumNodes: number;
-    spacingPresetsNm: number[];
-  };
   limits: { interpolationIsDisplayOnly: boolean; calibrated: boolean };
   /** How to run this same worker as the command-line tool: the program and its leading arguments. */
   cli?: { command: string[]; packaged: boolean };

@@ -48,7 +48,6 @@ interface InspectorProps {
   sketches: QuickSketch[];
   gdsPath: string | null;
   kernel?: KernelDescription;
-  solverOrders: number[];
   busy: boolean;
   onRename: (name: string) => void;
   onProcessTypeChange: (type: ProcessType) => void;
@@ -74,7 +73,7 @@ interface ParameterSpec {
   key: string;
   label: string;
   unit?: string;
-  kind?: "number" | "text" | "mode" | "solver";
+  kind?: "number" | "text" | "mode";
   initial: ParameterValue;
   hint?: string;
   /** Kernels that read this parameter; absent means every kernel does. */
@@ -94,14 +93,6 @@ const PARAMETER_SPECS: Record<ProcessType, ParameterSpec[]> = {
     { key: "time_min", label: "Time", unit: "min", initial: 1 },
     { key: "temperature_c", label: "Temperature", unit: "°C", initial: 25 },
     { key: "mode", label: "Deposition mode", kind: "mode", initial: "conformal" },
-    {
-      key: "base_z",
-      label: "Base height",
-      unit: "µm",
-      initial: 0,
-      hint: "Used by directional, evaporation and fill modes.",
-      kernels: ["levelset"],
-    },
   ],
   etch: [
     { key: "target", label: "Target depth", unit: "µm", initial: 0.1, hint: "Micrometres: 100 nm is 0.1." },
@@ -113,27 +104,10 @@ const PARAMETER_SPECS: Record<ProcessType, ParameterSpec[]> = {
       initial: 1,
       hint: "1 is vertical; 0 is isotropic.",
     },
-    { key: "surface_z", label: "Surface height", unit: "µm", initial: 0, kernels: ["levelset"] },
-    {
-      key: "solver_order",
-      label: "Solver order",
-      kind: "solver",
-      initial: 1,
-      kernels: ["levelset"],
-    },
-    {
-      key: "tile_shape",
-      label: "Tile size",
-      unit: "nodes",
-      initial: [24, 24, 24],
-      hint: "Execution tiling changes memory use, not spatial resolution.",
-      kernels: ["levelset"],
-    },
   ],
   cmp: [
     { key: "target_z", label: "Planarize to z", unit: "µm", initial: 0 },
     { key: "removal_amount", label: "Removal amount", unit: "µm", initial: 0.05 },
-    { key: "materials", label: "Materials", kind: "text", initial: "", kernels: ["levelset"] },
   ],
   no_geometry: [
     { key: "time_min", label: "Time", unit: "min", initial: 1 },
@@ -199,14 +173,12 @@ function NumberInput({
 function ParameterRow({
   spec,
   value,
-  solverOrders,
   depositionModes,
   onChange,
   onRemove,
 }: {
   spec: ParameterSpec;
   value: ParameterValue;
-  solverOrders: number[];
   depositionModes: string[];
   onChange: (value: ParameterValue) => void;
   onRemove: () => void;
@@ -227,21 +199,13 @@ function ParameterRow({
             </option>
           ))}
         </select>
-      ) : spec.kind === "solver" ? (
-        <select value={String(value)} onChange={(event) => onChange(Number(event.target.value))}>
-          {solverOrders.map((order) => (
-            <option key={order} value={order}>
-              {order === 1 ? "1 — upwind" : "2 — minmod + SSP-RK2"}
-            </option>
-          ))}
-        </select>
       ) : spec.kind === "text" ? (
         <input value={String(value)} onChange={(event) => onChange(event.target.value)} />
       ) : (
         <NumberInput
           value={value}
           unit={spec.unit}
-          onCommit={(next) => onChange(spec.key === "tile_shape" ? [next, next, next] : next)}
+          onCommit={(next) => onChange(next)}
         />
       )}
       {spec.hint && <small>{spec.hint}</small>}
@@ -397,7 +361,6 @@ export function Inspector({
   sketches,
   gdsPath,
   kernel,
-  solverOrders,
   busy,
   onRename,
   onProcessTypeChange,
@@ -649,7 +612,6 @@ export function Inspector({
               key={spec.key}
               spec={spec}
               value={step.parameters[spec.key]}
-              solverOrders={solverOrders}
               depositionModes={depositionModes}
               onChange={(value) => onParameter({ [spec.key]: value })}
               onRemove={() => onParameter({ [spec.key]: null })}

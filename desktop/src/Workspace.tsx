@@ -2052,7 +2052,6 @@ export function Workspace({
           sketches={document.sketches}
           gdsPath={document.project.gdsPath}
           kernel={projectKernel}
-          solverOrders={capabilities?.numerics.solverOrders ?? [1, 2]}
           busy={busy}
           onRename={(name) => selectedStep && setDocument(renameStep(document, selectedStep.id, name))}
           onProcessTypeChange={(processType) =>
@@ -2257,15 +2256,8 @@ export function Workspace({
           kernel={projectKernel}
           resolutionUm={document.project.resolutionUm}
           resolutionXyUm={document.project.resolutionXyUm}
-          presetsNm={
-            projectKernel?.spacingPresetsNm ??
-            capabilities?.numerics.spacingPresetsNm ?? [25, 12.5, 6.25]
-          }
-          maximumNodes={
-            projectKernel
-              ? projectKernel.maximumNodes
-              : capabilities?.numerics.maximumNodes ?? 20_000_000
-          }
+          presetsNm={projectKernel?.spacingPresetsNm ?? [25, 10, 2]}
+          maximumNodes={projectKernel?.maximumNodes ?? null}
           busy={busy}
           onPlan={planGrid}
           onApply={handleApplyGrid}

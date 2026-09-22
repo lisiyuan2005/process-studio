@@ -7,7 +7,7 @@ import sqlite3
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from uuid import uuid4
 
 from .models import (
@@ -22,9 +22,6 @@ from .models import (
     ToolDefinition,
 )
 from .shared_library import SharedLibrary, recipe_from_payload
-
-if TYPE_CHECKING:
-    from .kernel.material_state import MaterialState
 
 
 class ProjectRepository:
@@ -129,11 +126,11 @@ class ProjectRepository:
                     grid_json TEXT NOT NULL,
                     gds_path TEXT,
                     active_branch_id TEXT,
-                    kernel TEXT NOT NULL DEFAULT 'levelset',
+                    kernel TEXT NOT NULL DEFAULT 'slab',
                     resolution_um REAL,
                     resolution_xy_um REAL,
                     section_lines_json TEXT,
-                    fidelity TEXT NOT NULL DEFAULT 'detailed'
+                    fidelity TEXT NOT NULL DEFAULT 'simplified'
                 );
                 CREATE TABLE IF NOT EXISTS materials (
                     id TEXT PRIMARY KEY,
@@ -488,27 +485,6 @@ class ProjectRepository:
             ]
         return [self.load_branch(branch_id) for branch_id in ids]
 
-    def load_latest_snapshot(self, branch_id: str) -> MaterialState | None:
-        # Level-set-only convenience (the runner loads snapshots through the
-        # kernel-generic snapshot_path + kernel.load_state instead): a
-        # module-level import would force scipy into every build merely by
-        # importing this module, which every kernel's code does.
-        from .kernel.material_state import MaterialState
-
-        with self.connect() as connection:
-            row = connection.execute(
-                """SELECT snapshots.path FROM branch_snapshots
-                JOIN branch_steps ON branch_steps.branch_id=branch_snapshots.branch_id
-                    AND branch_steps.step_id=branch_snapshots.step_id
-                JOIN snapshots ON snapshots.id=branch_snapshots.snapshot_id
-                WHERE branch_snapshots.branch_id=?
-                ORDER BY branch_steps.position DESC LIMIT 1""",
-                (branch_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        return MaterialState.load(self.on_disk(row["path"], self.snapshot_directory))
-
     def create_branch(
         self,
         project_id: str,
@@ -622,22 +598,6 @@ class ProjectRepository:
         if row is None:
             raise KeyError((branch_id, step_id))
         return Path(self.on_disk(row["path"], self.snapshot_directory) or row["path"])
-
-    def load_snapshot(self, branch_id: str, step_id: str) -> MaterialState:
-        # See load_latest_snapshot: kept lazy so importing this module never
-        # requires scipy.
-        from .kernel.material_state import MaterialState
-
-        with self.connect() as connection:
-            row = connection.execute(
-                """SELECT snapshots.path FROM snapshots JOIN branch_snapshots
-                ON snapshots.id = branch_snapshots.snapshot_id
-                WHERE branch_snapshots.branch_id=? AND branch_snapshots.step_id=?""",
-                (branch_id, step_id),
-            ).fetchone()
-        if row is None:
-            raise KeyError((branch_id, step_id))
-        return MaterialState.load(self.on_disk(row["path"], self.snapshot_directory))
 
     def delete_project_snapshots(self, project_id: str) -> int:
         """Remove every cached state for a project while preserving its flow."""

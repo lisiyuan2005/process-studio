@@ -45,7 +45,6 @@ def test_describe_reports_capabilities_without_hard_coding_them():
     assert described["maskSources"] == ["none", "quick_sketch", "gds"]
     # The desktop's CLI panel prefixes its commands with this.
     assert described["cli"]["command"] and described["cli"]["packaged"] is False
-    assert described["numerics"]["solverOrders"] == [1, 2]
     assert described["limits"]["calibrated"] is False
 
 
@@ -58,15 +57,17 @@ def test_create_workspace_is_idempotent(tmp_path):
     assert len(second["branches"][0]["steps"]) == len(first["branches"][0]["steps"])
 
 
-def test_describe_publishes_the_kernels_a_project_can_be_built_on():
+def test_describe_publishes_the_kernel_a_project_is_built_on():
     described = call("describe")
     kernels = {kernel["id"]: kernel for kernel in described["kernels"]}
-    assert described["defaultKernel"] == "levelset"
-    assert kernels["levelset"]["spacingRole"] == "grid"
+    assert described["defaultKernel"] == "slab"
+    assert list(kernels) == ["slab"]
     assert kernels["slab"]["spacingRole"] == "conformal_resolution"
-    # The slab kernel has no field, so there is no node ceiling to report.
+    # The kernel has no field, so there is no node ceiling to report.
     assert kernels["slab"]["maximumNodes"] is None
     assert kernels["slab"]["depositionModes"] == ["conformal", "planar"]
+    # It hands over its own triangles; nothing else has to be installed.
+    assert described["rendering"]["surfaces"] is True
 
 
 def test_a_workspace_keeps_the_kernel_it_was_created_with(tmp_path):
@@ -84,12 +85,13 @@ def test_an_unknown_kernel_is_rejected_rather_than_defaulted(tmp_path):
 
 
 def test_saving_a_document_cannot_move_a_project_to_another_kernel(workspace):
+    """A stored result of one kernel is not a result of another."""
     document = call("open_workspace", root=str(workspace))
-    document["project"]["kernel"] = "slab"
+    document["project"]["kernel"] = "levelset"
     with pytest.raises(InvalidRequest, match="cannot be moved"):
         call("save_document", root=str(workspace), document=document)
     unchanged = call("open_workspace", root=str(workspace))
-    assert unchanged["project"]["kernel"] == "levelset"
+    assert unchanged["project"]["kernel"] == "slab"
 
 
 def test_a_slab_project_runs_its_flow_and_draws_every_view(tmp_path):
@@ -109,7 +111,7 @@ def test_a_slab_project_runs_its_flow_and_draws_every_view(tmp_path):
     assert base64.b64decode(top["image"])[:4] == b"\x89PNG"
 
 
-@pytest.mark.parametrize("kernel", ["levelset", "slab"])
+@pytest.mark.parametrize("kernel", ["slab"])
 def test_a_section_can_run_along_any_line(tmp_path, kernel):
     """The AA–BB cut: a diagonal through the trench shows the trench."""
     root = tmp_path / f"line-{kernel}"
@@ -141,51 +143,36 @@ def test_a_section_can_run_along_any_line(tmp_path, kernel):
         )
 
 
-@pytest.fixture()
-def slab_only_build():
-    """A worker built with the slab kernel alone, restored afterwards."""
-    from process_studio import kernels
+def test_a_project_built_on_the_retired_kernel_is_refused_with_directions(tmp_path):
+    """What the level-set projects made before it was removed now do.
 
-    kernels.configure({"slab"})
-    try:
-        yield
-    finally:
-        kernels.configure(None)
+    The flow is still readable -- the document opens, so the steps can be
+    looked at and copied out -- but nothing will run on this kernel, and
+    the message says where such a project can still be opened.
+    """
+    root = tmp_path / "old-project"
+    call("create_workspace", root=str(root), name="Old", kernel="slab")
+    repository = open_repository(root)
+    with repository.connect() as connection:
+        connection.execute("UPDATE projects SET kernel='levelset'")
 
-
-def test_a_single_kernel_build_offers_only_that_kernel(slab_only_build):
-    described = call("describe")
-    assert [kernel["id"] for kernel in described["kernels"]] == ["slab"]
-    assert described["defaultKernel"] == "slab"
-    assert described["buildVariant"] == "slab"
-
-
-def test_a_single_kernel_build_refuses_the_other_kernel(tmp_path, slab_only_build):
-    root = tmp_path / "unnamed"
-    created = call("create_workspace", root=str(root), name="Unnamed")
-    # Unnamed means the default, which is the one kernel there is.
-    assert created["project"]["kernel"] == "slab"
-    with pytest.raises(InvalidRequest, match="not in this build"):
-        call("create_workspace", root=str(tmp_path / "other"), name="Other", kernel="levelset")
+    document = call("open_workspace", root=str(root))
+    assert document["project"]["kernel"] == "levelset"
+    branch = document["branches"][0]
+    with pytest.raises(WorkspaceError, match="removed after 0.9.8"):
+        call("run_flow", root=str(root))
+    with pytest.raises(WorkspaceError, match="removed after 0.9.8"):
+        call("get_top_view", root=str(root), branchId=branch["id"], stepId=branch["steps"][0]["id"])
 
 
-def test_a_project_from_the_missing_kernel_is_refused_with_directions(tmp_path):
-    from process_studio import kernels
-
-    root = tmp_path / "levelset-project"
-    call("create_workspace", root=str(root), name="Level set", kernel="levelset")
-    call("run_flow", root=str(root))
-    kernels.configure({"slab"})
-    try:
-        document = call("open_workspace", root=str(root))
-        assert document["project"]["kernel"] == "levelset"
-        with pytest.raises(WorkspaceError, match="includes 'levelset'"):
-            call("run_flow", root=str(root))
-        branch = document["branches"][0]
-        with pytest.raises(WorkspaceError, match="includes 'levelset'"):
-            call("get_top_view", root=str(root), branchId=branch["id"], stepId=branch["steps"][0]["id"])
-    finally:
-        kernels.configure(None)
+def test_an_unknown_kernel_in_a_stored_project_says_so(tmp_path):
+    root = tmp_path / "strange"
+    call("create_workspace", root=str(root), name="Strange", kernel="slab")
+    repository = open_repository(root)
+    with repository.connect() as connection:
+        connection.execute("UPDATE projects SET kernel='quantum'")
+    with pytest.raises(WorkspaceError, match="unknown kernel"):
+        call("run_flow", root=str(root))
 
 
 def test_a_slab_project_sets_a_resolution_rather_than_a_grid(tmp_path):
@@ -319,25 +306,6 @@ def test_save_document_refuses_a_grid_change(workspace):
         call("save_document", root=str(workspace), document=document)
 
 
-def test_set_grid_applies_the_grid_and_discards_stale_results(workspace):
-    call("run_flow", root=str(workspace))
-    document = call("open_workspace", root=str(workspace))
-    grid = dict(document["project"]["grid"])
-    # 1.6/44 and 1.2/33 are the same spacing, which the kernel requires.
-    grid.update({"nx": 45, "ny": 45, "nz": 34})
-    updated = call("set_grid", root=str(workspace), grid=grid)
-    assert updated["project"]["grid"]["nx"] == 45
-    assert set(updated["stepStatuses"][updated["branches"][0]["id"]].values()) == {"dirty"}
-
-
-def test_set_grid_rejects_unequal_spacing(workspace):
-    document = call("open_workspace", root=str(workspace))
-    grid = dict(document["project"]["grid"])
-    grid["nx"] = 44
-    with pytest.raises(InvalidRequest):
-        call("set_grid", root=str(workspace), grid=grid)
-
-
 def test_recipe_and_material_deletions_reach_the_database(workspace):
     document = call("open_workspace", root=str(workspace))
     document["recipes"] = [
@@ -373,7 +341,9 @@ def test_views_render_the_stored_result(workspace):
         stepId=last_step,
         interpolation=2,
     )
-    assert surfaces["interpolation"] == 2
+    # The geometry is exact, so sampling is not something a surface has:
+    # what comes back is the kernel's own triangles, once.
+    assert surfaces["interpolation"] == 1 and surfaces["exact"] is True
     assert surfaces["surfaces"], "the finished stack should have at least one surface"
     surface = surfaces["surfaces"][0]
     positions = np.frombuffer(base64.b64decode(surface["positions"]), dtype=np.float32)
@@ -411,7 +381,11 @@ def test_views_before_the_first_step_show_the_bare_wafer(workspace):
     document = call("open_workspace", root=str(workspace))
     branch_id = document["branches"][0]["id"]
     top = call("get_top_view", root=str(workspace), branchId=branch_id, stepId="")
-    assert top["width"] == document["project"]["grid"]["nx"]
+    # The bare wafer: a picture of the whole window, all one material.
+    window = document["project"]["grid"]
+    assert top["width"] > 0 and top["height"] > 0
+    assert top["extent"]["horizontalMin"] == pytest.approx(window["xMin"])
+    assert top["extent"]["verticalMax"] == pytest.approx(window["yMax"])
 
 
 def test_a_step_without_a_result_reports_a_useful_error(workspace):
@@ -591,7 +565,7 @@ def test_a_finished_step_can_be_viewed_while_a_run_is_under_way(workspace, monke
     """A run holds the main lane for as long as it takes; the views have a
     lane of their own, so the steps that are done can be looked at meanwhile."""
     import threading
-    from process_studio.kernels.levelset import LevelSetKernel
+    from process_studio.kernels.slab import SlabKernel
 
     document = call("open_workspace", root=str(workspace))
     branch = document["branches"][0]
@@ -599,14 +573,14 @@ def test_a_finished_step_can_be_viewed_while_a_run_is_under_way(workspace, monke
     # The re-run's first step holds until the view has been answered.
     release = threading.Event()
     step_started = threading.Event()
-    real_run_step = LevelSetKernel.run_step
+    real_run_step = SlabKernel.run_step
 
     def held_run_step(self, state, step, **kwargs):
         step_started.set()
         assert release.wait(timeout=120), "the view never arrived"
         return real_run_step(self, state, step, **kwargs)
 
-    monkeypatch.setattr(LevelSetKernel, "run_step", held_run_step)
+    monkeypatch.setattr(SlabKernel, "run_step", held_run_step)
     writer, output, thread = _server_over_pipe()
     writer.write(json.dumps({"id": "run", "method": "run_flow", "params": {"root": str(workspace), "force": True}}) + "\n")
     writer.flush()
@@ -631,7 +605,7 @@ def test_a_finished_step_can_be_viewed_while_a_run_is_under_way(workspace, monke
 
 def test_a_run_can_be_cancelled_between_steps_and_keeps_what_ran(workspace, monkeypatch):
     import threading
-    from process_studio.kernels.levelset import LevelSetKernel
+    from process_studio.kernels.slab import SlabKernel
     from process_studio.worker.server import Server
 
     # The first step holds until the cancel has been sent, so the outcome does
@@ -639,14 +613,14 @@ def test_a_run_can_be_cancelled_between_steps_and_keeps_what_ran(workspace, monk
     # the whole flow would otherwise finish before the cancel arrived.
     cancel_sent = threading.Event()
     step_started = threading.Event()
-    real_run_step = LevelSetKernel.run_step
+    real_run_step = SlabKernel.run_step
 
     def held_run_step(self, state, step, **kwargs):
         step_started.set()
         assert cancel_sent.wait(timeout=60), "the test never sent its cancel"
         return real_run_step(self, state, step, **kwargs)
 
-    monkeypatch.setattr(LevelSetKernel, "run_step", held_run_step)
+    monkeypatch.setattr(SlabKernel, "run_step", held_run_step)
 
     document = call("open_workspace", root=str(workspace))
     branch = document["branches"][0]
@@ -851,22 +825,18 @@ def test_running_to_a_step_keeps_later_valid_results(workspace):
     assert set(result["stepStatuses"].values()) == {"clean"}
 
 
-def test_plan_grid_reports_the_lattice_and_its_cost(workspace):
+def test_plan_grid_reports_the_resolution_and_whether_it_would_change_anything(workspace):
+    """There is no lattice: the number is the resolution, and it costs nothing."""
     plan = call("plan_grid", root=str(workspace), targetSpacingNm=25.0)
-    estimate = plan["estimate"]
-    assert estimate["spacingNm"] == pytest.approx(25.0)
-    # Every extent has to divide by one spacing, so the shape is searched, not rounded.
-    assert plan["grid"]["nx"] == estimate["shape"][0]
-    assert estimate["nodeCount"] == estimate["shape"][0] * estimate["shape"][1] * estimate["shape"][2]
-    assert estimate["recommendedBytes"] > estimate["stateBytes"]
-    assert plan["withinLimit"] is True
+
+    assert plan["kernel"] == "slab"
+    assert plan["spacingRole"] == "conformal_resolution"
+    assert plan["estimate"]["spacingNm"] == pytest.approx(25.0)
+    assert plan["estimate"]["spacingXyNm"] == pytest.approx(25.0)
+    assert plan["maximumNodes"] is None and plan["withinLimit"] is True
+    # Applying discards every stored result, so "it is already this" matters.
     assert plan["unchanged"] is False
-
-
-def test_plan_grid_flags_a_grid_over_the_ceiling(workspace):
-    plan = call("plan_grid", root=str(workspace), targetSpacingNm=2.0)
-    assert plan["withinLimit"] is False
-    assert plan["estimate"]["nodeCount"] > plan["maximumNodes"]
+    assert call("plan_grid", root=str(workspace), targetSpacingNm=10.0)["unchanged"] is True
 
 
 def test_plan_grid_rejects_a_spacing_outside_the_supported_range(workspace):
@@ -875,26 +845,35 @@ def test_plan_grid_rejects_a_spacing_outside_the_supported_range(workspace):
             call("plan_grid", root=str(workspace), targetSpacingNm=spacing)
 
 
-def test_set_grid_by_target_spacing_applies_and_invalidates(workspace):
+def test_set_grid_applies_a_resolution_and_discards_what_was_computed_at_the_old_one(workspace):
     call("run_flow", root=str(workspace))
+
     updated = call("set_grid", root=str(workspace), targetSpacingNm=25.0)
-    grid = updated["project"]["grid"]
-    assert grid["spacingUm"] == pytest.approx(0.025)
-    assert grid["nx"] == 65 and grid["ny"] == 65 and grid["nz"] == 49
+
+    assert updated["project"]["resolutionUm"] == pytest.approx(0.025)
     assert set(updated["stepStatuses"][updated["branches"][0]["id"]].values()) == {"dirty"}
 
 
-def test_set_grid_refuses_to_exceed_the_node_ceiling(workspace):
-    with pytest.raises(InvalidRequest, match="ceiling"):
-        call("set_grid", root=str(workspace), targetSpacingNm=2.0)
-    unchanged = call("open_workspace", root=str(workspace))
-    assert unchanged["project"]["grid"]["nx"] == 41
+def test_set_grid_needs_a_resolution_to_set(workspace):
+    document = call("open_workspace", root=str(workspace))
+    with pytest.raises(InvalidRequest, match="no grid to set"):
+        call("set_grid", root=str(workspace), grid=document["project"]["grid"])
 
 
-def test_describe_reports_the_node_ceiling_and_presets():
-    numerics = call("describe")["numerics"]
-    assert numerics["maximumNodes"] == 20_000_000
-    assert numerics["spacingPresetsNm"] == [25.0, 12.5, 6.25]
+def test_a_window_of_any_shape_is_allowed(workspace):
+    """The window is bounds. Nothing has to divide anything any more.
+
+    A 200 nm substrate under a 1.6 um window is an awkward set of spans for
+    a lattice and a perfectly ordinary wafer, so it has to be accepted.
+    """
+    bounds = {"xMin": -0.8, "xMax": 0.8, "yMin": -0.8, "yMax": 0.8, "zMin": -0.2, "zMax": 0.4}
+    updated = call("set_grid", root=str(workspace), targetSpacingNm=10.0, bounds=bounds)
+
+    grid = updated["project"]["grid"]
+    assert (grid["zMin"], grid["zMax"]) == (-0.2, 0.4)
+    # The substrate is as thick as the window is deep: 200 nm.
+    document = call("open_workspace", root=str(workspace))
+    assert document["project"]["grid"]["zMin"] == -0.2
 
 
 def test_the_views_can_be_written_to_files(tmp_path, workspace):
@@ -1165,21 +1144,21 @@ def test_results_of_both_fidelities_are_kept_side_by_side(tmp_path):
     root = str(tmp_path / "slab")
     document = call("create_workspace", root=root, name="Both", kernel="slab")
     branch = document["branches"][0]
-    assert document["project"]["fidelity"] == "detailed"
+    assert document["project"]["fidelity"] == "simplified"
     first = branch["steps"][0]["id"]
     ran = call("run_flow", root=root, branchId=branch["id"], throughStepId=first)
     assert ran["stepStatuses"][first] == "clean"
     # Switching the film model shows the other mode's (absent) results...
-    document["project"]["fidelity"] = "simplified"
+    document["project"]["fidelity"] = "detailed"
     switched = call("save_document", root=root, document=document)
-    assert switched["project"]["fidelity"] == "simplified"
+    assert switched["project"]["fidelity"] == "detailed"
     assert switched["stepStatuses"][branch["id"]][first] == "dirty"
     with pytest.raises(InvalidRequest, match="current fidelity"):
         call("get_section", root=root, branchId=branch["id"], stepId=first, axis="y")
     ran = call("run_flow", root=root, branchId=branch["id"], throughStepId=first)
     assert ran["executedStepIds"] == [first]
-    # ...and switching back finds the detailed result still there, unrun.
-    document["project"]["fidelity"] = "detailed"
+    # ...and switching back finds the simplified result still there, unrun.
+    document["project"]["fidelity"] = "simplified"
     back = call("save_document", root=root, document=document)
     assert back["stepStatuses"][branch["id"]][first] == "clean"
     assert call("get_section", root=root, branchId=branch["id"], stepId=first, axis="y")["image"]

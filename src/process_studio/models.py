@@ -286,11 +286,13 @@ class ProjectDefinition:
     #: Named AA–BB section lines, each {"id", "name", "start": [x, y], "end": [x, y]}
     #: in micrometres. They are the user's bookmarks into the geometry.
     section_lines: list[dict[str, Any]] = field(default_factory=list)
-    #: How the slab kernel shapes films: "detailed" (rounded, sampled at the
-    #: resolution) or "simplified" (square corners, one sample per plane,
-    #: much faster). Results of both are stored side by side, so switching
-    #: back shows what was computed before without a rerun.
-    fidelity: str = "detailed"
+    #: How films are shaped: "simplified" (square corners, one sample per
+    #: plane, much faster) or "detailed" (rounded, sampled at the
+    #: resolution). Results of both are stored side by side, so switching
+    #: back shows what was computed before without a rerun. New projects
+    #: start simplified: it is what this is used for, and a detailed film is
+    #: a deliberate look at one step rather than how a flow is built.
+    fidelity: str = "simplified"
 
 
 def dataclass_dict(value: Any) -> dict[str, Any]:

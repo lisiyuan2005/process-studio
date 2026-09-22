@@ -277,17 +277,18 @@ def test_a_flow_can_be_applied_from_stdin(workspace: Path):
 
 
 def test_the_fidelity_is_a_project_setting_and_travels_in_flow_files(workspace: Path, tmp_path: Path):
-    assert as_json("fidelity", root=workspace) == {"fidelity": "detailed"}
-    shown = as_json("fidelity", "simplified", root=workspace)
-    assert shown["fidelity"] == "simplified"
+    # A new project is simplified; the other mode is a deliberate switch.
+    assert as_json("fidelity", root=workspace) == {"fidelity": "simplified"}
+    shown = as_json("fidelity", "detailed", root=workspace)
+    assert shown["fidelity"] == "detailed"
     code, out, _ = run("info", root=workspace)
-    assert code == EXIT_OK and "Fidelity   simplified" in out
+    assert code == EXIT_OK and "Fidelity   detailed" in out
     flow = as_json("flow", "dump", root=workspace)
-    assert flow["fidelity"] == "simplified"
-    flow["fidelity"] = "detailed"
+    assert flow["fidelity"] == "detailed"
+    flow["fidelity"] = "simplified"
     (tmp_path / "flow.json").write_text(json.dumps(flow))
     as_json("flow", "apply", str(tmp_path / "flow.json"), root=workspace)
-    assert as_json("fidelity", root=workspace) == {"fidelity": "detailed"}
+    assert as_json("fidelity", root=workspace) == {"fidelity": "simplified"}
 
 
 def test_loops_repeat_a_block_and_fold_back_into_the_flow_file(workspace: Path, tmp_path: Path):

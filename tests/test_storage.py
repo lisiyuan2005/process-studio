@@ -1,7 +1,5 @@
 from pathlib import Path
 
-from process_studio.kernel.grid import UniformGrid3D
-from process_studio.kernel.material_state import MaterialState
 from process_studio.models import (
     FlowBranch,
     MaterialDefinition,
@@ -11,6 +9,16 @@ from process_studio.models import (
     Recipe,
 )
 from process_studio.storage import ProjectRepository
+
+
+class _State:
+    """What a kernel hands the repository: something that writes itself."""
+
+    def __init__(self, contents: bytes = b"a result") -> None:
+        self.contents = contents
+
+    def save(self, path) -> None:
+        Path(path).write_bytes(self.contents)
 
 
 def test_sqlite_round_trip_and_shared_snapshot_lifetime(tmp_path) -> None:
@@ -38,11 +46,12 @@ def test_sqlite_round_trip_and_shared_snapshot_lifetime(tmp_path) -> None:
     repository.save_recipe(recipe)
     repository.save_branch(project.id, branch)
 
-    grid = UniformGrid3D(**grid_spec)
-    state = MaterialState(grid)
-    state.add_material("Si", grid.substrate())
-    first_snapshot = repository.save_snapshot(project.id, branch.id, step_one.id, state)
-    second_snapshot = repository.save_snapshot(project.id, branch.id, step_two.id, state)
+    first_snapshot = repository.save_snapshot(
+        project.id, branch.id, step_one.id, _State(b"step one"), suffix=".dfz"
+    )
+    second_snapshot = repository.save_snapshot(
+        project.id, branch.id, step_two.id, _State(b"step two"), suffix=".dfz"
+    )
     fork = repository.create_branch(project.id, branch.id, step_one.id, "variant")
 
     removed = repository.delete_step_and_dependents(branch.id, step_one.id)
@@ -51,9 +60,11 @@ def test_sqlite_round_trip_and_shared_snapshot_lifetime(tmp_path) -> None:
     assert repository.load_project(project.id).name == "demo"
     assert repository.load_materials()[0].name == "Si"
     assert repository.load_recipes()[0].name == "Inspect"
-    assert repository.load_snapshot(fork.id, step_one.id).priority == ["Si"]
-    assert (repository.snapshot_directory / f"{first_snapshot}.npz").exists()
-    assert not (repository.snapshot_directory / f"{second_snapshot}.npz").exists()
+    # The fork holds the result of the step it was forked at; deleting that
+    # step on the branch it came from therefore keeps the file.
+    assert repository.snapshot_path(fork.id, step_one.id).read_bytes() == b"step one"
+    assert (repository.snapshot_directory / f"{first_snapshot}.dfz").exists()
+    assert not (repository.snapshot_directory / f"{second_snapshot}.dfz").exists()
 
 
 def test_delete_project_snapshots_preserves_flow(tmp_path) -> None:
@@ -69,14 +80,13 @@ def test_delete_project_snapshots_preserves_flow(tmp_path) -> None:
     project.active_branch_id = branch.id
     repository.save_project(project)
     repository.save_branch(project.id, branch)
-    state = MaterialState(UniformGrid3D(**grid_spec))
-    state.add_material("Si", state.grid.substrate())
-    snapshot_id = repository.save_snapshot(project.id, branch.id, step.id, state)
+    snapshot_id = repository.save_snapshot(
+        project.id, branch.id, step.id, _State(), suffix=".dfz"
+    )
 
     assert repository.delete_project_snapshots(project.id) == 1
     assert repository.load_branch(branch.id).steps[0].id == step.id
-    assert repository.load_latest_snapshot(branch.id) is None
-    assert not (repository.snapshot_directory / f"{snapshot_id}.npz").exists()
+    assert not (repository.snapshot_directory / f"{snapshot_id}.dfz").exists()
 
 
 def test_a_workspace_that_moves_keeps_the_results_it_computed(tmp_path):
@@ -89,12 +99,6 @@ def test_a_workspace_that_moves_keeps_the_results_it_computed(tmp_path):
     recomputed, or failed, when it was asked for.
     """
     import shutil
-
-    from process_studio.storage import ProjectRepository
-
-    class _State:
-        def save(self, path):
-            Path(path).write_bytes(b"a result")
 
     here = tmp_path / "here"
     repository = ProjectRepository(here / "process_studio.sqlite3")
@@ -117,12 +121,6 @@ def test_a_workspace_that_moves_keeps_the_results_it_computed(tmp_path):
 
 def test_a_snapshot_recorded_by_absolute_path_is_adopted(tmp_path):
     """What the workspaces written before this look like."""
-    from process_studio.storage import ProjectRepository
-
-    class _State:
-        def save(self, path):
-            Path(path).write_bytes(b"a result")
-
     repository = ProjectRepository(tmp_path / "process_studio.sqlite3")
     repository.save_project(ProjectDefinition(id="p", name="p", grid={}))
     repository.save_branch("p", FlowBranch(id="b", name="main", steps=[]))

@@ -1,16 +1,14 @@
-"""The slab-only Windows package installs a much smaller dependency set
-(see scripts/build_desktop.ps1) than a full checkout: numpy, scipy, pillow,
-gdstk, openpyxl, pyyaml, shapely and trimesh, but never scikit-fmm or
-scikit-image (the level-set kernel's own solver and meshing). The worker's
-own module-level imports must not quietly grow a hard dependency on either,
-or that build stops merely importing.
+"""The packaged worker installs numpy, pillow, gdstk, openpyxl, pyyaml,
+shapely and trimesh -- and never scipy, scikit-image or scikit-fmm, which
+were the level-set kernel's own solver and meshing and went with it. The
+worker's module-level imports must not quietly grow a dependency on any of
+them, or the package stops merely importing.
 
 This does not literally uninstall anything (that would need a whole
-separate environment); it makes further imports of those two packages fail
-the way an absence would, then re-imports every module a slab-only worker
-loads on start-up fresh, from scratch, so any module-level ``import scipy``
-or ``import skimage`` surfaces here instead of only on a real slab-only
-machine.
+separate environment); it makes further imports of those packages fail the
+way an absence would, then re-imports every module the worker loads on
+start-up fresh, from scratch, so any module-level ``import scipy`` surfaces
+here instead of only on a real machine.
 """
 
 from __future__ import annotations
@@ -26,10 +24,8 @@ import pytest
 #: (module-level, unguarded) scipy or scikit-image import, reimporting it
 #: fresh below raises before this list even finishes.
 _STARTUP_MODULES = [
-    "process_studio.kernel",
-    "process_studio.kernel.grid",
+    "process_studio.grid",
     "process_studio.storage",
-    "process_studio.visualization",
     "process_studio.worker.render",
     "process_studio.worker.export",
     "process_studio.worker.runner",
@@ -42,7 +38,7 @@ _STARTUP_MODULES = [
 
 
 @pytest.fixture()
-def forbid_levelset_only_packages(monkeypatch):
+def forbid_the_retired_packages(monkeypatch):
     """Make `import scipy` / `import skimage` fail like they are not installed."""
     blocked = {"scipy", "skimage", "scikit_fmm", "skfmm"}
     real_import = builtins.__import__
@@ -66,8 +62,8 @@ def forbid_levelset_only_packages(monkeypatch):
             monkeypatch.delitem(sys.modules, name, raising=False)
 
 
-def test_the_slab_only_startup_path_never_needs_scipy_or_scikit_image(
-    forbid_levelset_only_packages,
+def test_the_startup_path_never_needs_scipy_or_scikit_image(
+    forbid_the_retired_packages,
 ):
     for name in _STARTUP_MODULES:
         importlib.import_module(name)
@@ -77,12 +73,6 @@ def test_the_slab_only_startup_path_never_needs_scipy_or_scikit_image(
     configure({"slab"})
     try:
         from process_studio.worker.protocol import dispatch
-        from process_studio.worker.render import MESHES_AVAILABLE
-
-        # The level-set-only marching-cubes flag is correctly off (skimage
-        # is "not installed" here); the slab kernel's own surfaces flag,
-        # which the desktop actually reads for the slab kernel, is separate.
-        assert MESHES_AVAILABLE is False
 
         response = dispatch({"kind": "request", "id": 1, "method": "describe"}, None)
     finally:

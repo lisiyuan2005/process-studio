@@ -1,4 +1,12 @@
-"""Uniform two-dimensional Cartesian grid."""
+"""The project window, and the sampling grids that describe it.
+
+``UniformGrid3D`` was the level-set kernel's lattice. The slab kernel has
+no lattice -- it works on exact polygons -- so for it this is the project
+**window**: the bounds are what matter and the node counts are only a
+sampling hint. The equal-spacing rule that the field solver needed is
+therefore gone: it constrained which windows a project could have (the
+spacing had to divide all three spans) for no reason the slab kernel has.
+"""
 
 from __future__ import annotations
 
@@ -79,8 +87,6 @@ class UniformGrid3D:
             raise ValueError("nx, ny and nz must be at least 3")
         if self.x_max <= self.x_min or self.y_max <= self.y_min or self.z_max <= self.z_min:
             raise ValueError("grid bounds must have positive extent")
-        if not (np.isclose(self.dx, self.dy) and np.isclose(self.dx, self.dz)):
-            raise ValueError("the prototype requires equal x/y/z spacing")
 
     @property
     def dx(self) -> float:
@@ -126,3 +132,24 @@ class UniformGrid3D:
         return np.broadcast_to(
             zz - surface_z - inside_nudge, (self.nz, self.ny, self.nx)
         ).copy()
+
+
+#: Nodes per micrometre when a window is described as a grid. Nothing samples
+#: at this rate -- the slab kernel reads the bounds -- but the stored shape
+#: should be of a plausible size rather than arbitrary.
+WINDOW_NODES_PER_UM = 40.0
+
+
+def window_grid(
+    x_min: float, x_max: float, y_min: float, y_max: float, z_min: float, z_max: float
+) -> UniformGrid3D:
+    """A window, as the grid a project stores.
+
+    The node counts follow the bounds at a nominal density; no spacing has
+    to divide anything, so any window the user asks for is a window they get.
+    """
+    counts = [
+        max(3, int(round((high - low) * WINDOW_NODES_PER_UM)) + 1)
+        for low, high in ((x_min, x_max), (y_min, y_max), (z_min, z_max))
+    ]
+    return UniformGrid3D(x_min, x_max, y_min, y_max, z_min, z_max, *counts)
