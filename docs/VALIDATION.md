@@ -19,7 +19,7 @@ Python 侧按文件覆盖：
 - **版图与库**（`tests/test_layout_inputs.py`、`tests/test_libraries.py`）：Quick Sketch 四种图形、布尔运算、阵列、JSON round-trip、GDS layer/datatype 栅格化、简化 Excel Recipe 往返。
 - **持久化**（`tests/test_storage.py`、`tests/test_shared_library.py`，15 项）：工程/分支/共享快照、级联失效、无引用文件删除、工作目录搬走之后结果仍然找得到；共享库（材料/工具/Recipe 在用户目录里一份）的身份戳、删除不复活、多窗口不互相覆盖。
 - **更新**（`tests/test_update.py`，13 项）：平台对应的资产名、版本号数值比较、把最新 release 和当前构建对照（版本号可以往下走，见下）、解压到应用旁边、失败留下的目录下次清掉、只信系统信任库并在取不到时回退到打包的 CA。
-- **打包**（`tests/test_packaging.py`）：把 `scipy` / `skimage` / `skfmm` 的 import 变成失败（它们是 level set 的求解与建面，已经随它一起不装了），再从零重新 import worker 启动时会加载的每个模块并发一次 `describe`。谁不小心在模块顶层 import 了它们，这里就会红，而不是等到打包版在真机上炸。
+- **打包**（`tests/test_packaging.py`，2 项）：把 `scipy` / `skimage` / `skfmm` 的 import 变成失败（它们是 level set 的求解与建面，已经随它一起不装了），再从零重新 import worker 启动时会加载的每个模块并发一次 `describe`；另一项在**新进程**里用一个会 ImportError 的假 scipy 真写一次 mesh 文件——trimesh 是在 import 时决定 scipy 在不在的，在已经 import 过它的进程里屏蔽不算数。谁不小心让打包版依赖上它们，这里就会红，而不是等到真机上炸。
 
 **版本号重置**（`0.9.8` → `0.1.0`）：更新检查因此不能只比"更大"。`describe_release` 同时给出 `available`（最新 release 与当前构建**不同**）和 `newer`（严格更大），界面用前者，所以从 `0.9.8` 装上来的用户仍然能看到 `0.1.0`。
 

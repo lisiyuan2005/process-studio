@@ -77,11 +77,12 @@ if ($LASTEXITCODE -ne 0) { throw "Installing setuptools into the embeddable Pyth
 
 Write-Host "Installing process-studio into the embeddable Python"
 # The worker's own dependencies, installed explicitly so the package itself
-# can go in with --no-deps. trimesh's mesh export reaches into scipy for its
-# colour handling, so scipy stays even though no kernel needs it any more.
+# can go in with --no-deps. scipy is not here either: the one place that
+# reached for it was trimesh turning face colours into vertex colours when
+# writing a mesh file, and the exporter colours the vertices itself now.
 # Keep this list in sync with pyproject.toml's [project] dependencies.
 & $PythonExe -m pip install --no-warn-script-location --no-build-isolation `
-  numpy scipy pillow gdstk openpyxl pyyaml shapely trimesh mapbox-earcut truststore certifi
+  numpy pillow gdstk openpyxl pyyaml shapely trimesh mapbox-earcut truststore certifi
 if ($LASTEXITCODE -ne 0) { throw "Installing process-studio's dependencies into the embeddable Python failed." }
 & $PythonExe -m pip install --no-warn-script-location --no-build-isolation --no-deps .
 if ($LASTEXITCODE -ne 0) { throw "Installing process-studio into the embeddable Python failed." }

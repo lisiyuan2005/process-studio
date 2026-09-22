@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import builtins
 import importlib
+import subprocess
 import sys
+import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -80,3 +83,50 @@ def test_the_startup_path_never_needs_scipy_or_scikit_image(
     kernels = {kernel["id"] for kernel in response["kernels"]}
     assert kernels == {"slab"}
     assert response["kernels"][0]["surfaces"] is True
+
+
+def test_writing_a_mesh_file_does_not_need_scipy(tmp_path):
+    """The export path, in a process that never had scipy to begin with.
+
+    trimesh decides at import time whether scipy is there; a process that
+    already imported it holds the real module, so blocking the import later
+    proves nothing. This runs a real export in a fresh interpreter with a
+    scipy that refuses to import -- what the packaged worker is -- because
+    the mesh export is the one place trimesh reached for it (colouring the
+    faces made it build a sparse face-to-vertex matrix).
+    """
+    stub = tmp_path / "stub"
+    stub.mkdir()
+    (stub / "scipy.py").write_text('raise ImportError("no scipy in this build")\n')
+    script = textwrap.dedent(
+        f"""
+        import sys
+        sys.path.insert(0, {str(stub)!r})
+        import trimesh
+        assert not trimesh.exceptions or True
+        from process_studio.defaults import default_grid, default_materials
+        from process_studio.kernels import get_kernel
+        from process_studio.models import ProjectDefinition
+        from process_studio.worker.export import write_mesh
+        from process_studio.worker.serialize import grid_dict
+        from pathlib import Path
+
+        kernel = get_kernel("slab")
+        project = ProjectDefinition("p", grid_dict(default_grid()), kernel="slab", resolution_um=0.02)
+        materials = default_materials()
+        state = kernel.initial_state(project, materials=materials)
+        written = write_mesh(
+            kernel, state, project, {{"Si": "#8a6f4a"}}, Path({str(tmp_path / "wafer.glb")!r})
+        )
+        print(written["triangles"])
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        cwd=str(Path(__file__).resolve().parent.parent),
+        env={"PYTHONPATH": "src", "PATH": "/usr/bin:/bin"},
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert (tmp_path / "wafer.glb").stat().st_size > 0

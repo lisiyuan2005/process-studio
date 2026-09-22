@@ -54,7 +54,15 @@ def write_mesh(
         )
         color = colors.get(surface["material"], "#7c83a0").lstrip("#")
         rgb = [int(color[index : index + 2], 16) for index in (0, 2, 4)] if len(color) == 6 else [124, 131, 160]
-        mesh.visual.face_colors = [*rgb, 255]
+        # Per vertex, not per face: one mesh is one material, so the two say
+        # exactly the same thing -- but a file written from face colours
+        # makes trimesh convert them to vertex colours through a sparse
+        # matrix, which is a scipy this worker does not otherwise need and
+        # does not ship. Colouring the vertices is the same picture without
+        # the dependency.
+        mesh.visual.vertex_colors = np.tile(
+            np.array([*rgb, 255], dtype=np.uint8), (len(mesh.vertices), 1)
+        )
         scene.add_geometry(mesh, node_name=surface["material"], geom_name=surface["material"])
         counts[surface["material"]] = int(len(indices))
     if not counts:
