@@ -139,6 +139,16 @@ def response_from_json(payload: Mapping[str, Any]) -> MaterialResponse:
         raise InvalidRequest(f"material response is invalid: {error}") from error
 
 
+def _experiment_from_json(payload: Mapping[str, Any], what: str) -> dict[str, Any] | None:
+    """The experiment set, or None when it is the same as the simulation one."""
+    values = payload.get("experimentParameters")
+    if values is None:
+        return None
+    if not isinstance(values, Mapping):
+        raise InvalidRequest(f"{what} experimentParameters must be an object or null")
+    return dict(values)
+
+
 def recipe_to_json(recipe: Recipe) -> dict[str, Any]:
     return {
         "id": recipe.id,
@@ -148,6 +158,9 @@ def recipe_to_json(recipe: Recipe) -> dict[str, Any]:
         "group": recipe.group,
         "outputMaterial": recipe.output_material,
         "parameters": dict(recipe.parameters),
+        "experimentParameters": (
+            None if recipe.experiment_parameters is None else dict(recipe.experiment_parameters)
+        ),
         "materialResponses": {
             name: response_to_json(response)
             for name, response in recipe.material_responses.items()
@@ -179,6 +192,7 @@ def recipe_from_json(payload: Mapping[str, Any]) -> Recipe:
             None if payload.get("outputMaterial") in (None, "") else str(payload["outputMaterial"])
         ),
         parameters=dict(parameters),
+        experiment_parameters=_experiment_from_json(payload, "recipe"),
         material_responses={
             str(key): response_from_json(value) for key, value in responses.items()
         },
@@ -196,6 +210,9 @@ def step_to_json(step: ProcessStep, recipes: Mapping[str, Recipe]) -> dict[str, 
         "tool": definition.tool,
         "outputMaterial": definition.output_material,
         "parameters": dict(definition.parameters),
+        "experimentParameters": (
+            None if definition.experiment_parameters is None else dict(definition.experiment_parameters)
+        ),
         "materialResponses": {
             name: response_to_json(response)
             for name, response in definition.material_responses.items()
@@ -262,6 +279,7 @@ def step_from_json(payload: Mapping[str, Any]) -> ProcessStep:
                 else str(payload["outputMaterial"])
             ),
             parameters=dict(parameters),
+            experiment_parameters=_experiment_from_json(payload, "step"),
             material_responses={
                 str(name): response_from_json(response)
                 for name, response in responses.items()

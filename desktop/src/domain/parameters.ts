@@ -55,6 +55,27 @@ export const PARAMETER_SPECS: Record<ProcessType, ParameterSpec[]> = {
   ],
 };
 
+/** Settings a tool is given that no kernel reads.
+ *
+ * The experiment set answers "what was the machine set to", so it holds the
+ * knobs of the machine -- the recipe loaded on it, power, pressure, flow --
+ * beside the process fields, which are often the same numbers. Anything
+ * else can still be typed in as JSON, the way an imported field is.
+ */
+const TOOL_SETTINGS: ParameterSpec[] = [
+  { key: "tool_recipe", label: "Tool recipe", kind: "text", initial: "" },
+  { key: "power_w", label: "Power", unit: "W", initial: 100 },
+  { key: "pressure_mtorr", label: "Pressure", unit: "mTorr", initial: 10 },
+  { key: "gas_flow_sccm", label: "Gas flow", unit: "sccm", initial: 50 },
+  { key: "notes", label: "Notes", kind: "text", initial: "" },
+];
+
+/** The rows the experiment set offers: the process fields, then the machine's. */
+export function experimentSpecs(type: ProcessType): ParameterSpec[] {
+  const own = new Set(PARAMETER_SPECS[type].map((spec) => spec.key));
+  return [...PARAMETER_SPECS[type], ...TOOL_SETTINGS.filter((spec) => !own.has(spec.key))];
+}
+
 export function specFor(type: ProcessType, key: string): ParameterSpec | undefined {
   return PARAMETER_SPECS[type].find((spec) => spec.key === key);
 }

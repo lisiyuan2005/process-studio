@@ -156,6 +156,7 @@ export class TauriBridge implements DesktopBridge {
     format: FlowExportFormat,
     projectName: string,
     columns?: string[],
+    values?: "simulation" | "experiment",
   ): Promise<string | null> {
     const names: Record<FlowExportFormat, [string, string]> = {
       xlsx: ["Excel workbook", "xlsx"],
@@ -175,6 +176,7 @@ export class TauriBridge implements DesktopBridge {
       destination,
       format,
       columns: columns ?? null,
+      values: values ?? "simulation",
     });
     return result.path;
   }

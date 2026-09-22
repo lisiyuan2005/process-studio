@@ -36,6 +36,7 @@ import {
   stepAccentColor,
   stepStatus,
   toggleStep,
+  updateStepExperiment,
   updateStepParameters,
   upsertRecipe,
   validateDocument,
@@ -429,5 +430,43 @@ describe("process splits", () => {
   it("ignores a branch that was never forked from anything", () => {
     const document = demoDocument();
     expect(forksByStep(document, getActiveBranch(document).id)).toEqual({});
+  });
+});
+
+describe("the experiment values", () => {
+  const first = () => getSteps(demoDocument())[0];
+
+  it("start as a copy of the simulation values, so only differences are typed", () => {
+    const step = first();
+    const document = updateStepExperiment(demoDocument(), step.id, {});
+    expect(getSteps(document)[0].experimentParameters).toEqual(step.parameters);
+  });
+
+  it("do not make the step or anything after it stale", () => {
+    const document = demoDocument();
+    const before = document.stepStatuses;
+    const step = getSteps(document)[0];
+    const edited = updateStepExperiment(
+      updateStepExperiment(document, step.id, {}),
+      step.id,
+      { tool_recipe: "Siva_HZO_300C", power_w: 300 },
+    );
+    expect(getSteps(edited)[0].experimentParameters?.tool_recipe).toBe("Siva_HZO_300C");
+    expect(edited.stepStatuses).toEqual(before);
+  });
+
+  it("are given up again with null, and a key with null goes", () => {
+    const step = first();
+    const separate = updateStepExperiment(demoDocument(), step.id, { power_w: 300 });
+    const dropped = updateStepExperiment(separate, step.id, { power_w: null });
+    expect(dropped.branches[0].steps[0].experimentParameters).not.toHaveProperty("power_w");
+    const same = updateStepExperiment(separate, step.id, null);
+    expect(getSteps(same)[0].experimentParameters).toBeNull();
+  });
+
+  it("keep an empty text value, which is how a note is added before it is typed", () => {
+    const step = first();
+    const document = updateStepExperiment(demoDocument(), step.id, { notes: "" });
+    expect(getSteps(document)[0].experimentParameters).toHaveProperty("notes", "");
   });
 });

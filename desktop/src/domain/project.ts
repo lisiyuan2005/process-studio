@@ -266,9 +266,43 @@ export function updateStepParameters(
   if (!step) return document;
   const merged: Record<string, ParameterValue> = { ...step.parameters, ...parameters };
   for (const [key, value] of Object.entries(parameters)) {
-    if (value === null || value === "") delete merged[key];
+    // Null is the remove button. An empty string is a value: a text
+    // parameter (the recipe loaded on the tool, a note) starts empty and
+    // has to be addable before it is typed into.
+    if (value === null) delete merged[key];
   }
   return updateStep(document, stepId, { parameters: merged });
+}
+
+/**
+ * Edit what the tool was set to for a step.
+ *
+ * Unlike every other step edit this one does not invalidate anything: the
+ * kernel never reads these values, so a result computed before they were
+ * written down is still that result. Touching them for the first time
+ * copies the simulation values, so only the differences have to be typed;
+ * `null` gives that up and the two are the same again.
+ */
+export function updateStepExperiment(
+  document: WorkspaceDocument,
+  stepId: string,
+  patch: Record<string, ParameterValue> | null,
+): WorkspaceDocument {
+  const steps = getSteps(document);
+  const ids = new Set(loopCounterparts(steps, stepId));
+  if (ids.size === 0) return document;
+  return withSteps(
+    document,
+    steps.map((step) => {
+      if (!ids.has(step.id)) return step;
+      if (patch === null) return { ...step, experimentParameters: null };
+      const merged = { ...(step.experimentParameters ?? step.parameters), ...patch };
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === null) delete merged[key];
+      }
+      return { ...step, experimentParameters: merged };
+    }),
+  );
 }
 
 export function setStepProcessType(

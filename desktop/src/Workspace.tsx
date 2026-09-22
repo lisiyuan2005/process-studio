@@ -66,6 +66,7 @@ import {
   stepStatus,
   toggleStep,
   updateStep,
+  updateStepExperiment,
   updateStepParameters,
   upsertMaterial,
   upsertSectionLine,
@@ -970,9 +971,13 @@ export function Workspace({
     }
   };
   const saveAs = () => withWorkspace("Save as", (root) => bridge.saveWorkspaceAs(root, document!.project.name));
-  const exportFlowAs = (format: FlowExportFormat, columns?: string[]) =>
+  const exportFlowAs = (
+    format: FlowExportFormat,
+    columns?: string[],
+    values?: "simulation" | "experiment",
+  ) =>
     withWorkspace(`Export flow (${format})`, (root) =>
-      bridge.exportFlow(root, format, document!.project.name, columns),
+      bridge.exportFlow(root, format, document!.project.name, columns, values),
     );
   const importFlowFile = () => withWorkspace("Apply flow file", (root) => bridge.importFlow(root));
   const exportLibraryAs = (kind: LibraryKind) =>
@@ -2068,6 +2073,9 @@ export function Workspace({
           onParameter={(patch: Record<string, ParameterValue>) =>
             selectedStep && setDocument(updateStepParameters(document, selectedStep.id, patch))
           }
+          onExperiment={(patch) =>
+            selectedStep && setDocument(updateStepExperiment(document, selectedStep.id, patch))
+          }
           onLoadRecipe={(recipe) =>
             selectedStep && setDocument(loadRecipeIntoStep(document, selectedStep.id, recipe))
           }
@@ -2114,10 +2122,10 @@ export function Workspace({
           format={exportingTable}
           columns={capabilities?.flowColumns ?? []}
           busy={busy}
-          onExport={(columns) => {
+          onExport={(columns, values) => {
             const format = exportingTable;
             setExportingTable(null);
-            void exportFlowAs(format, columns);
+            void exportFlowAs(format, columns, values);
           }}
           onClose={() => setExportingTable(null)}
         />

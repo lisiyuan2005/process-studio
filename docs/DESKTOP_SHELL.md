@@ -269,6 +269,17 @@ RPC：`create_branch`（root、branchId=要分的分支、stepId=分叉点、nam
 
 **单位是打字的人的事，不是流程的事**（`domain/units.ts`）：存下来的值永远是内核读的那个单位——长度 µm、时间 min、速率 µm/min、每周期 µm/cycle。字段旁边的下拉只改**显示和输入**：nm/µm、s/min/h、nm/min · µm/min · nm/s · µm/h、nm/cycle · µm/cycle。选择按参数记在 `localStorage` 里，所有显示这个参数的地方一起跟着。因为存的值没变，**换单位不会让步骤过期**——顺手一提，输入框只在数字真的变了时才上报（一个编辑会让这一步及其之后全部 stale，所以"点进去又出来"不能算编辑）。
 
+**两套参数：Simulation 和 Experiment**。参数区上方多了一排两个标签：
+
+- **Simulation** 是内核读的那套：要建出什么。
+- **Experiment** 是机器实际设成什么：跑了多久、多大功率、装的是哪条 tool recipe。两套**默认是同一套**（标签上写着 `Experiment =`），什么都不用维护；点 **Record separate experiment values** 才分开，分开时先**复制一份 simulation 的值**，所以只需要改不一样的地方，**Use the simulation values** 再合回去。
+
+Experiment 这一侧除了工艺字段还多几行机器的旋钮：Tool recipe、Power、Pressure、Gas flow、Notes；别的键照旧可以按 JSON 加。
+
+**内核永远不读 experiment，摘要也不覆盖它**（`step_digest` 是一张白名单，只列内核读的东西）。所以把当时的机台设置补记上去，**不会让已经算好的结果过期**——这正是它是一个独立字段而不是"更多参数"的原因。数据上它是 `experimentParameters`：`null` 表示"和 simulation 一样"，一个对象表示自己的一套；`ProcessStep` 和 `Recipe` 都有，随工作目录、流程文件和 Recipe 的 Excel（`Experiment Parameters (JSON)` 一列）一起走。命令行是 `steps set --set-experiment KEY=VALUE`、`--unset-experiment KEY`、`--same-experiment`，`steps show` 两套都列；流程文件里是每一步的 `experiment:`。
+
+**导出表格时可以选导出哪一套**（导出对话框上方的 Simulation / Experiment），没分开的步骤两边是同样的数字。
+
 **ALD 按周期写**：工具名或分组里带 ALD/ALE/MLD 时（`cyclic()`），沉积的默认参数是 **Cycles** 和 **Rate per cycle**，而不是目标厚度——recipe 在 fab 里本来就是这么写的。换工具或换工艺类型时，**只有还是某一套默认值的参数会被换掉**；有人动过的数字一个都不碰。下面实时显示乘出来的膜厚（`240 × 0.9 nm = 216 nm`），省得手算。
 
 内核这边跟着放宽了：沉积的厚度可以是 `target`，也可以是 `cycles × rate_per_cycle`，也可以是 `time_min × rate`（刻蚀一直支持时间×速率）。以前只读 `target`，一个数字都填好的 ALD 步骤会得到"thickness must be greater than zero"，现在三种写法逐位等价（`_deposit_thickness`）。

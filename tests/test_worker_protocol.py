@@ -1212,6 +1212,62 @@ def test_the_file_menu_methods_export_import_and_copy(tmp_path):
         call("export_library", root=root, kind="sketches", destination=str(tmp_path / "x.xlsx"))
 
 
+def test_the_experiment_values_travel_but_never_reach_the_kernel(tmp_path):
+    """Two sets of numbers: what to build, and what the tool was set to.
+
+    The experiment set is documentation -- a kernel never reads it -- so
+    writing it down must not invalidate a result that has already been
+    computed. That is the whole reason it is a field of its own rather than
+    more parameters.
+    """
+    root = str(tmp_path / "two-sets")
+    document = call("create_workspace", root=root, name="Two sets", kernel="slab")
+    branch = document["branches"][0]
+    first = branch["steps"][0]
+    call("run_flow", root=root, branchId=branch["id"], throughStepId=first["id"])
+    ready = call("open_workspace", root=root)
+    assert ready["stepStatuses"][branch["id"]][first["id"]] == "clean"
+
+    # Say what the machine was set to; the step stays ready.
+    steps = ready["branches"][0]["steps"]
+    steps[0]["experimentParameters"] = {
+        **steps[0]["parameters"],
+        "time_min": 42,
+        "power_w": 300,
+        "tool_recipe": "Siva_HZO_300C",
+    }
+    saved = call("save_document", root=root, document=ready)
+    assert saved["stepStatuses"][branch["id"]][first["id"]] == "clean"
+    assert saved["branches"][0]["steps"][0]["experimentParameters"]["power_w"] == 300
+    # And it is still there after a reopen.
+    assert call("open_workspace", root=root)["branches"][0]["steps"][0][
+        "experimentParameters"
+    ]["tool_recipe"] == "Siva_HZO_300C"
+
+    # A table can be written from either set. The experiment row shows the
+    # tool's own time; the simulation row shows what was built.
+    def first_row(which: str) -> str:
+        destination = str(tmp_path / f"{which}.csv")
+        call("export_flow", root=root, destination=destination, format="csv",
+             columns=["name", "other"], values=which)
+        return Path(destination).read_text(encoding="utf-8-sig").splitlines()[1]
+
+    assert "power_w" in first_row("experiment")
+    assert "power_w" not in first_row("simulation")
+
+    with pytest.raises(InvalidRequest, match="simulation or experiment"):
+        call("export_flow", root=root, destination=str(tmp_path / "x.csv"),
+             format="csv", values="both")
+
+    # A flow file carries both sets, whatever the table was asked for.
+    flow = str(tmp_path / "flow.json")
+    call("export_flow", root=root, destination=flow, format="json")
+    text = Path(flow).read_text()
+    assert "experiment" in text and "Siva_HZO_300C" in text
+    applied = call("import_flow", root=root, source=flow)
+    assert applied["document"]["branches"][0]["steps"][0]["experimentParameters"]["power_w"] == 300
+
+
 def test_a_flow_table_carries_the_columns_that_were_asked_for(tmp_path):
     """A flow is exported for a purpose, so the columns are the client's choice.
 

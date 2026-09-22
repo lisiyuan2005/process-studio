@@ -124,6 +124,7 @@ export interface DesktopBridge {
     format: FlowExportFormat,
     projectName: string,
     columns?: string[],
+    values?: "simulation" | "experiment",
   ): Promise<string | null>;
   /** Make the workspace match a flow file the user picks. Null when they cancel. */
   importFlow(root: string): Promise<WorkspaceDocument | null>;

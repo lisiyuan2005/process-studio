@@ -61,6 +61,10 @@ cd ~/devices/dram
 
 步骤选项（`add` 和 `set` 通用）：`--name`、`--tool`、`--material`（沉积的材料）、`--set KEY=VALUE`（可重复，数字和 true/false 保持类型）、`--unset KEY`、`--mask none|sketch:ID|gds:LAYER/DATATYPE`、`--keep inside|outside`、`--rate MATERIAL=µm/min`、`--stop MATERIAL`、`--no-response MATERIAL`。
 
+**两套参数**：`--set` 改的是 simulation 那套（内核读的）。机器实际设成什么用 `--set-experiment KEY=VALUE`（可重复）、`--unset-experiment KEY`、`--same-experiment`（放弃自己那套，回到"和 simulation 一样"）。第一次 `--set-experiment` 会先复制一份 simulation 的值，所以只要写不一样的地方。内核不读这套，步骤摘要也不含它，**补记机台设置不会让已算好的结果过期**。`steps show` 两套都列。
+
+`--tool` 里带 ALD/ALE/MLD 时，新加的沉积步骤默认参数是 `cycles` 和 `rate_per_cycle`，不是 `target`。
+
 全局选项：`--root DIR`、`--json`（结果输出为 JSON，进度和提示仍在 stderr）、`-q`。
 
 退出码：0 成功；2 参数或引用错误；3 工作目录打不开；4 运行失败（内核报错）；130 被中断。
@@ -105,7 +109,8 @@ sketches:
 steps:
   - {name: Trench Etch, type: etch, mask: sketch:default, parameters: {target: 0.3, directional_fraction: 1.0}, rates: {Si: 0.12}}
   - {name: Liner, type: deposit, material: TiN, parameters: {target: 0.02, mode: conformal}}
-  - {name: HZO, type: deposit, material: HZO, tool: ALD, parameters: {cycles: 240, rate_per_cycle: 0.0009, mode: conformal}}
+  - {name: HZO, type: deposit, material: HZO, tool: ALD, parameters: {cycles: 240, rate_per_cycle: 0.0009, mode: conformal},
+     experiment: {cycles: 240, rate_per_cycle: 0.0009, tool_recipe: Siva_HZO_300C, time_min: 42}}   # 机器实际设成什么；省略表示和上面一样
   - {name: Fill, type: deposit, material: W, parameters: {target: 0.2, mode: conformal}}
   - {name: CMP, type: cmp, parameters: {target_z: 0.0}}
   - {name: Gate oxide, type: oxidation, material: SiO2, parameters: {target: 0.005}, rates: {Si: 1}}

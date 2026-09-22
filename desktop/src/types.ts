@@ -105,6 +105,8 @@ export interface Recipe {
   group: string;
   outputMaterial: string | null;
   parameters: Record<string, ParameterValue>;
+  /** What the tool is set to; null means the same as `parameters`. */
+  experimentParameters?: Record<string, ParameterValue> | null;
   materialResponses: Record<string, MaterialResponse>;
 }
 
@@ -127,6 +129,13 @@ export interface ProcessStep {
   tool: string;
   outputMaterial: string | null;
   parameters: Record<string, ParameterValue>;
+  /**
+   * What the tool is set to, when that is not what the kernel is asked to
+   * build. Null (or absent) means the two are the same, which is the usual
+   * case. A kernel never reads it and a digest never covers it, so writing
+   * down what the machine did cannot make a result stale.
+   */
+  experimentParameters?: Record<string, ParameterValue> | null;
   materialResponses: Record<string, MaterialResponse>;
   maskSource: MaskSource;
   layer: number | null;

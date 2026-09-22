@@ -11,6 +11,7 @@ import argparse
 import base64
 import contextlib
 import json
+import re
 import sys
 import threading
 from pathlib import Path
@@ -55,6 +56,12 @@ STEP_DEFAULTS: dict[str, tuple[str, dict[str, Any]]] = {
     "oxidation": ("New oxidation", {"target": 0.02}),
 }
 
+#: A deposition on one of these is written in cycles, as its recipe is in
+#: the fab: ``cycles × rate_per_cycle`` is the thickness. The desktop reads
+#: the tool the same way.
+CYCLIC_TOOLS = re.compile(r"(^|[^a-z])(ald|ale|mld)([^a-z]|$)", re.IGNORECASE)
+CYCLIC_DEFAULTS = {"cycles": 100, "rate_per_cycle": 0.0001}
+
 
 # -- small parsers -------------------------------------------------------------
 
@@ -97,6 +104,23 @@ def apply_step_options(step: dict[str, Any], args: argparse.Namespace) -> None:
         step["parameters"][key] = value
     for key in getattr(args, "unset", None) or []:
         step["parameters"].pop(key, None)
+    # The experiment set: what the tool is set to, which the kernel never
+    # reads. Touching it gives the step its own set, starting from a copy of
+    # the simulation values so only the differences have to be typed;
+    # --same-experiment gives that up again.
+    if getattr(args, "same_experiment", False):
+        step["experimentParameters"] = None
+    experiment_edits = (getattr(args, "set_experiment", None) or []) + [
+        f"{key}=" for key in getattr(args, "unset_experiment", None) or []
+    ]
+    if experiment_edits:
+        if step.get("experimentParameters") is None:
+            step["experimentParameters"] = dict(step["parameters"])
+        for assignment in getattr(args, "set_experiment", None) or []:
+            key, value = parse_assignment(assignment)
+            step["experimentParameters"][key] = value
+        for key in getattr(args, "unset_experiment", None) or []:
+            step["experimentParameters"].pop(key, None)
     if getattr(args, "mask", None) is not None:
         mask = parse_mask(args.mask)
         sketch_id = mask.pop("sketch_id", None)
@@ -291,6 +315,17 @@ def cmd_steps_show(session: Session, args: argparse.Namespace) -> int:
             lines.append(f"     {key} = {format_number(value)}")
         if not parameters:
             lines.append("     (none)")
+        experiment = step.get("experimentParameters")
+        if experiment is None:
+            lines.append("   experiment  (the same as the parameters above)")
+        else:
+            lines.append("   experiment")
+            for key, value in experiment.items():
+                if key == "sketch_id":
+                    continue
+                lines.append(f"     {key} = {format_number(value)}")
+            if not {k: v for k, v in experiment.items() if k != "sketch_id"}:
+                lines.append("     (none)")
         if step["materialResponses"]:
             lines.append("   material responses")
             for name, response in step["materialResponses"].items():
@@ -316,6 +351,8 @@ def cmd_steps_add(session: Session, args: argparse.Namespace) -> int:
     document = session.document()
     steps = Session.steps(document)
     name, parameters = STEP_DEFAULTS[args.type]
+    if args.type == "deposit" and CYCLIC_TOOLS.search(getattr(args, "tool", None) or ""):
+        parameters = CYCLIC_DEFAULTS
     step = {
         "id": new_id(),
         "name": name,
@@ -997,6 +1034,13 @@ def _step_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--set", action="append", metavar="KEY=VALUE",
                         help="a process parameter, e.g. target=0.04 or mode=conformal (repeatable)")
     parser.add_argument("--unset", action="append", metavar="KEY", help="drop a parameter (repeatable)")
+    parser.add_argument("--set-experiment", action="append", metavar="KEY=VALUE",
+                        help="what the tool is actually set to, e.g. time_min=12 or power_w=300; "
+                             "the kernel never reads these (repeatable)")
+    parser.add_argument("--unset-experiment", action="append", metavar="KEY",
+                        help="drop an experiment setting (repeatable)")
+    parser.add_argument("--same-experiment", action="store_true",
+                        help="go back to the experiment values being the same as the parameters")
     parser.add_argument("--mask", metavar="MASK", help="none, sketch:ID or gds:LAYER/DATATYPE")
     parser.add_argument("--keep", choices=("inside", "outside"), help="which side of the mask the step acts on")
     parser.add_argument("--rate", action="append", metavar="MATERIAL=UM_PER_MIN",

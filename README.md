@@ -86,7 +86,8 @@ macOS/Linux 脚本先用 PyInstaller 把 worker 打成独立可执行文件；Wi
 - Step 自带工艺类型和参数；Recipe Library 只用于加载模板或保存可复用模板，加载即复制、不留引用
 - 参数可以按自己习惯的单位输入（nm/µm、s/min/h、nm/s 等），存下来的永远是内核读的那个单位，换单位不会让步骤过期
 - ALD/ALE 工具的沉积按 **Cycles × Rate per cycle** 写（fab 里的写法），下面实时显示乘出来的膜厚；厚度也可以直接给，或按时间×速率给
-- 导出流程为 Excel/CSV 时可以选要哪些列（另有 Run sheet、Review 预设）
+- 每一步（和每条 Recipe）有两套参数：**Simulation**（内核读的，要建出什么）和 **Experiment**（机器实际设成什么：时间、功率、装的哪条 tool recipe）。默认两套相同，分开时先复制一份；内核不读 experiment，摘要也不含它，**补记机台设置不会让已算好的结果过期**
+- 导出流程为 Excel/CSV 时可以选要哪些列（另有 Run sheet、Review 预设），并选导出哪一套参数
 - 可按时间运行，也可直接输入目标厚度或目标深度
 - 每个项目一个 GDS；步骤选择 layer/datatype、保留图形内或图形外；未选择 mask 时默认整片暴露
 - Quick Sketch：矩形、圆、多边形、路径，merge/subtract/intersect 和参数化阵列

@@ -133,6 +133,11 @@ class Recipe:
     tool: str = ""
     output_material: str | None = None
     parameters: dict[str, Any] = field(default_factory=dict)
+    #: What the tool is actually set to, when that is not the same as what
+    #: the kernel is asked to build. ``None`` means the two are the same --
+    #: the usual case, and the one that needs nothing maintained. Nothing
+    #: here is ever read by a kernel; see ``experiment_values``.
+    experiment_parameters: dict[str, Any] | None = None
     material_responses: dict[str, MaterialResponse] = field(default_factory=dict)
     #: Where the recipe sits in the library below its process type, e.g.
     #: "ALD/Oxides"; empty means directly under the type.
@@ -147,6 +152,10 @@ class Recipe:
         if overrides:
             values.update(overrides)
         return values
+
+    def experiment_values(self) -> dict[str, Any]:
+        """The experiment set, which is the simulation set until it differs."""
+        return dict(self.parameters if self.experiment_parameters is None else self.experiment_parameters)
 
 
 @dataclass
@@ -166,6 +175,11 @@ class ProcessStep:
     tool: str = ""
     output_material: str | None = None
     parameters: dict[str, Any] = field(default_factory=dict)
+    #: What the tool is set to for this step, when that differs from what
+    #: the kernel is asked to build. ``None`` means the two are the same.
+    #: A kernel never reads it and a step's digest never covers it, so
+    #: writing down what the machine did cannot make a result stale.
+    experiment_parameters: dict[str, Any] | None = None
     material_responses: dict[str, MaterialResponse] = field(default_factory=dict)
     #: The repeated block this step belongs to, see ``normalize_loop``. It is
     #: bookkeeping for the editor: a result never depends on it.
@@ -204,6 +218,9 @@ class ProcessStep:
             tool=recipe.tool,
             output_material=recipe.output_material,
             parameters=dict(recipe.parameters if parameters is None else parameters),
+            experiment_parameters=(
+                None if recipe.experiment_parameters is None else dict(recipe.experiment_parameters)
+            ),
             material_responses={
                 material: MaterialResponse(
                     response.material,
@@ -226,6 +243,9 @@ class ProcessStep:
                 tool=self.tool,
                 output_material=self.output_material,
                 parameters=parameters,
+                experiment_parameters=(
+                    None if self.experiment_parameters is None else dict(self.experiment_parameters)
+                ),
                 material_responses=dict(self.material_responses),
                 id=f"step-definition-{self.id}",
             )
@@ -241,6 +261,10 @@ class ProcessStep:
             material_responses=dict(source.material_responses),
             id=f"step-definition-{self.id}",
         )
+
+    def experiment_values(self) -> dict[str, Any]:
+        """The experiment set, which is the simulation set until it differs."""
+        return dict(self.parameters if self.experiment_parameters is None else self.experiment_parameters)
 
     def detach_from_library(self, recipes: Mapping[str, Recipe]) -> bool:
         """Materialize a legacy recipe reference into this step once."""

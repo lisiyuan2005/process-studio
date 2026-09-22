@@ -291,6 +291,38 @@ def test_the_fidelity_is_a_project_setting_and_travels_in_flow_files(workspace: 
     assert as_json("fidelity", root=workspace) == {"fidelity": "simplified"}
 
 
+def test_the_experiment_settings_are_edited_and_shown_separately(tmp_path, workspace):
+    """What the tool was set to, beside what the kernel was asked to build."""
+    code, out, err = run("steps", "add", "deposit", "--name", "HZO",
+                         "--tool", "Savannah ALD", "--material", "SiO2", root=workspace)
+    assert code == EXIT_OK, err
+    shown = run("steps", "show", "HZO", root=workspace)[1]
+    # An ALD tool means cycles, as the recipe is written in the fab.
+    assert "cycles = 100" in shown and "rate_per_cycle" in shown
+    assert "the same as the parameters above" in shown
+
+    code, _, err = run("steps", "set", "HZO", "--set-experiment", "time_min=42",
+                       "--set-experiment", "tool_recipe=Siva_HZO_300C", root=workspace)
+    assert code == EXIT_OK, err
+    shown = run("steps", "show", "HZO", root=workspace)[1]
+    assert "time_min = 42" in shown and "Siva_HZO_300C" in shown
+    # The set starts as a copy of the parameters, so only the differences
+    # have to be typed.
+    assert shown.count("cycles = 100") == 2
+
+    # It survives a flow file.
+    flow = tmp_path / "flow.json"
+    assert run("flow", "dump", str(flow), root=workspace)[0] == EXIT_OK
+    assert "Siva_HZO_300C" in flow.read_text()
+    again = tmp_path / "again"
+    assert run("flow", "apply", str(flow), root=again)[0] == EXIT_OK
+    assert "Siva_HZO_300C" in run("steps", "show", "HZO", root=again)[1]
+
+    # And it can be given up.
+    assert run("steps", "set", "HZO", "--same-experiment", root=workspace)[0] == EXIT_OK
+    assert "the same as the parameters above" in run("steps", "show", "HZO", root=workspace)[1]
+
+
 def test_loops_repeat_a_block_and_fold_back_into_the_flow_file(workspace: Path, tmp_path: Path):
     existing = as_json("steps", "list", root=workspace)
     if existing:

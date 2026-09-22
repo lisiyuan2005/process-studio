@@ -17,8 +17,13 @@ import type {
   ToolDefinition,
 } from "../types";
 import { NumberField } from "./NumberField";
-import { ParameterEditor } from "./ParameterRows";
-import { PARAMETER_SPECS, defaultsForNewTool, depositThickness } from "../domain/parameters";
+import { ParameterSets } from "./ParameterRows";
+import {
+  PARAMETER_SPECS,
+  defaultsForNewTool,
+  depositThickness,
+  experimentSpecs,
+} from "../domain/parameters";
 
 /** What the inspector shows for a selected loop. */
 export interface LoopSummary {
@@ -57,6 +62,8 @@ interface InspectorProps {
     patch: Partial<Pick<ProcessStep, "tool" | "outputMaterial" | "materialResponses">>,
   ) => void;
   onParameter: (patch: Record<string, ParameterValue>) => void;
+  /** Edit what the tool was set to; null goes back to "the same values". */
+  onExperiment: (patch: Record<string, ParameterValue> | null) => void;
   onLoadRecipe: (recipe: Recipe) => void;
   onSaveRecipe: (name: string) => void;
   onMaskChange: (patch: {
@@ -241,6 +248,7 @@ export function Inspector({
   onProcessTypeChange,
   onDefinitionChange,
   onParameter,
+  onExperiment,
   onLoadRecipe,
   onSaveRecipe,
   onMaskChange,
@@ -493,14 +501,17 @@ export function Inspector({
             </label>
           )}
 
-          <ParameterEditor
+          <ParameterSets
             key={step.id}
             specs={specs}
             parameters={step.parameters}
+            experimentSpecs={experimentSpecs(step.processType)}
+            experiment={step.experimentParameters}
             depositionModes={depositionModes}
             onPatch={onParameter}
+            onExperimentPatch={onExperiment}
+            footer={step.processType === "deposit" ? <ThicknessNote parameters={step.parameters} /> : null}
           />
-          {step.processType === "deposit" && <ThicknessNote parameters={step.parameters} />}
           {activeSpecs.length === 0 && unknownParameters.length === 0 && (
             <div className="empty-result">
               <CircleAlert size={14} />

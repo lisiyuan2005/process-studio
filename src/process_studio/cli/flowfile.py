@@ -190,6 +190,13 @@ def spec_from_step(step: Mapping[str, Any]) -> dict[str, Any]:
     sketch_id = parameters.pop("sketch_id", None)
     if parameters:
         spec["parameters"] = parameters
+    # Only written when the tool is set to something other than what the
+    # kernel is asked to build; the usual "the same" needs no line.
+    experiment = step.get("experimentParameters")
+    if isinstance(experiment, Mapping):
+        spec["experiment"] = {
+            key: value for key, value in experiment.items() if key != "sketch_id"
+        }
     source = step.get("maskSource", "none")
     if source == "quick_sketch":
         spec["mask"] = f"sketch:{sketch_id or 'default'}"
@@ -254,6 +261,11 @@ def step_from_spec(spec: Mapping[str, Any], *, step_id: str | None = None) -> di
     keep = str(spec.get("keep", "inside"))
     if keep not in ("inside", "outside"):
         raise InvalidRequest(f"step {spec.get('name', '?')!r}: keep must be inside or outside.")
+    experiment = spec.get("experiment")
+    if experiment is not None and not isinstance(experiment, Mapping):
+        raise InvalidRequest(
+            f"step {spec.get('name', '?')!r}: experiment must be a mapping of settings."
+        )
     return {
         "id": step_id or new_id(),
         "name": str(spec.get("name") or "Step"),
@@ -261,6 +273,7 @@ def step_from_spec(spec: Mapping[str, Any], *, step_id: str | None = None) -> di
         "tool": str(spec.get("tool", "")),
         "outputMaterial": spec.get("material") or None,
         "parameters": parameters,
+        "experimentParameters": None if experiment is None else dict(experiment),
         "materialResponses": responses,
         **mask,
         "keep": keep,

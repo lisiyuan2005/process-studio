@@ -4,8 +4,14 @@ import { groupRecipes, newId, type RecipeGroup } from "../domain/project";
 import { ToolPicker } from "./ToolPicker";
 import type { MaterialDefinition, ParameterValue, ProcessType, Recipe, ToolDefinition } from "../types";
 import { NumberField } from "./NumberField";
-import { ParameterEditor } from "./ParameterRows";
-import { PARAMETER_SPECS, defaultParameters, defaultsForNewTool, depositThickness } from "../domain/parameters";
+import { ParameterSets } from "./ParameterRows";
+import {
+  PARAMETER_SPECS,
+  defaultParameters,
+  defaultsForNewTool,
+  depositThickness,
+  experimentSpecs,
+} from "../domain/parameters";
 
 interface RecipeEditorProps {
   recipes: Recipe[];
@@ -68,6 +74,19 @@ function GroupBranch({
       ))}
     </>
   );
+}
+
+/** A patch applied to a set of parameters; null or "" removes a key. */
+function merge(
+  current: Record<string, ParameterValue>,
+  patch: Record<string, ParameterValue>,
+): Record<string, ParameterValue> {
+  const merged = { ...current, ...patch };
+  for (const [key, value] of Object.entries(patch)) {
+    // Null is the remove button; an empty string is an empty text value.
+    if (value === null) delete merged[key];
+  }
+  return merged;
 }
 
 /** What a deposition recipe's film works out to, the way the kernel reads it. */
@@ -268,20 +287,28 @@ export function RecipeEditor({
 
               <div className="form-section">
                 <span className="section-label">PARAMETERS</span>
-                <ParameterEditor
+                <ParameterSets
                   key={selected.id}
                   specs={PARAMETER_SPECS[selected.processType]}
                   parameters={selected.parameters}
+                  experimentSpecs={experimentSpecs(selected.processType)}
+                  experiment={selected.experimentParameters}
                   depositionModes={depositionModes}
-                  onPatch={(patch) => {
-                    const merged = { ...selected.parameters, ...patch };
-                    for (const [key, value] of Object.entries(patch)) {
-                      if (value === null || value === "") delete merged[key];
-                    }
-                    update({ parameters: merged });
-                  }}
+                  onPatch={(patch) => update({ parameters: merge(selected.parameters, patch) })}
+                  onExperimentPatch={(patch) =>
+                    update({
+                      experimentParameters:
+                        patch === null
+                          ? null
+                          : merge(selected.experimentParameters ?? selected.parameters, patch),
+                    })
+                  }
+                  footer={
+                    selected.processType === "deposit" ? (
+                      <ThicknessNote parameters={selected.parameters} />
+                    ) : null
+                  }
                 />
-                {selected.processType === "deposit" && <ThicknessNote parameters={selected.parameters} />}
               </div>
 
               <div className="form-section">

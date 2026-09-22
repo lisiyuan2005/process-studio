@@ -49,7 +49,7 @@ interface FlowExportDialogProps {
   /** What this build can write, from `describe`. */
   columns: FlowColumn[];
   busy: boolean;
-  onExport: (columns: string[]) => void;
+  onExport: (columns: string[], values: "simulation" | "experiment") => void;
   onClose: () => void;
 }
 
@@ -63,6 +63,7 @@ interface FlowExportDialogProps {
  */
 export function FlowExportDialog({ format, columns, busy, onExport, onClose }: FlowExportDialogProps) {
   const offered = columns.length > 0 ? columns : DEFAULT_COLUMNS.map((id) => ({ id, label: id }));
+  const [values, setValues] = useState<"simulation" | "experiment">("simulation");
   const [chosen, setChosen] = useState<string[]>(() => {
     const saved = remembered();
     const known = new Set(offered.map((column) => column.id));
@@ -95,6 +96,29 @@ export function FlowExportDialog({ format, columns, busy, onExport, onClose }: F
             One row per step, in flow order. Columns are written in the order below, whichever ones
             you pick.
           </p>
+          <span className="section-label">WHICH VALUES</span>
+          <div className="set-tabs">
+            <button
+              type="button"
+              className={values === "simulation" ? "active" : ""}
+              onClick={() => setValues("simulation")}
+            >
+              Simulation
+            </button>
+            <button
+              type="button"
+              className={values === "experiment" ? "active" : ""}
+              onClick={() => setValues("experiment")}
+            >
+              Experiment
+            </button>
+          </div>
+          <p className="numerics-note">
+            {values === "simulation"
+              ? "What the kernel was asked to build."
+              : "What the tools were set to. A step with no separate experiment values has the same numbers in both."}
+          </p>
+          <span className="section-label">COLUMNS</span>
           <div className="column-grid">
             {offered.map((column) => (
               <label key={column.id} className="column-choice">
@@ -135,7 +159,7 @@ export function FlowExportDialog({ format, columns, busy, onExport, onClose }: F
             disabled={busy || ordered.length === 0}
             onClick={() => {
               remember(ordered);
-              onExport(ordered);
+              onExport(ordered, values);
             }}
           >
             <FileSpreadsheet size={13} />

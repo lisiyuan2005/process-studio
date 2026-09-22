@@ -787,6 +787,7 @@ def dispatch(
         return export_flow(
             _root(parameters), _destination(parameters), str(parameters.get("format") or "xlsx"),
             parameters.get("projectId"), parameters.get("columns"),
+            str(parameters.get("values") or "simulation"),
         )
     if method == "import_flow":
         return import_flow(_root(parameters), _source(parameters), output)

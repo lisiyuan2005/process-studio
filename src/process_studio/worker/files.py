@@ -92,17 +92,32 @@ def _chosen_fields(columns: Any) -> tuple[tuple[str, str, int], ...]:
     return chosen
 
 
-def flow_rows(document: Mapping[str, Any], columns: Any = None) -> list[list[Any]]:
-    """One row per step, holding the chosen columns in canonical order."""
+def flow_rows(
+    document: Mapping[str, Any], columns: Any = None, which: str = "simulation"
+) -> list[list[Any]]:
+    """One row per step, holding the chosen columns in canonical order.
+
+    ``which`` picks the set of numbers written: the simulation values the
+    kernel was asked to build, or the experiment values the tool is set to.
+    A step that has not been given its own experiment values has the same
+    numbers in both, so the two tables differ only where somebody said they
+    do.
+    """
     _, Session = _cli()
     fields = _chosen_fields(columns)
+    if which not in ("simulation", "experiment"):
+        raise InvalidRequest("export_flow values must be simulation or experiment.")
     rows = []
     for index, step in enumerate(Session.steps(document), start=1):
-        parameters = dict(step.get("parameters", {}))
-        sketch_id = parameters.pop("sketch_id", None)
+        settings = step.get("experimentParameters") if which == "experiment" else None
+        parameters = dict(step.get("parameters", {}) if settings is None else settings)
+        parameters.pop("sketch_id", None)
         mode = parameters.pop("mode", None)
         target = parameters.pop("target", None)
         fraction = parameters.pop("directional_fraction", None)
+        # A mask is geometry: it is the same in both tables, and the sketch
+        # it names lives with the simulation values.
+        sketch_id = dict(step.get("parameters", {})).get("sketch_id")
         source = step.get("maskSource", "none")
         if source == "quick_sketch":
             mask = f"sketch:{sketch_id or 'default'}"
@@ -152,12 +167,14 @@ def export_flow(
     fmt: str,
     project_id: str | None = None,
     columns: Any = None,
+    which: str = "simulation",
 ) -> dict[str, Any]:
     """Write the flow as a table (xlsx, csv) or a flow file (json, yaml).
 
-    ``columns`` names the table columns to write (see ``FLOW_FIELDS``); the
-    flow-file formats carry the whole flow and ignore it, since a flow file
-    is what the workspace is rebuilt from.
+    ``columns`` names the table columns to write (see ``FLOW_FIELDS``) and
+    ``which`` the set of values -- simulation or experiment. The flow-file
+    formats carry the whole flow, both sets included, and ignore both: a
+    flow file is what the workspace is rebuilt from.
     """
     flowfile, Session = _cli()
     repository = open_repository(root)
@@ -174,7 +191,7 @@ def export_flow(
         sheet = workbook.active
         sheet.title = "Process flow"
         sheet.append([heading for _field, heading, _width in fields])
-        for row in flow_rows(document, columns):
+        for row in flow_rows(document, columns, which):
             sheet.append(row)
         sheet.freeze_panes = "A2"
         sheet.auto_filter.ref = sheet.dimensions
@@ -186,10 +203,10 @@ def export_flow(
         with destination.open("w", newline="", encoding="utf-8-sig") as handle:
             writer = csv.writer(handle)
             writer.writerow([heading for _field, heading, _width in fields])
-            writer.writerows(flow_rows(document, columns))
+            writer.writerows(flow_rows(document, columns, which))
     else:
         raise InvalidRequest("export_flow format must be xlsx, csv, json or yaml.")
-    return {"path": str(destination), "steps": len(Session.steps(document))}
+    return {"path": str(destination), "steps": len(Session.steps(document)), "values": which}
 
 
 def import_flow(root: Path, source: Path, output: IO[str]) -> dict[str, Any]:

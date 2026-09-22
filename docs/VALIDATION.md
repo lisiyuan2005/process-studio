@@ -13,6 +13,7 @@ Python 侧按文件覆盖：
 - **各向同性刻蚀**（`tests/test_isotropic_etch_speed.py`，18 项）：湿法前沿不穿过封闭的横向屏障、密封空洞不是刻蚀源、开壳之后才刻到目标；以及那轮提速本身的不变量——同一半径的膨胀只算一次、共用 reach 的相邻采样只施加一次、区域"几乎相同"的容差、深度对采样区间的约束、方形前沿与切片密度无关。
 - **3D 显示网格**（`tests/test_mesh_builder.py`、`tests/test_mesh_triangulation.py`、`tests/test_mesh_pool.py`，30 项）：每个面记住自己贴着哪种材料、看不见的面不进视图、自由表面与完整表面分开缓存、两种三角化都覆盖整张面、ear clipping 掉顶点时回退而不是失败、多进程池起不来时只是变慢。
 - **撤回**（`tests/test_cancellation.py`，4 项）：没装检查时没人能停下一步、沉积中途放弃、检查只在这一次调用里生效、被停的步骤报告 `Cancelled`。
+- **两套参数**（`tests/test_worker_protocol.py`、`tests/test_cli.py`）：experiment 的值随文档、流程文件和 Excel 往返，**写它不会让已经 clean 的步骤变 stale**，导出表格能按 simulation 或 experiment 出两份。
 - **版图与库**（`tests/test_layout_inputs.py`、`tests/test_libraries.py`）：Quick Sketch 四种图形、布尔运算、阵列、JSON round-trip、GDS layer/datatype 栅格化、简化 Excel Recipe 往返。
 - **持久化**（`tests/test_storage.py`、`tests/test_shared_library.py`，15 项）：工程/分支/共享快照、级联失效、无引用文件删除、工作目录搬走之后结果仍然找得到；共享库（材料/工具/Recipe 在用户目录里一份）的身份戳、删除不复活、多窗口不互相覆盖。
 - **更新**（`tests/test_update.py`，13 项）：平台对应的资产名、版本号数值比较、把最新 release 和当前构建对照（版本号可以往下走，见下）、解压到应用旁边、失败留下的目录下次清掉、只信系统信任库并在取不到时回退到打包的 CA。

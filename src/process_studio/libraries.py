@@ -23,6 +23,10 @@ RECIPE_COLUMNS = [
     "Rate (um/min)",
     "Stop Layer",
     "Extra Parameters (JSON)",
+    # What the tool is set to when that is not what the kernel is asked to
+    # build. Empty means the two are the same, which is the usual case and
+    # which is why this is one column rather than a second set of them.
+    "Experiment Parameters (JSON)",
     "Group",
 ]
 
@@ -82,6 +86,11 @@ class RecipeLibrary:
                         response.rate_um_per_min,
                         response.stop_layer,
                         json.dumps(common, ensure_ascii=False),
+                        (
+                            ""
+                            if recipe.experiment_parameters is None
+                            else json.dumps(recipe.experiment_parameters, ensure_ascii=False)
+                        ),
                         recipe.group,
                     ]
                 )
@@ -113,12 +122,14 @@ class RecipeLibrary:
                 for column, key in mappings.items():
                     if row.get(column) is not None:
                         parameters[key] = row[column]
+                experiment_text = str(row.get("Experiment Parameters (JSON)") or "").strip()
                 recipe = Recipe(
                     name=name,
                     process_type=ProcessType(str(row["Type"])),
                     tool=str(row.get("Tool") or ""),
                     output_material=str(row.get("Material") or "") or None,
                     parameters=parameters,
+                    experiment_parameters=json.loads(experiment_text) if experiment_text else None,
                     group=str(row.get("Group") or ""),
                 )
                 recipes_by_name[name] = recipe
