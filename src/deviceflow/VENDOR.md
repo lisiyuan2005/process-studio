@@ -168,3 +168,21 @@ under the MIT license in `LICENSE`.
   only targets are cut back, so the impermeable regions never move, and
   splitting a slab hands both halves the regions the whole had. A 5x5 hole
   block's nitride pull-back went from 12.1 s to 5.7 s.
+- `_internal/geometry/state.py`: two materials that meet along a boundary
+  are cut from each other in floating point, and the join is left strung
+  with seams -- slivers a few attometres wide, thousands of them along the
+  interface. `_check_disjoint` compared their total area against
+  `grid * grid`, and a seam's area grows with the length of the interface,
+  so a structure was condemned for having long interfaces: a 19-step 3D AND
+  cell died at its last step with "materials TiN and HfO2 overlap by
+  2.45e-11 um^2", which is 0.02 square picometres spread over 2676 parts
+  along 2.5 um of boundary. The check now asks whether the overlap is
+  thinner everywhere than one snap step (erode by `grid`, see if anything
+  is left). A seam is not: it is rubbed out of the larger of the two
+  regions and the operation carries on. A real overlap -- two materials put
+  in the same place -- survives the erosion and still raises, including
+  when seams lie around it, because the question is asked of the overlap's
+  own shape rather than of a sum. Leaving seams in instead would not have
+  been harmless: the mesh builder polygonizes the regions and finds a face
+  owned twice, so an invisible seam becomes "X overlaps another material"
+  when somebody opens the 3D view. `tests/test_seam_slivers.py` covers it.

@@ -171,7 +171,31 @@ class ProcessState:
         self._check_disjoint(out)
         return out
 
+    def _is_hairline(self, overlap) -> bool:
+        """Whether an overlap is thinner everywhere than the snapping grid.
+
+        Two materials that meet along a shared boundary are cut from each
+        other by floating-point arithmetic, and the join is left strung
+        with slivers: thousands of parts a few attometres wide along the
+        seam. Nothing at that size is geometry, but their area adds up with
+        the length of the boundary, so judging by area alone condemns a
+        structure for having long interfaces.
+
+        Eroding by the grid asks what actually matters: is any point of this
+        overlap further than one snap step from its own edge? A real overlap
+        -- two materials put in the same place -- survives; a seam does not.
+        """
+        return overlap.buffer(-self.grid).is_empty
+
     def _check_disjoint(self, regions: dict[Material, MultiPolygon]) -> None:
+        """Raise on two materials in one place; rub out the seams.
+
+        A hairline is removed rather than reported: it is noise from the
+        arithmetic, and leaving it in the state is not harmless -- the mesh
+        builder polygonizes the regions and finds a face owned twice, so a
+        seam invisible at any scale becomes "X overlaps another material"
+        when somebody opens the 3D view.
+        """
         items = list(regions.items())
         eps = self.grid * self.grid
         for i in range(len(items)):
@@ -181,11 +205,25 @@ class ProcessState:
                 # predicates settle that without building the intersection.
                 if not ga.intersects(gb) or ga.touches(gb):
                     continue
-                overlap = ga.intersection(gb).area
-                if overlap > eps:
+                overlap = ga.intersection(gb)
+                if overlap.is_empty or overlap.area <= eps:
+                    continue
+                if not self._is_hairline(overlap):
                     raise GeometryError(
-                        f"materials {ma.name} and {mb.name} overlap by {overlap:.3g} um^2"
+                        f"materials {ma.name} and {mb.name} overlap by {overlap.area:.3g} um^2"
                     )
+                # Cut the seam out of the larger region: it is thinner than
+                # a snap step, so which of the two gives it up is beneath
+                # what the geometry can express, and the larger one is the
+                # one that cannot be left in pieces by the cut.
+                loser, other = (i, j) if ga.area >= gb.area else (j, i)
+                material, region = items[loser]
+                trimmed = self.clean(region.difference(items[other][1]))
+                items[loser] = (material, trimmed)
+                if trimmed.is_empty:
+                    regions.pop(material, None)
+                else:
+                    regions[material] = trimmed
 
     def add_slab(self, z0: float, z1: float, regions) -> Slab:
         """Append a slab above (or below) the current stack; gaps become void."""
