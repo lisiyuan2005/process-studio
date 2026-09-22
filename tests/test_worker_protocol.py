@@ -1193,6 +1193,15 @@ def test_the_file_menu_methods_export_import_and_copy(tmp_path):
     for kind in ("materials", "tools", "recipes"):
         out = call("export_library", root=root, kind=kind, destination=str(tmp_path / f"{kind}.xlsx"))
         assert out["count"] > 0
+    # A tool's own recipe book survives the round trip through a workbook.
+    (tmp_path / "tools.csv").write_text(
+        "Tool,Group,Recipes,Notes\nSavannah ALD,Deposition/ALD,Siva_HZO_300C; Al2O3_200C,\n"
+    )
+    imported = call("import_library", root=root, kind="tools", source=str(tmp_path / "tools.csv"))
+    tools = {tool["name"]: tool for tool in imported["document"]["tools"]}
+    assert tools["Savannah ALD"]["recipes"] == ["Siva_HZO_300C", "Al2O3_200C"]
+    call("export_library", root=root, kind="tools", destination=str(tmp_path / "back.csv"))
+    assert "Siva_HZO_300C; Al2O3_200C" in (tmp_path / "back.csv").read_text(encoding="utf-8-sig")
     # A material row with a known name replaces it; an unknown one is added.
     (tmp_path / "more.csv").write_text("Material,Category,Color,Opacity\nSi,Semiconductor,#123456,1\nNewStuff,Metal,#abcdef,0.5\n")
     imported = call("import_library", root=root, kind="materials", source=str(tmp_path / "more.csv"))

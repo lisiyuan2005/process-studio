@@ -70,7 +70,7 @@ worker 为每一步计算一个链式摘要，内容包括该步自带的工艺�
 - 摘要一致且快照存在 → 直接加载快照，前端显示 Cached。
 - 任何一步改变 → 该步及其之后全部作废，运行时从第一个作废的步骤重算。
 - 只改步骤名称不会作废结果，因为名称不参与摘要。
-- 改 Step 参数或改 Sketch 会作废受影响的步骤；修改 Recipe Library 不会影响已经存在的 Step。
+- 改 Step 参数或改 Sketch 会作废受影响的步骤；修改模板库不会影响已经存在的 Step。
 - 换网格会直接删除全部快照：那些场是在旧网格上的，不是这个工程的结果。
 
 每个步骤有三种状态，`open_workspace`、`save_document` 和 `run_flow` 都会返回：
@@ -286,9 +286,16 @@ Experiment 这一侧除了工艺字段还多几行机器的旋钮：Tool recipe�
 
 **Quick Sketch 的阵列会说"你把它们叠在一起了"**：`n > 1` 且节距小于图形自己的尺寸时，图形卡片下面写出是哪个方向、节距多少、图形多宽。这不是错误——一排叠起来的圆就是一条槽，梳齿也是这么画的——但它同样是节距填错的样子，而图上不一定看得出来（两个并起来的圆看着就是个槽），所以说出来，不拦着。判断在 `domain/sketch.ts`（矩形按 size、圆按直径、多边形按包围盒、路径再加上自己的线宽）。
 
-## Step 与 Recipe Library
+## Step template 和 tool 自己的 recipe
 
-Recipe 有一个 `group` 字段：Recipe Library 先按工艺类型（Deposition、Etch、CMP、No geometry change）分顶层，再按 `group` 路径分组，斜杠表示子组（`ALD/Oxides`）。在 Recipe 的 Group 框里输入名字即新建组，不需要单独管理组；Inspector 的模板下拉按同样的组分段。Excel 导出多一列 Group，导入时没有这列也能读。
+**"Recipe" 在这里有两个完全不同的意思，界面上现在分开了：**
+
+- **Step template**（原来的 Recipe Library）：存起来的一个步骤，用来起新步骤。界面、菜单和命令行都叫 step template（命令 `process-studio templates`，老名字 `recipes` 仍然认）。加载和保存都是**复制**，不留引用，所以改模板不会动已有流程。
+- **Tool 自己的 recipe**：机器上装的那条配方，fab 里说的 recipe，比如 ALD 上的 `Siva_HZO_300C`。它属于**工具**（`ToolDefinition.recipes`，Tools 编辑器里一行一条），步骤在**experiment 参数**里用 `tool_recipe` 记下这次跑的是哪条——参数行会把这台工具装的几条列成候选，也允许手填库里没有的。它只是名字，不是一组参数：真正的配方在机器里。
+
+代码里的类仍然叫 `Recipe`（工作目录、RPC document 和流程文件的字段也是 `recipes`），只为一个词去改存储格式不值得；`models.Recipe` 的文档说明了这一点。
+
+Step template 有一个 `group` 字段：模板库先按工艺类型（Deposition、Etch、CMP、No geometry change）分顶层，再按 `group` 路径分组，斜杠表示子组（`ALD/Oxides`）。在 Group 框里输入名字即新建组，不需要单独管理组；Inspector 的模板下拉按同样的组分段。Excel 导出多一列 Group，导入时没有这列也能读。
 
 顶栏是一条菜单栏，按用途分组：**File**（新建/打开/最近/保存/另存为；导入流程文件、GDSII、材料/配方/工具库；导出流程为 Excel/CSV/流程文件、各库为 xlsx/csv、3D 表面；打开工作目录所在文件夹；关闭工程），**Edit**（撤销/重做、加步骤、复制/粘贴/重复/删除/全选/上下移动/跳过与恢复），**Branch**（切换分支、从选中步分叉、重命名、删除），**View**（3D/截面/俯视，俯视图的台阶线开关，日志），**Run**（运行、运行到选中步、停止、丢弃结果全部重跑、膜模型 Detailed/Simplified、精度、命令控制台），**Libraries**（材料、配方、工具），**Help**（文档、快捷键、检查更新、关于）。菜单右边是分支、精度、膜模型，最右是保存状态、Log 和 Run。
 
@@ -302,9 +309,9 @@ Recipe 有一个 `group` 字段：Recipe Library 先按工艺类型（Deposition
 
 顶栏 **CLI** 现在在 Run 菜单里（Command console…）。它打开一个面板。上半是控制台：把命令粘进去（一行一条，`#` 开头是注释，行首带不带 `process-studio`、worker 路径、`python -m process_studio.cli`、`--root` 都行，会剥掉）或者整个流程文件（JSON 以 `{` 开头，YAML 看 `name:`/`steps:` 这类键），Run 或 Ctrl+Enter 执行。命令在 worker 进程里跑（RPC `run_cli`：`argv`、可选 `stdin`，返回退出码、两路输出和之后的 document），走的是同一个 CLI 代码，`--root` 由界面填成当前工作目录。流程文件走 `flow apply -`（`-` 表示从 stdin 读），勾着「Run the flow after applying」就接着 `run`。**联动**：执行前先保存界面上未存的改动；每条命令返回的 document 直接替换界面上的（步骤、材料、状态立刻更新，视图缓存清空）；`run` 的进度事件走的是这个请求自己的事件流，所以步骤卡的运行/完成标记、日志、Stop 按钮和界面自己点 Run 完全一样。下半把当前状态对应的命令行列出来（`status`、`run`、`run --through N`、当前选中步骤沿当前截面线的 `view section`、`view top`、`view mesh`、`flow dump/apply`），每条带 Copy 按钮，直接粘到终端里跑。程序路径来自 worker 的 `describe`（`cli` 字段）：打包版是 worker 可执行文件本身，源码运行是 worker 所用解释器加 `-m process_studio.cli`；路径带空格会加引号，Windows 路径的程序加 `&` 调用符。命令走的是同一个 worker、同一个工作目录，桌面里改的东西命令行立刻能看到，反过来也一样。
 
-工具是一个库（`tools` 表，document 里的 `tools`）：每个工具有名字、`group` 路径和备注，顶栏 **Tools** 打开编辑器增删改组。Step 和 Recipe 的 Tool 字段是分组下拉，最后一项「Other (type a name)…」可以手填；填的名字不在库里也照样保存为文本，删除库里的工具不改动已引用它的步骤。命令行 `tools list|add NAME --group G|rm NAME`。
+工具是一个库（`tools` 表，document 里的 `tools`）：每个工具有名字、`group` 路径、**装在上面的 recipe 列表**和备注，顶栏 **Tools** 打开编辑器增删改组。Step 和 Recipe 的 Tool 字段是分组下拉，最后一项「Other (type a name)…」可以手填；填的名字不在库里也照样保存为文本，删除库里的工具不改动已引用它的步骤。命令行 `tools list|add NAME --group G --recipe NAME…|rm NAME`（给了 `--recipe` 就是整份替换），Excel 里是分号分隔的 `Recipes` 一列。
 
-流程中的 Step 是独立工艺实例：名称可自由编辑，只要求选择 deposition、etch、CMP 或 no geometry change 类型。右侧可从 Recipe Library 加载模板，也可从空白 Step 逐项添加参数并另存为 Recipe。加载和保存都是复制，不保留引用关系，因此修改或删除库里的 Recipe 不会改变已有流程。
+流程中的 Step 是独立工艺实例：名称可自由编辑，只要求选择 deposition、etch、CMP 或 no geometry change 类型。右侧可从模板库加载一个 step template，也可从空白 Step 逐项添加参数并另存为模板。加载和保存都是复制，不保留引用关系，因此修改或删除库里的模板不会改变已有流程。
 
 ## 开发
 

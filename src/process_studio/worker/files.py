@@ -54,7 +54,9 @@ FLOW_FIELDS: tuple[tuple[str, str, int], ...] = (
 FLOW_FIELD_IDS = tuple(field for field, _heading, _width in FLOW_FIELDS)
 FLOW_COLUMNS = [heading for _field, heading, _width in FLOW_FIELDS]
 MATERIAL_COLUMNS = ["Material", "Category", "Color", "Opacity"]
-TOOL_COLUMNS = ["Tool", "Group", "Notes"]
+#: "Recipes" is the machine's own recipe book, one cell, names separated
+#: by semicolons -- a spreadsheet column per recipe would be unbounded.
+TOOL_COLUMNS = ["Tool", "Group", "Recipes", "Notes"]
 LIBRARY_KINDS = ("materials", "tools", "recipes")
 
 
@@ -233,7 +235,7 @@ def export_library(root: Path, kind: str, destination: Path) -> dict[str, Any]:
     elif kind == "tools":
         count = _write_sheet(
             destination, "Tools", TOOL_COLUMNS,
-            [[t.name, t.group, t.notes] for t in repository.load_tools()],
+            [[t.name, t.group, "; ".join(t.recipes), t.notes] for t in repository.load_tools()],
         )
     else:
         raise InvalidRequest(f"export_library kind must be one of {LIBRARY_KINDS}.")
@@ -278,10 +280,16 @@ def import_library(root: Path, kind: str, source: Path, project_id: str | None =
             if not name:
                 continue
             current = existing.get(name)
+            recipes_cell = row.get("Recipes")
             tool = ToolDefinition(
                 name,
                 str(row.get("Group") or (current.group if current else "")),
                 str(row.get("Notes") or (current.notes if current else "")),
+                (
+                    [part.strip() for part in str(recipes_cell).split(";")]
+                    if recipes_cell
+                    else list(current.recipes if current else [])
+                ),
                 id=current.id if current else ToolDefinition(name).id,
             )
             repository.save_tool(tool)

@@ -94,6 +94,8 @@ export interface ToolDefinition {
   name: string;
   group: string;
   notes: string;
+  /** The recipes loaded on this machine, by the names the lab uses. */
+  recipes?: string[];
 }
 
 export interface Recipe {

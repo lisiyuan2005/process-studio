@@ -389,7 +389,7 @@ export function Inspector({
             onBlur={() => onRename(name)}
             onKeyDown={(event) => event.key === "Enter" && event.currentTarget.blur()}
           />
-          <small>The name is free text and is never taken from the Recipe Library.</small>
+          <small>The name is free text and is never taken from a step template.</small>
         </label>
 
         <label className="field-row">
@@ -405,7 +405,7 @@ export function Inspector({
         </label>
 
         <div className="form-section recipe-template-section">
-          <span className="section-label">RECIPE TEMPLATE</span>
+          <span className="section-label">STEP TEMPLATE</span>
           <p className="numerics-note">
             Loading copies values into this step. The step is not linked to the library afterward.
           </p>
@@ -414,7 +414,7 @@ export function Inspector({
               value={libraryRecipeId}
               onChange={(event) => setLibraryRecipeId(event.target.value)}
             >
-              <option value="">Choose an existing {TYPE_LABELS[step.processType]} recipe…</option>
+              <option value="">Choose an existing {TYPE_LABELS[step.processType]} template…</option>
               {groupedTemplates.map(([group, members]) =>
                 group ? (
                   <optgroup key={group} label={group}>
@@ -449,7 +449,7 @@ export function Inspector({
               disabled={!saveName.trim()}
               onClick={() => onSaveRecipe(saveName)}
             >
-              <Save size={13} /> Save as recipe
+              <Save size={13} /> Save as template
             </button>
           </div>
         </div>
@@ -505,7 +505,10 @@ export function Inspector({
             key={step.id}
             specs={specs}
             parameters={step.parameters}
-            experimentSpecs={experimentSpecs(step.processType)}
+            experimentSpecs={experimentSpecs(
+              step.processType,
+              tools.find((tool) => tool.name === step.tool)?.recipes ?? [],
+            )}
             experiment={step.experimentParameters}
             depositionModes={depositionModes}
             onPatch={onParameter}

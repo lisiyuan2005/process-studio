@@ -2,7 +2,7 @@
 
 ## 产品目标
 
-Process Studio 的核心对象不是一张最终结构图，而是“可复用、可分支、可追溯到每一步快照的工艺流程”。版图定义横向结构，Recipe 定义工艺行为，Process Step 只记录本次调用及覆盖参数。
+Process Studio 的核心对象不是一张最终结构图，而是“可复用、可分支、可追溯到每一步快照的工艺流程”。版图定义横向结构，step template 定义可复用的工艺设置，Process Step 记录这一次要建什么（simulation）和机器实际设成什么（experiment）。
 
 ## 分层
 
@@ -10,7 +10,7 @@ Process Studio 的核心对象不是一张最终结构图，而是“可复用�
 Desktop UI
   ├─ Process Flow / Step Details / Process Log
   ├─ 3D / Top View / arbitrary AA–BB section
-  └─ Material and Recipe libraries
+  └─ Material, tool and step-template libraries
                  │
 Worker (runner) ─┼─ resolves recipe + step overrides
                  ├─ resolves GDS / Quick Sketch / full-wafer mask
@@ -29,8 +29,9 @@ UI 不自己算几何；它修改 Step/Recipe/Sketch，再由 worker 调用内�
 
 - `ProjectDefinition`：名称、工程窗口（x/y/z 范围）、几何分辨率、fidelity、项目 GDS、当前分支、保存的截面线。
 - `FlowBranch`：有序步骤和父分支/父步骤。
-- `ProcessStep`：Recipe 引用、mask 来源、GDS layer/datatype、keep inside/outside、字段覆盖。
-- `Recipe`：类型、设备、输出材料、默认参数、各材料响应/停止层。
+- `ProcessStep`：工艺类型与参数（simulation），可选的 experiment 参数、mask 来源、GDS layer/datatype、keep inside/outside。
+- `Recipe`（界面上叫 **step template**）：类型、设备、输出材料、两套参数、各材料响应/停止层。
+- `ToolDefinition`：机器的名字、分组、装在上面的 recipe 列表、备注。
 - `MaterialDefinition`：名称、类别、颜色、不透明度。
 - `QuickSketch`：按顺序执行 merge/subtract/intersect 的参数化二维图形列表。
 
@@ -46,11 +47,10 @@ UI 不自己算几何；它修改 Step/Recipe/Sketch，再由 worker 调用内�
 
 建议按价值排序：
 
-1. 每个 tool 两套参数（simulation / experiment）和单位体系，导出时可选。
-2. Tool 自己的 recipe 库（如 ALD 的 `Siva_HZO_300C`），与流程模板分开。
-3. 背面工艺（翻片）与更自由的衬底定义。
-4. 晶向相关湿法刻蚀与 facet velocity。
-5. CMP pattern-density、dishing 与 erosion。
-6. 方向分布、shadowing、loading 和 sidewall passivation。
+1. 背面工艺（翻片）与双面集成。
+2. 晶向相关湿法刻蚀与 facet velocity。
+3. CMP pattern-density、dishing 与 erosion。
+4. 方向分布、shadowing、loading 和 sidewall passivation。
+5. 基于实测数据的工艺标定和不确定度体系。
 
 多人模式、自动报告和工艺演化动画不在当前范围内。

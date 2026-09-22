@@ -103,7 +103,7 @@ export function tokenize(line: string): string[] {
 
 const COMMANDS = new Set([
   "new", "kernels", "info", "status", "steps", "run", "window", "view", "materials",
-  "recipes", "tools", "sketch", "lines", "flow", "log", "rpc",
+  "templates", "recipes", "tools", "sketch", "lines", "flow", "log", "rpc",
 ]);
 
 /**

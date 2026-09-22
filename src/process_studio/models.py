@@ -78,12 +78,23 @@ class ToolDefinition:
     #: A path such as "Etch/Dry"; "/" separates a group from its subgroups.
     group: str = ""
     notes: str = ""
+    #: The recipes loaded on this machine, by the names the lab calls them
+    #: ("Siva_HZO_300C"). A step records which one it ran with, in its
+    #: experiment values; nothing here is a set of parameters, because the
+    #: machine's own recipe book is the machine's.
+    recipes: list[str] = field(default_factory=list)
     id: str = field(default_factory=new_id)
 
     def __post_init__(self) -> None:
         if not self.name.strip():
             raise ValueError("tool name cannot be empty")
         self.group = normalize_group(self.group)
+        seen: dict[str, None] = {}
+        for recipe in self.recipes:
+            name = str(recipe).strip()
+            if name:
+                seen.setdefault(name, None)
+        self.recipes = list(seen)
 
 
 def normalize_group(value: str | None) -> str:
@@ -128,6 +139,15 @@ def normalize_loop(value: Any) -> dict[str, Any] | None:
 
 @dataclass
 class Recipe:
+    """A saved step to start another step from -- a **step template**.
+
+    The interface calls it that, because "recipe" in a lab means the recipe
+    loaded on a machine ("Siva_HZO_300C"), which lives on the tool
+    (``ToolDefinition.recipes``) and is recorded in a step's experiment
+    values. The class keeps its name so stored workspaces, the RPC document
+    and the flow file do not have to be rewritten for a word.
+    """
+
     name: str
     process_type: ProcessType
     tool: str = ""

@@ -51,7 +51,20 @@ function ParameterRow({
           ))}
         </select>
       ) : spec.kind === "text" ? (
-        <input value={String(value)} onChange={(event) => onChange(event.target.value)} />
+        <>
+          <input
+            list={spec.options ? `options-${spec.key}` : undefined}
+            value={String(value)}
+            onChange={(event) => onChange(event.target.value)}
+          />
+          {spec.options && (
+            <datalist id={`options-${spec.key}`}>
+              {spec.options.map((option) => (
+                <option key={option} value={option} />
+              ))}
+            </datalist>
+          )}
+        </>
       ) : (
         <UnitNumber
           field={spec.key}

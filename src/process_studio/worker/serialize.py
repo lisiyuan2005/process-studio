@@ -101,15 +101,25 @@ def material_from_json(payload: Mapping[str, Any]) -> MaterialDefinition:
 
 
 def tool_to_json(tool: ToolDefinition) -> dict[str, Any]:
-    return {"id": tool.id, "name": tool.name, "group": tool.group, "notes": tool.notes}
+    return {
+        "id": tool.id,
+        "name": tool.name,
+        "group": tool.group,
+        "notes": tool.notes,
+        "recipes": list(tool.recipes),
+    }
 
 
 def tool_from_json(payload: Mapping[str, Any]) -> ToolDefinition:
     try:
+        recipes = payload.get("recipes") or []
+        if not isinstance(recipes, (list, tuple)):
+            raise InvalidRequest("tool recipes must be a list of names")
         return ToolDefinition(
             str(payload["name"]).strip(),
             str(payload.get("group") or ""),
             str(payload.get("notes") or ""),
+            [str(name) for name in recipes],
             id=str(payload.get("id") or new_id()),
         )
     except KeyError as error:

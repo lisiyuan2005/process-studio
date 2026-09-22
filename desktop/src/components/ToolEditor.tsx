@@ -45,7 +45,13 @@ export function ToolEditor({ tools, usage, onSave, onDelete, onClose }: ToolEdit
     let name = "New tool";
     let suffix = 2;
     while (existing.has(name)) name = `New tool ${suffix++}`;
-    const tool: ToolDefinition = { id: newId("tool"), name, group: selected?.group ?? "", notes: "" };
+    const tool: ToolDefinition = {
+      id: newId("tool"),
+      name,
+      group: selected?.group ?? "",
+      notes: "",
+      recipes: [],
+    };
     onSave(tool);
     setSelectedId(tool.id);
   };
@@ -113,6 +119,27 @@ export function ToolEditor({ tools, usage, onSave, onDelete, onClose }: ToolEdit
                 <small>
                   A new group is made by typing its name; a slash makes a subgroup, as in
                   Deposition/PVD. Empty means ungrouped.
+                </small>
+              </label>
+              <label className="field-row">
+                <span>Recipes on this machine</span>
+                <textarea
+                  rows={4}
+                  value={(selected.recipes ?? []).join("\n")}
+                  placeholder={"Siva_HZO_300C\nAl2O3_200C"}
+                  onChange={(event) =>
+                    update({
+                      recipes: event.target.value
+                        .split("\n")
+                        .map((line) => line.trim())
+                        .filter(Boolean),
+                    })
+                  }
+                />
+                <small>
+                  One per line, by the name the machine shows. A step picks one of these in its
+                  experiment values to record what it actually ran; they are names, not parameters
+                  — the recipe itself lives on the tool.
                 </small>
               </label>
               <label className="field-row">

@@ -83,7 +83,8 @@ macOS/Linux 脚本先用 PyInstaller 把 worker 打成独立可执行文件；Wi
 - 垂直刻蚀与各向同性（湿法）刻蚀，湿法前沿认屏障：封闭空腔不是刻蚀源，开壳之后才刻得到
 - 氧化：露出表面向内一层原地变成氧化物，按各材料速率比例消耗，不模拟体积膨胀
 - 理想平面 CMP（对所有材料一视同仁）
-- Step 自带工艺类型和参数；Recipe Library 只用于加载模板或保存可复用模板，加载即复制、不留引用
+- Step 自带工艺类型和参数；**Step template** 库（原 Recipe Library）只用于加载模板或保存可复用模板，加载即复制、不留引用
+- **Tool 自己的 recipe**：机器上装的那条配方（如 ALD 的 `Siva_HZO_300C`）属于工具，步骤在 experiment 参数里记下这次用的是哪条
 - 参数可以按自己习惯的单位输入（nm/µm、s/min/h、nm/s 等），存下来的永远是内核读的那个单位，换单位不会让步骤过期
 - ALD/ALE 工具的沉积按 **Cycles × Rate per cycle** 写（fab 里的写法），下面实时显示乘出来的膜厚；厚度也可以直接给，或按时间×速率给
 - 每一步（和每条 Recipe）有两套参数：**Simulation**（内核读的，要建出什么）和 **Experiment**（机器实际设成什么：时间、功率、装的哪条 tool recipe）。默认两套相同，分开时先复制一份；内核不读 experiment，摘要也不含它，**补记机台设置不会让已算好的结果过期**
@@ -95,7 +96,7 @@ macOS/Linux 脚本先用 PyInstaller 把 worker 打成独立可执行文件；Wi
 - **工艺分叉**：在某一步之后分出一条新分支，分叉点之前的步骤和已经算好的结果一起带过去；分支可改名、可删除（只删这条分支独有的结果）
 - 每步自动保存快照；删除某一步或某条分支时同步删除无引用快照
 - 3D 旋转/缩放、材料显隐与临时配色、按阵列平铺单元胞、Top View（可看穿指定材料、同一材料的高度分界画台阶线）、任意画线 AA–BB 截面（可保存多条）、截面与俯视图上的距离测量、坐标读数和比例尺；切换步骤时保持视角和缩放
-- 材料、工具、Recipe 是一台机器共用一个库，简化 Excel 导入导出
+- 材料、工具、Step template 是一台机器共用一个库，简化 Excel 导入导出
 - 底部 Process Log 记录每步耗时和错误信息
 - 嵌入式 SQLite 持久化；无需数据库服务器；工作目录里不存绝对路径，压成 zip 发给别人也能打开
 - 顶栏的命令控制台：把命令或整个流程文件粘进去就在当前工作目录里执行，界面跟着更新
@@ -111,13 +112,13 @@ macOS/Linux 脚本先用 PyInstaller 把 worker 打成独立可执行文件；Wi
    流程列表里每张卡片右侧的方框控制这一步是否参与运行，勾掉即跳过，该步及其之后需要重新运行。
 6. 需要比较方案时，用 **Branch → 从选中步分叉**分出一条新流程改参数（分叉点之前的结果照用），或右键步骤 **Duplicate** 复制一份，或用命令行 `flow dump` 把流程存成文件再改。
 
-## Recipe Excel 格式
+## Step template 的 Excel 格式
 
-模板位于 `examples/recipe-template.xlsx`。一行表示一个 Recipe 对一种材料的响应；同名 Recipe 的多行会合并，因此无需维护复杂的层级表格。
+模板位于 `examples/recipe-template.xlsx`。一行表示一个 step template 对一种材料的响应；同名模板的多行会合并，因此无需维护复杂的层级表格。
 
 | 字段 | 用途 |
 | --- | --- |
-| Process Name / Recipe | 工艺与 Recipe 名称 |
+| Process Name / Recipe | 工艺与模板名称 |
 | Type | `deposit`、`etch`、`cmp`、`oxidation` 或 `no_geometry` |
 | Tool | 设备名称 |
 | Material | 沉积材料或被刻蚀材料 |
@@ -126,7 +127,7 @@ macOS/Linux 脚本先用 PyInstaller 把 worker 打成独立可执行文件；Wi
 | Directional Fraction | 0 为各向同性，1 为完全方向性 |
 | Rate | 对该材料的沉积/刻蚀速率 |
 | Stop Layer | 是否作为停止层 |
-| Group | Recipe Library 里的分组路径（斜杠分子组） |
+| Group | 模板库里的分组路径（斜杠分子组） |
 | Extra Parameters JSON | 少量不常用扩展字段 |
 
 例如 BOE 可以只填 `time=1 min`、`temperature=25 °C`，并在不同材料行记录 SiO2 速率与 Si stop layer。

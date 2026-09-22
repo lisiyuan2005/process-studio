@@ -97,7 +97,7 @@ function ThicknessNote({ parameters }: { parameters: Record<string, ParameterVal
   return (
     <p className="numerics-note">
       {resolved.from === "cycles" ? "Cycles × rate per cycle" : "Time × rate"}: {nm} nm of film.
-      A target thickness, if the recipe has one, wins over this.
+      A target thickness, if the template has one, wins over this.
     </p>
   );
 }
@@ -135,7 +135,7 @@ export function RecipeEditor({
   const addRecipe = () => {
     const recipe: Recipe = {
       id: newId("recipe"),
-      name: "New recipe",
+      name: "New template",
       processType: selected?.processType ?? "deposit",
       tool: "",
       group: selected?.group ?? "",
@@ -171,12 +171,12 @@ export function RecipeEditor({
   );
 
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Recipes">
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Step templates">
       <div className="modal-card recipe-modal">
         <header className="modal-header">
           <div>
             <span className="eyebrow">LIBRARY &middot; SHARED BY EVERY PROJECT</span>
-            <h2>Recipes</h2>
+            <h2>Step templates</h2>
           </div>
           <button type="button" className="icon-button" aria-label="Close" onClick={onClose}>
             <X size={16} />
@@ -195,7 +195,7 @@ export function RecipeEditor({
             )}
             <button type="button" className="add-material" onClick={addRecipe}>
               <Plus size={13} />
-              Add recipe
+              Add template
             </button>
           </div>
 
@@ -291,7 +291,10 @@ export function RecipeEditor({
                   key={selected.id}
                   specs={PARAMETER_SPECS[selected.processType]}
                   parameters={selected.parameters}
-                  experimentSpecs={experimentSpecs(selected.processType)}
+                  experimentSpecs={experimentSpecs(
+                    selected.processType,
+                    tools.find((tool) => tool.name === selected.tool)?.recipes ?? [],
+                  )}
                   experiment={selected.experimentParameters}
                   depositionModes={depositionModes}
                   onPatch={(patch) => update({ parameters: merge(selected.parameters, patch) })}
@@ -353,7 +356,7 @@ export function RecipeEditor({
                   ))}
                 </div>
                 <p className="numerics-note">
-                  Rates are in µm/min and only apply to etch recipes. A stop layer is a zero rate,
+                  Rates are in µm/min and only apply to etch templates. A stop layer is a zero rate,
                   not a modelled reaction.
                 </p>
               </div>
@@ -362,7 +365,7 @@ export function RecipeEditor({
                 <button
                   type="button"
                   className="danger-button"
-                  title="Delete this library recipe. Existing steps keep their copied values."
+                  title="Delete this template. Steps saved from it keep their copied values."
                   onClick={() => {
                     onDelete(selected.id);
                     setSelectedId(recipes.find((item) => item.id !== selected.id)?.id ?? "");

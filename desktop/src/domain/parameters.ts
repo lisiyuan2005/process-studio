@@ -7,6 +7,8 @@ export interface ParameterSpec {
   /** The unit the stored value is in; a unit picker may offer others. */
   unit?: string;
   kind?: "number" | "text" | "mode";
+  /** Suggestions for a text field; it still takes anything typed. */
+  options?: string[];
   initial: ParameterValue;
   hint?: string;
   /** Kernels that read this parameter; absent means every kernel does. */
@@ -70,10 +72,20 @@ const TOOL_SETTINGS: ParameterSpec[] = [
   { key: "notes", label: "Notes", kind: "text", initial: "" },
 ];
 
-/** The rows the experiment set offers: the process fields, then the machine's. */
-export function experimentSpecs(type: ProcessType): ParameterSpec[] {
+/** The rows the experiment set offers: the process fields, then the machine's.
+ *
+ * ``toolRecipes`` are the recipes loaded on the tool this step runs on, so
+ * the Tool recipe row suggests them; anything else can still be typed, for
+ * a machine whose recipe book is not in the library.
+ */
+export function experimentSpecs(type: ProcessType, toolRecipes: string[] = []): ParameterSpec[] {
   const own = new Set(PARAMETER_SPECS[type].map((spec) => spec.key));
-  return [...PARAMETER_SPECS[type], ...TOOL_SETTINGS.filter((spec) => !own.has(spec.key))];
+  const settings = TOOL_SETTINGS.filter((spec) => !own.has(spec.key)).map((spec) =>
+    spec.key === "tool_recipe" && toolRecipes.length > 0
+      ? { ...spec, options: toolRecipes, hint: `Loaded on this tool: ${toolRecipes.join(", ")}.` }
+      : spec,
+  );
+  return [...PARAMETER_SPECS[type], ...settings];
 }
 
 export function specFor(type: ProcessType, key: string): ParameterSpec | undefined {

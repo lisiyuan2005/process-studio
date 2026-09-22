@@ -1567,14 +1567,14 @@ export function Workspace({
         { label: "Flow file (JSON, YAML)…", heading: "Import", action: () => void importFlowFile(), separated: true, disabled: busy },
         { label: "GDSII layout…", action: () => void handleImportGds(), disabled: busy },
         { label: "Materials…", action: () => void importLibraryFrom("materials"), disabled: busy },
-        { label: "Recipes…", action: () => void importLibraryFrom("recipes"), disabled: busy },
+        { label: "Step templates…", action: () => void importLibraryFrom("recipes"), disabled: busy },
         { label: "Tools…", action: () => void importLibraryFrom("tools"), disabled: busy },
         { label: "Flow as Excel…", heading: "Export", action: () => setExportingTable("xlsx"), separated: true, disabled: busy },
         { label: "Flow as CSV…", action: () => setExportingTable("csv"), disabled: busy },
         { label: "Flow file (JSON)…", action: () => void exportFlowAs("json"), disabled: busy },
         { label: "Flow file (YAML)…", action: () => void exportFlowAs("yaml"), disabled: busy },
         { label: "Materials…", action: () => void exportLibraryAs("materials"), disabled: busy },
-        { label: "Recipes…", action: () => void exportLibraryAs("recipes"), disabled: busy },
+        { label: "Step templates…", action: () => void exportLibraryAs("recipes"), disabled: busy },
         { label: "Tools…", action: () => void exportLibraryAs("tools"), disabled: busy },
         { label: "3D surfaces…", action: () => void exportMesh(), disabled: busy },
         { label: "Show workspace folder", action: revealFolder, separated: true },
@@ -1724,7 +1724,7 @@ export function Workspace({
       label: "Libraries",
       items: [
         { label: "Materials…", action: () => setShowMaterials(true) },
-        { label: "Recipes…", action: () => setShowRecipes(true) },
+        { label: "Step templates…", action: () => setShowRecipes(true) },
         { label: "Tools…", action: () => setShowTools(true) },
       ],
     },
@@ -2085,7 +2085,7 @@ export function Workspace({
             setDocument(upsertRecipe(document, recipe));
             setEvents((current) => [
               ...current,
-              { kind: "log", message: `Saved ${recipe.name} to the Recipe Library.` },
+              { kind: "log", message: `Saved ${recipe.name} to the step templates.` },
             ]);
           }}
           onMaskChange={(patch) =>
@@ -2146,7 +2146,7 @@ export function Workspace({
               if (path) {
                 setEvents((current) => [
                   ...current,
-                  { kind: "log", message: `Exported the recipe library to ${path}` },
+                  { kind: "log", message: `Exported the step templates to ${path}` },
                 ]);
               }
             } catch (reason) {

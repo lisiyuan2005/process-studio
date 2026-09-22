@@ -706,7 +706,7 @@ def cmd_recipes_list(session: Session, args: argparse.Namespace) -> int:
          ", ".join(f"{key}={format_number(value)}" for key, value in recipe["parameters"].items())]
         for recipe in ordered
     ]
-    session.emit(document["recipes"], lambda: table(("Type", "Group", "Recipe", "Tool", "Material", "Parameters"), rows))
+    session.emit(document["recipes"], lambda: table(("Type", "Group", "Template", "Tool", "Material", "Parameters"), rows))
     return EXIT_OK
 
 
@@ -717,8 +717,20 @@ def cmd_tools_list(session: Session, args: argparse.Namespace) -> int:
         if step.get("tool"):
             used[step["tool"]] = used.get(step["tool"], 0) + 1
     ordered = sorted(document.get("tools", []), key=lambda t: (t.get("group") or "", t["name"].lower()))
-    rows = [[tool.get("group") or "", tool["name"], tool.get("notes") or "", used.get(tool["name"], 0)] for tool in ordered]
-    session.emit(document.get("tools", []), lambda: table(("Group", "Tool", "Notes", "Used by"), rows) if rows else ["(no tools)"])
+    rows = [
+        [
+            tool.get("group") or "",
+            tool["name"],
+            "; ".join(tool.get("recipes") or []),
+            tool.get("notes") or "",
+            used.get(tool["name"], 0),
+        ]
+        for tool in ordered
+    ]
+    session.emit(
+        document.get("tools", []),
+        lambda: table(("Group", "Tool", "Recipes", "Notes", "Used by"), rows) if rows else ["(no tools)"],
+    )
     return EXIT_OK
 
 
@@ -731,6 +743,13 @@ def cmd_tools_add(session: Session, args: argparse.Namespace) -> int:
         "name": args.name.strip(),
         "group": args.group if args.group is not None else (current["group"] if current else ""),
         "notes": args.notes if args.notes is not None else (current["notes"] if current else ""),
+        # --recipe replaces the machine's recipe list; without it, whatever
+        # the tool already has stays.
+        "recipes": (
+            list(args.recipe)
+            if args.recipe is not None
+            else list((current or {}).get("recipes") or [])
+        ),
     }
     if current:
         tools[tools.index(current)] = tool
@@ -1187,14 +1206,19 @@ def build_parser() -> argparse.ArgumentParser:
     material_rm.add_argument("name", nargs="+")
     material_rm.set_defaults(handler=cmd_materials_rm)
 
-    recipes = commands.add_parser("recipes", help="the recipe library")
-    recipe_commands = recipes.add_subparsers(dest="recipes_command", metavar="ACTION")
+    # "Step templates" is what these are: a saved step to start another one
+    # from. They used to be called recipes, which now means the recipe
+    # loaded on a tool, so the old name stays as an alias.
+    templates = commands.add_parser(
+        "templates", aliases=["recipes"], help="the step templates a step can be started from"
+    )
+    recipe_commands = templates.add_subparsers(dest="templates_command", metavar="ACTION")
     recipe_commands.required = True
-    recipe_commands.add_parser("list", help="every recipe").set_defaults(handler=cmd_recipes_list)
-    recipe_export = recipe_commands.add_parser("export", help="write the library as .xlsx")
+    recipe_commands.add_parser("list", help="every template").set_defaults(handler=cmd_recipes_list)
+    recipe_export = recipe_commands.add_parser("export", help="write the templates as .xlsx")
     recipe_export.add_argument("file")
     recipe_export.set_defaults(handler=cmd_recipes_export)
-    recipe_import = recipe_commands.add_parser("import", help="read recipes from .xlsx")
+    recipe_import = recipe_commands.add_parser("import", help="read templates from .xlsx")
     recipe_import.add_argument("file")
     recipe_import.set_defaults(handler=cmd_recipes_import)
 
@@ -1229,6 +1253,9 @@ def build_parser() -> argparse.ArgumentParser:
     tool_add.add_argument("name")
     tool_add.add_argument("--group", help="a path such as Etch/Dry; subgroups are separated by /")
     tool_add.add_argument("--notes")
+    tool_add.add_argument("--recipe", action="append", metavar="NAME",
+                          help="a recipe loaded on this machine, e.g. Siva_HZO_300C; "
+                               "repeat for each one, and giving any replaces the list")
     tool_add.set_defaults(handler=cmd_tools_add)
     tool_rm = tool_commands.add_parser("rm", help="remove tools from the library")
     tool_rm.add_argument("name", nargs="+")

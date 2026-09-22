@@ -48,8 +48,8 @@ cd ~/devices/dram
 | `view top --step STEP [--no-steps] -o top.png` | 俯视图 PNG，按每点最上层材料的颜色画；同一材料自己的高度分界默认画一条压暗的线，`--no-steps` 关掉 |
 | `view mesh --step STEP -o step.glb` | 3D 表面，.glb / .gltf / .obj / .stl / .ply |
 | `materials list\|add NAME [--category --color --opacity]\|rm NAME` | 材料库 |
-| `recipes list\|export FILE.xlsx\|import FILE.xlsx` | Recipe 库，按类型和分组列出 |
-| `tools list\|add NAME [--group G] [--notes N]\|rm NAME` | 工具库；分组用斜杠分子组，如 `Etch/Dry` |
+| `templates list\|export FILE.xlsx\|import FILE.xlsx` | step template 库（原 `recipes`，老名字仍认），按类型和分组列出 |
+| `tools list\|add NAME [--group G] [--notes N] [--recipe NAME]…\|rm NAME` | 工具库；分组用斜杠分子组，如 `Etch/Dry`；`--recipe` 是这台机器上装的配方（可重复，给了就整份替换），步骤用 experiment 的 `tool_recipe` 记下用的哪条 |
 | `sketch list\|show ID\|export ID FILE\|import ID FILE` | Quick Sketch |
 | `branches list\|add NAME [--after STEP]\|use BRANCH\|rename BRANCH NAME\|rm BRANCH` | 工艺分叉（split）：`add` 把当前分支在某一步之后分出一条新分支，分叉点之前的步骤和**已经算好的结果**一起带过去，之后自动切到新分支；`rm` 只删这条分支独有的结果 |
 | `lines list\|add NAME X0 Y0 X1 Y1\|rm NAME` | 保存的 AA–BB 截面线；`view section --named NAME` 沿其中一条切 |
