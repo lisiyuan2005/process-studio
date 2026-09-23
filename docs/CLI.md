@@ -42,7 +42,7 @@ cd ~/devices/dram
 | `steps skip STEP...` / `include STEP...` | 跳过 / 放回运行 |
 | `steps loop STEP... [--repeat N] [--name NAME]` / `steps unloop STEP` | 把相邻的几步做成重复 N 次的循环（这几步是第 1 次，后面接上 N−1 份副本）/ 拆开循环，各次留下成为普通步骤 |
 | `run [--through STEP] [--force]` | 运行；结果还有效的步骤直接复用 |
-| `fidelity [detailed\|simplified]` | 看或切换膜模型：detailed 圆角、按分辨率采样；simplified（默认）直角、每个平面一段，快得多。两档的结果分开保存，切回去不用重算 |
+| `fidelity [detailed\|simplified\|voxel]` | 看或切换膜模型：detailed 圆角、按分辨率采样；simplified（默认）直角、每个平面一段，快得多；voxel 高度精确、平面按网格格子算，最快，用来快速看整个流程的结构。各档的结果分开保存，切回去不用重算 |
 | `window [--x A B] [--y A B] [--z A B] [--spacing NM] [--spacing-xy NM]` | 看或改工程窗口和几何分辨率（改动会丢弃全部结果）：`--spacing` 是 z 步长，`--spacing-xy` 是 XY 弧线弦高（0 表示跟随 z）；衬底厚度就是窗口的深度，`--z -0.2 0.4` 就是 200 nm 的衬底 |
 | `view section --step STEP [--axis x\|y --at UM \| --line X0 Y0 X1 Y1] -o cut.png` | 截面 PNG |
 | `view top --step STEP [--no-steps] -o top.png` | 俯视图 PNG，按每点最上层材料的颜色画；同一材料自己的高度分界默认画一条压暗的线，`--no-steps` 关掉 |
@@ -99,7 +99,7 @@ kernel: slab
 window: {x: [-0.8, 0.8], y: [-0.8, 0.8], z: [-0.8, 0.4]}
 resolution_nm: 10          # z 步长（保形沉积和各向同性刻蚀沿高度的采样）
 resolution_xy_nm: 10       # XY 弧线弦高，省略则跟随 z
-fidelity: detailed         # 膜模型：detailed 或 simplified（默认）
+fidelity: detailed         # 膜模型：detailed、simplified（默认）或 voxel
 materials:
   - {name: W, category: Metal, color: "#7f8790"}
 sketches:

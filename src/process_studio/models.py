@@ -14,16 +14,18 @@ def new_id() -> str:
 
 #: How the slab kernel shapes films. "detailed" rounds corners with the
 #: film's radius and samples in z at the resolution; "simplified" gives
-#: square corners from one sample per plane and is much faster.
-FIDELITIES = ("detailed", "simplified")
+#: square corners from one sample per plane and is much faster; "voxel"
+#: keeps the slabs but draws x and y on a grid of cells, which is faster
+#: again by orders of magnitude and exact in height, not sideways.
+FIDELITIES = ("detailed", "simplified", "voxel")
 
 
 def result_key(step_id: str, fidelity: str) -> str:
     """The key a step's stored result lives under.
 
-    Results of both fidelities are kept side by side: the detailed one
-    under the bare step id (what every workspace already has), the
-    simplified one under a suffixed id. Switching the project's fidelity
+    Results of every fidelity are kept side by side: the detailed one
+    under the bare step id (what every workspace already has), the others
+    under a suffixed id. Switching the project's fidelity
     then shows what was computed in that mode without a rerun.
     """
     return step_id if fidelity == "detailed" else f"{step_id}~{fidelity}"
@@ -335,8 +337,9 @@ class ProjectDefinition:
     #: in micrometres. They are the user's bookmarks into the geometry.
     section_lines: list[dict[str, Any]] = field(default_factory=list)
     #: How films are shaped: "simplified" (square corners, one sample per
-    #: plane, much faster) or "detailed" (rounded, sampled at the
-    #: resolution). Results of both are stored side by side, so switching
+    #: plane, much faster), "detailed" (rounded, sampled at the
+    #: resolution) or "voxel" (square films on a grid of cells, a quick look
+    #: at a whole flow). Results of each are stored side by side, so switching
     #: back shows what was computed before without a rerun. New projects
     #: start simplified: it is what this is used for, and a detailed film is
     #: a deliberate look at one step rather than how a flow is built.

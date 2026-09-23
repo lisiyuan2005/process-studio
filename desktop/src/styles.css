@@ -766,10 +766,28 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .cli-script::placeholder { color: #9aa7b3; }
 .cli-output { max-height: 220px; min-height: 64px; margin: 0; padding: 8px 10px; overflow: auto; border-radius: 6px; background: #0f151b; color: #c8d3dc; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 
-/* -- film model (fidelity) toggle in the top bar ---------------------------- */
-.variant-controls .fidelity-button.fidelity-simplified { border-color: #d9a54a; background: #fff6e5; color: #9a6412; }
-.variant-controls .fidelity-button.fidelity-detailed { border-color: #7fb0dc; background: #eef5fb; color: #2b5f8f; }
+/* -- film model (fidelity) switch in the top bar ---------------------------- */
+/* Three joined buttons; the chosen one takes its model's colour. */
+.fidelity-switch { display: inline-flex; }
+.variant-controls .fidelity-switch .fidelity-button { border-radius: 0; margin-left: -1px; }
+.variant-controls .fidelity-switch .fidelity-button:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+.variant-controls .fidelity-switch .fidelity-button:last-child { border-radius: 0 6px 6px 0; }
+.variant-controls .fidelity-button.active { position: relative; z-index: 1; cursor: default; }
+.variant-controls .fidelity-button.fidelity-voxel.active { border-color: #6fb58a; background: #eaf6ee; color: #2d7048; }
+.variant-controls .fidelity-button.fidelity-simplified.active { border-color: #d9a54a; background: #fff6e5; color: #9a6412; }
+.variant-controls .fidelity-button.fidelity-detailed.active { border-color: #7fb0dc; background: #eef5fb; color: #2b5f8f; }
 .fidelity-button:disabled { opacity: 0.6; cursor: default; }
+/* The switch gives way before anything else in the bar does: first the
+   models not chosen lose their names, then the chosen one; the tooltips
+   still say which is which. With the last of them the kernel badge goes
+   as well: this build has one kernel, and the bar has no room for it. */
+@media (max-width: 1800px) {
+  .variant-controls .fidelity-switch .fidelity-button:not(.active) { width: 28px; justify-content: center; padding: 0; font-size: 0; }
+}
+@media (max-width: 1440px) {
+  .variant-controls .fidelity-switch .fidelity-button { width: 28px; justify-content: center; padding: 0; font-size: 0; }
+  .variant-controls .kernel-badge { display: none; }
+}
 
 /* -- update check on the home page ------------------------------------------ */
 .update-check { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
@@ -809,7 +827,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .project-path { flex: 0 1 auto; min-width: 0; }
 .run-button { white-space: nowrap; }
 .kernel-badge { white-space: nowrap; }
-@media (max-width: 1600px) { .project-path { display: none; } }
+@media (max-width: 1760px) { .project-path { display: none; } }
 
 /* -- the inspector never scrolls sideways: rows shrink to its width ------------ */
 .inspector-scroll { overflow-x: hidden; }

@@ -950,7 +950,8 @@ class SlabKernel:
             "ProcessFlow-Emulator runs. Planar and conformal deposition, "
             "blanket or inside a mask, vertical and isotropic etching, "
             "unselective CMP. No grid to converge; conformal deposition is "
-            "walked at the set resolution."
+            "walked at the set resolution. The voxel film model keeps the "
+            "slabs but draws x and y on a grid, for a fast look at a flow."
         ),
         process_types=("deposit", "etch", "cmp", "no_geometry", "oxidation", "flip"),
         mask_sources=("none", "quick_sketch", "gds"),
@@ -970,6 +971,8 @@ class SlabKernel:
         materials: Sequence[MaterialDefinition] = (),
     ) -> SlabState:
         """The bare wafer: one substrate slab, its top face at z = 0."""
+        if project.fidelity == "voxel":
+            return _voxel().initial_state(project)
         x_min, y_min, x_max, y_max = _window(project)
         z_offset = float(project.grid["z_min"])
         thickness = -z_offset
@@ -1000,6 +1003,11 @@ class SlabKernel:
         materials: Sequence[MaterialDefinition] = (),
         should_cancel: Callable[[], bool] | None = None,
     ) -> SlabState:
+        if isinstance(state, _voxel().VoxelState):
+            return _voxel().run_step(
+                state, step, project=project, recipes=recipes, sketches=sketches,
+                logger=logger, materials=materials, should_cancel=should_cancel,
+            )
         device = state.working_copy()
         if not step.enabled:
             logger(f"SKIP {step.name}: disabled")
@@ -1039,9 +1047,16 @@ class SlabKernel:
         return SlabState(device, state.z_offset)
 
     def load_state(self, path: Path) -> SlabState:
+        # Both film models store under one suffix; the voxel file says so
+        # in its first bytes.
+        voxel = _voxel()
+        if voxel.is_voxel_file(Path(path)):
+            return voxel.VoxelState.load(path)
         return SlabState.load(path)
 
     def state_materials(self, state: SlabState) -> list[str]:
+        if isinstance(state, _voxel().VoxelState):
+            return state.present()
         return state.priority
 
     def warm_views(self, state: SlabState, buried: bool = False) -> None:
@@ -1053,9 +1068,14 @@ class SlabKernel:
         second pass: by the time anyone gets round to looking behind a
         material, the mesh for it is usually already there.
         """
+        if isinstance(state, _voxel().VoxelState):
+            _voxel().meshes_for(state, buried)
+            return
         display_meshes(state, buried=buried)
 
     def state_bytes(self, state: SlabState) -> int:
+        if isinstance(state, _voxel().VoxelState):
+            return _voxel().state_bytes(state)
         # Polygons are the bulk of a slab state: two doubles per coordinate
         # plus shapely's bookkeeping, which the factor of four stands in for.
         coordinates = sum(
@@ -1082,6 +1102,10 @@ class SlabKernel:
         triangulation: str | None = None,
         buried: bool = False,
     ) -> dict[str, Any]:
+        if isinstance(state, _voxel().VoxelState):
+            return _voxel().surfaces(
+                state, z_max=float(project.grid["z_max"]), materials=materials, buried=buried
+            )
         device = state.device
         engine = triangulation or DEFAULT_ENGINE
         meshes = display_meshes(state, engine, buried)
@@ -1149,6 +1173,11 @@ class SlabKernel:
         interpolation: int = 1,
         line: tuple[tuple[float, float], tuple[float, float]] | None = None,
     ) -> dict[str, Any]:
+        if isinstance(state, _voxel().VoxelState):
+            return _voxel().section(
+                state, colors, _rgb, z_max=float(project.grid["z_max"]), axis=axis,
+                position=position, line=line, interpolation=interpolation,
+            )
         device = state.device
         x_min, y_min, x_max, y_max = device.bounds
         if line is not None:
@@ -1264,6 +1293,8 @@ class SlabKernel:
         hidden: Sequence[str] = (),
         steps: bool = True,
     ) -> dict[str, Any]:
+        if isinstance(state, _voxel().VoxelState):
+            return _voxel().top_view(state, colors, _rgb, hidden=hidden, steps=steps)
         device = state.device
         x_min, y_min, x_max, y_max = device.bounds
         extent = (x_min, x_max, y_min, y_max)
@@ -1285,6 +1316,14 @@ class SlabKernel:
                 "verticalMax": y_max,
             },
         }
+
+
+def _voxel():
+    """The voxel film model, imported when first asked for: it reads this
+    module's step helpers, so it cannot be imported while this one loads."""
+    from . import voxel
+
+    return voxel
 
 
 def _encode(array: np.ndarray) -> str:

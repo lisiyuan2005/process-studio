@@ -177,7 +177,7 @@ export interface ProjectSummary {
   fidelity?: Fidelity;
 }
 
-export type Fidelity = "detailed" | "simplified";
+export type Fidelity = "detailed" | "simplified" | "voxel";
 
 export interface SketchShape {
   kind: "rectangle" | "circle" | "polygon" | "path";

@@ -181,10 +181,12 @@ def summarize_project(document: Mapping[str, Any]) -> list[str]:
         )
     if project.get("kernel") == "slab":
         fidelity = project.get("fidelity") or "detailed"
-        lines.append(
-            f"Fidelity   {fidelity} "
-            + ("(rounded films sampled at the resolution)" if fidelity == "detailed" else "(square films, one sample per plane)")
-        )
+        described = {
+            "detailed": "(rounded films sampled at the resolution)",
+            "simplified": "(square films, one sample per plane)",
+            "voxel": "(square films on a grid of cells, exact in height)",
+        }
+        lines.append(f"Fidelity   {fidelity} " + described.get(fidelity, ""))
     if project.get("gdsPath"):
         lines.append(f"GDS        {project['gdsPath']}")
     steps = Session.steps(document)
@@ -1160,12 +1162,13 @@ def build_parser() -> argparse.ArgumentParser:
     window.set_defaults(handler=cmd_window)
 
     fidelity = commands.add_parser(
-        "fidelity", help="show or set how the slab kernel shapes films: detailed or simplified"
+        "fidelity", help="show or set how the slab kernel shapes films: detailed, simplified or voxel"
     )
     fidelity.add_argument(
         "value", nargs="?", choices=FIDELITIES,
-        help="detailed: rounded films sampled at the resolution; simplified: square films, much faster. "
-        "Results of both are kept, so switching back shows what was computed before",
+        help="detailed: rounded films sampled at the resolution; simplified: square films, much faster; "
+        "voxel: square films on a grid of cells, fastest, exact in height only. "
+        "Results of each are kept, so switching back shows what was computed before",
     )
     fidelity.set_defaults(handler=cmd_fidelity)
 

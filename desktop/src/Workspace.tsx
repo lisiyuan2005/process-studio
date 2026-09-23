@@ -1,10 +1,11 @@
 import {
   ArrowLeft,
+  Boxes,
+  Circle,
   CircleAlert,
   CheckCircle2,
   Cpu,
   Grid3x3,
-  Layers,
   LoaderCircle,
   Play,
   Save,
@@ -153,6 +154,29 @@ export type WorkspaceProps = {
    */
   claimRoot: (root: string) => boolean;
 };
+
+/** The slab kernel's film models, fastest first. */
+const FILM_MODELS: { id: Fidelity; label: string; title: string; icon: typeof Boxes }[] = [
+  {
+    id: "voxel",
+    label: "Voxel",
+    icon: Boxes,
+    title:
+      "Voxel: slabs with exact heights, x and y on a grid of cells. A whole flow in seconds; edges land within half a cell, and a sidewall film thinner than a cell is kept one cell thick.",
+  },
+  {
+    id: "simplified",
+    label: "Simplified",
+    icon: Square,
+    title: "Simplified: exact polygon films with square corners, one sample per plane.",
+  },
+  {
+    id: "detailed",
+    label: "Detailed",
+    icon: Circle,
+    title: "Detailed: exact polygon films with rounded corners, sampled at the resolution.",
+  },
+];
 
 export function Workspace({
   initialRoot,
@@ -1712,8 +1736,9 @@ export function Workspace({
         { label: "Discard results and run everything again…", action: forceRerun, disabled: busy, separated: true },
         ...(projectKernel?.id === "slab"
           ? [
-              { label: "Detailed films (rounded)", heading: "Film model", action: () => void setFidelity("detailed"), checked: fidelity === "detailed", separated: true, disabled: busy },
+              { label: "Voxel films (grid, fastest)", heading: "Film model", action: () => void setFidelity("voxel"), checked: fidelity === "voxel", separated: true, disabled: busy },
               { label: "Simplified films (square, fast)", action: () => void setFidelity("simplified"), checked: fidelity === "simplified", disabled: busy },
+              { label: "Detailed films (rounded)", action: () => void setFidelity("detailed"), checked: fidelity === "detailed", disabled: busy },
             ]
           : []),
         { label: projectKernel && projectKernel.spacingRole !== "grid" ? "Geometry resolution…" : "Simulation grid…", action: () => setShowGrid(true), separated: true },
@@ -1812,24 +1837,29 @@ export function Workspace({
             nm
           </button>
           {projectKernel?.id === "slab" && (
-            <button
-              type="button"
-              className={`fidelity-button fidelity-${document.project.fidelity ?? "detailed"}`}
-              title={
-                (document.project.fidelity ?? "detailed") === "simplified"
-                  ? "Simplified: square films, one sample per plane, fast. Click for detailed films (rounded, sampled at the resolution). Results of both modes are kept."
-                  : "Detailed: rounded films sampled at the resolution. Click for simplified films (square corners, much faster). Results of both modes are kept."
-              }
-              disabled={busy}
-              onClick={() =>
-                void setFidelity(
-                  (document.project.fidelity ?? "detailed") === "simplified" ? "detailed" : "simplified",
-                )
-              }
-            >
-              <Layers size={13} />
-              {(document.project.fidelity ?? "detailed") === "simplified" ? "Simplified" : "Detailed"}
-            </button>
+            <div className="fidelity-switch" role="radiogroup" aria-label="Film model">
+              {FILM_MODELS.map((model) => {
+                const active = (document.project.fidelity ?? "detailed") === model.id;
+                const Icon = model.icon;
+                return (
+                  <button
+                    key={model.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    className={`fidelity-button fidelity-${model.id}${active ? " active" : ""}`}
+                    title={`${model.title} Results of every film model are kept, so switching back shows what was computed before.`}
+                    disabled={busy}
+                    onClick={() => {
+                      if (!active) void setFidelity(model.id);
+                    }}
+                  >
+                    <Icon size={13} />
+                    {model.label}
+                  </button>
+                );
+              })}
+            </div>
           )}
           {projectKernel && (
             <span
