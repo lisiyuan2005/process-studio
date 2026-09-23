@@ -40,19 +40,20 @@ Semantics follow the simplified (square) film model of the polygon slabs:
   costs nothing, a material with rate ``r`` costs ``h / r`` of the budget,
   and a material with rate 0 stops the column. Everything the walk passed
   is removed, and the slab where it ran out is split at that height.
-* **Isotropic etch and oxidation.** The etchant is in the void connected to
-  the ambient (with a mask, pre-existing void outside the mask's columns is
-  covered; void the etch makes is open). Each connected piece of a target
-  loses every cell within ``d`` of the void touching *that piece*, with the
-  same square-in-z rule as a film. Barriers are respected because only
-  surfaces of the piece itself start its etch: a nitride layer is not
-  etched through the oxide above it from a cavity on the other side. The
-  approximation is inside one piece: the distance is a straight line, so a
-  piece that folds back around a barrier can be etched across the fold. For
-  layers etched from a trench or a hole -- the usual case -- the straight
-  line is the path. Several targets are etched from the deepest down, each
-  from the void the ones before it opened. An oxidation relabels the cells
-  instead of emptying them.
+* **Isotropic etch and oxidation: the etchant's arrival time.** The
+  etchant is a liquid: it fills open space at once, and inside a material
+  with rate ``r`` it moves at ``r`` in every direction; a material with
+  rate 0 stops it. A cell goes when the etchant reaches its centre within
+  the etch time. It starts in the open space the ambient reaches inside
+  the mask's columns; open space the ambient reaches outside them is under
+  resist (spun on, it fills those holes) and stays shut; a sealed cavity
+  fills the moment the front breaks into it and etches on from there.
+  Several materials etch together, each at its own rate, so a slow one
+  under a fast one only starts once the fast one has exposed it, and a
+  front goes round a barrier rather than through it. Round in z: slabs of
+  an etchable material are cut at the project's z step (never finer than
+  a cell) so the front can curve. An oxidation relabels the cells instead
+  of emptying them.
 * **CMP** removes everything above the plane; **flip** turns the stack over
   and mirrors it, exactly as the polygon slabs do.
 """
@@ -321,14 +322,27 @@ def _row_distance(seed: np.ndarray, spacing: float) -> np.ndarray:
     return distance
 
 
+#: Past this many rows of reach, ``within`` takes the lower envelope of
+#: parabolas (a fixed cost per cell) instead of one pass per row of reach.
+#: Measured, not derived: a pass per row is one contiguous array operation
+#: and the envelope is a Python loop over the rows with scattered indexing,
+#: so on a 1600 x 1600 grid the passes win up to about 600 rows of reach
+#: (1.6 s against 3.1 at 320) and lose beyond it (4.8 s against 3.1 at 1200).
+ENVELOPE_ROWS = 640
+
+
 def within(seed: np.ndarray, radius: float, cell_x: float, cell_y: float) -> np.ndarray:
     """Cells whose centre is within ``radius`` of a seed centre in the same
     grid, for a stack of grids ``(layers, ny, nx)``.
 
-    Exact Euclidean distance, as a test: the distance along x to the
-    nearest seed in each row is found in one pass, and a cell is within
-    reach when some row ``m`` away has a seed within
-    ``sqrt(radius^2 - (m * cell_y)^2)`` along x of it.
+    Exact Euclidean distance, as a test. The distance along x to the
+    nearest seed in each row is found in one pass. For a short reach, a
+    cell is within it when some row ``m`` away has a seed within
+    ``sqrt(radius^2 - (m * cell_y)^2)`` along x of it -- one pass per row.
+    For a long one that is too many passes, and the squared distance down
+    each column is taken exactly as the lower envelope of the parabolas
+    the rows put there (Felzenszwalb and Huttenlocher), at a fixed cost per
+    cell whatever the reach.
     """
     out = np.zeros(seed.shape, dtype=bool)
     if radius < 0 or not seed.any():
@@ -342,12 +356,76 @@ def within(seed: np.ndarray, radius: float, cell_x: float, cell_y: float) -> np.
             continue
         distance = _row_distance(part, cell_x)
         reach = out[start : start + chunk]
+        if steps > ENVELOPE_ROWS:
+            layers, rows, cols = distance.shape
+            columns = distance.transpose(0, 2, 1).reshape(-1, rows).astype(np.float64)
+            squared = _envelope(columns * columns, cell_y)
+            reach[...] = (squared <= radius * radius * (1 + 1e-12)).reshape(layers, cols, rows).transpose(0, 2, 1)
+            continue
         np.less_equal(distance, np.float32(radius), out=reach)
         for m in range(1, steps + 1):
             half = math.sqrt(max(radius * radius - (m * cell_y) ** 2, 0.0))
             near = distance <= np.float32(half)
             reach[:, m:, :] |= near[:, :-m, :]
             reach[:, :-m, :] |= near[:, m:, :]
+    return out
+
+
+def _envelope(f: np.ndarray, spacing: float) -> np.ndarray:
+    """``min over q of f[:, q] + ((i - q) * spacing)^2`` for every line and ``i``.
+
+    The one-dimensional squared distance transform, for many lines at
+    once: each finite ``f[q]`` is a parabola, their lower envelope is
+    built left to right (a parabola hides the ones before it where it
+    starts lower), and then read off. The loops run along the line; every
+    step handles all the lines together.
+    """
+    lines, n = f.shape
+    s2 = spacing * spacing
+    q2 = s2 * np.arange(n, dtype=np.float64) ** 2
+    v = np.zeros((lines, n), dtype=np.int64)  # where the envelope's parabolas sit
+    z = np.full((lines, n + 1), np.inf)  # where each takes over
+    k = np.full(lines, -1, dtype=np.int64)
+    rows = np.arange(lines)
+    for q in range(n):
+        fq = f[:, q]
+        active = np.isfinite(fq)
+        if not active.any():
+            continue
+        start = active & (k < 0)
+        r = rows[start]
+        v[r, 0] = q
+        z[r, 0] = -np.inf
+        z[r, 1] = np.inf
+        k[r] = 0
+        r = rows[active & ~start]
+        while r.size:
+            kk = k[r]
+            p = v[r, kk]
+            cross = ((fq[r] + q2[q]) - (f[r, p] + q2[p])) / (2.0 * s2 * (q - p))
+            hidden = cross <= z[r, kk]
+            placed = r[~hidden]
+            if placed.size:
+                kp = kk[~hidden] + 1
+                v[placed, kp] = q
+                z[placed, kp] = cross[~hidden]
+                z[placed, kp + 1] = np.inf
+                k[placed] = kp
+            r = r[hidden]
+            k[r] -= 1
+    out = np.full((lines, n), np.inf)
+    have = rows[k >= 0]
+    if have.size == 0:
+        return out
+    at = np.zeros(lines, dtype=np.int64)
+    for q in range(n):
+        r = have
+        while r.size:
+            move = z[r, at[r] + 1] < q
+            r = r[move]
+            at[r] += 1
+        p = v[have, at[have]]
+        out[have, q] = s2 * (q - p) ** 2 + f[have, p]
     return out
 
 
@@ -535,123 +613,332 @@ def etch_vertical(
 
 def etch_isotropic(
     state: VoxelState,
-    depths: Mapping[str, float],
+    rates: Mapping[str, float],
+    budget: float,
     opening: np.ndarray | None,
     *,
     product: str | None = None,
+    dz: float | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> None:
-    """Take ``depth`` of each target from its exposed surface (see the module notes).
+    """Etch by the etchant's arrival time (see the module notes).
 
-    With ``product`` the cells taken become that material (an oxidation)
-    instead of void.
+    ``rates`` are per material and ``budget`` is the time they run for, in
+    the same units: a depth of the reference material with relative rates,
+    or minutes with rates per minute. With ``product`` the cells taken
+    become that material (an oxidation) instead of void. ``dz`` is how
+    finely a slab holding an etchable material is cut in z, so the front
+    can curve there; never finer than a cell.
     """
-    targets = [
-        (label, float(depth))
-        for name, depth in depths.items()
-        if float(depth) > 0.0 and (label := state.known_id(name)) is not None
-    ]
-    # The deepest first: the void it opens is where the shallower ones start.
-    targets.sort(key=lambda item: -item[1])
+    table = np.zeros(256)
+    for name, rate in rates.items():
+        label = state.known_id(name)
+        if label is not None and float(rate) > 0.0:
+            table[label] = float(rate)
+    etchable = np.flatnonzero(table > 0.0)
+    if etchable.size == 0 or not budget > 0.0:
+        return
+    holding = np.isin(state.labels, etchable).any(axis=(1, 2))
+    if not holding.any():
+        return
     product_label = state.material_id(product) if product is not None else None
-    columns = np.ones((state.ny, state.nx), dtype=bool) if opening is None else opening
-    # Void the etch itself makes is open to the etchant even under the mask.
-    made = np.zeros(state.labels.shape, dtype=bool)
-    for label, depth in targets:
-        _check(should_cancel, "an isotropic etch")
-        if not (state.labels == label).any():
-            continue
-        live = _live_void(state, columns, made)
-        target = state.labels == label
-        pieces = components(target)
-        seeds = live & _neighbours(np.concatenate([target, np.zeros_like(target[:1])]))
-        # Split the target's heights where a seed slab's reach ends, so a
-        # slab is either wholly within reach in z or wholly out of it.
-        seed_slabs = np.flatnonzero(seeds.any(axis=(1, 2)))
-        planes = []
-        for j in seed_slabs:
-            z0 = float(state.z[j]) if j < state.n else state.top
-            planes.append(z0 - depth)
-            if j < state.n:
-                planes.append(float(state.z[j + 1]) + depth)
-        source = state.split(planes)
-        made = made[source]
-        live = np.concatenate([live[:-1][source], live[-1:]])
-        pieces = pieces[source]
-        target = state.labels == label
-        seeds = live & _neighbours(np.concatenate([target, np.zeros_like(target[:1])]))
-        taken = _isotropic_reach(state, pieces, seeds, depth, should_cancel)
-        state.labels[taken] = VOID if product_label is None else product_label
-        if product_label is None:
-            made |= taken
+    # Which open space the ambient reaches is settled before the slabs are
+    # cut: cutting changes no connection, and the cut stack is many times
+    # taller.
+    live = _live(state)
+    step = max(float(dz or 0.0), state.cell)
+    planes = []
+    for k in np.flatnonzero(holding):
+        z0, z1 = float(state.z[k]), float(state.z[k + 1])
+        parts = max(1, math.ceil((z1 - z0) / step - 1e-9))
+        planes.extend(z0 + (z1 - z0) * j / parts for j in range(1, parts))
+    source = state.split(planes)
+    live = live[np.concatenate([source, [live.shape[0] - 1]])]
+    taken = _arrival(state, table, float(budget), opening, live, should_cancel)
+    state.labels[taken] = VOID if product_label is None else product_label
     state.consolidate()
 
 
-def _live_void(state: VoxelState, columns: np.ndarray, made: np.ndarray) -> np.ndarray:
-    """Void connected to the ambient, as a stack with one extra slab on top
-    standing for the space above the device."""
-    void = state.labels == VOID
-    open_void = void & (columns[None] | made)
-    stack = np.concatenate([open_void, columns[None]], axis=0)
-    labels = components(stack)
-    sources = np.unique(labels[-1][labels[-1] > 0])
-    if sources.size == 0:
-        return np.zeros(stack.shape, dtype=bool)
-    return np.isin(labels, sources)
+#: What a cell is to the etchant.
+_WALL, _ETCHABLE, _SOURCE, _CAVITY = 0, 1, 2, 3
 
 
-def _isotropic_reach(
+def _live(state: VoxelState) -> np.ndarray:
+    """Open space the ambient reaches, as the stack plus one slab on top for
+    the ambient itself; the rest of the open space is a sealed cavity."""
+    void = np.concatenate(
+        [state.labels == VOID, np.ones((1, state.ny, state.nx), dtype=bool)]
+    )
+    pieces = components(void)
+    ambient = np.unique(pieces[-1])
+    return np.isin(pieces, ambient[ambient > 0])
+
+
+class _Faces:
+    """Where fronts entered: axis-aligned rectangles (a point when flat in
+    every direction), each with the time the etchant stood on it.
+
+    A cell's arrival time is the time on its face plus the straight-line
+    distance to the face's nearest point over the rate of the cell's own
+    material. Within one material that is the exact distance to the
+    surface the etch started from, not a sum of grid steps.
+    """
+
+    def __init__(self) -> None:
+        self.centre = np.zeros((0, 3))
+        self.half = np.zeros((0, 3))
+        self.time = np.zeros(0)
+
+    def add(self, centre: np.ndarray, half: np.ndarray, time: np.ndarray) -> np.ndarray:
+        first = self.time.size
+        self.centre = np.concatenate([self.centre, centre])
+        self.half = np.concatenate([self.half, half])
+        self.time = np.concatenate([self.time, time])
+        return np.arange(first, first + time.size, dtype=np.int64)
+
+    def nearest(self, face: np.ndarray, point: np.ndarray) -> np.ndarray:
+        """The point of each face nearest to each point."""
+        low = self.centre[face] - self.half[face]
+        high = self.centre[face] + self.half[face]
+        return np.clip(point, low, high)
+
+
+def _arrival(
     state: VoxelState,
-    pieces: np.ndarray,
-    seeds: np.ndarray,
-    depth: float,
+    table: np.ndarray,
+    budget: float,
+    opening: np.ndarray | None,
+    live: np.ndarray,
     should_cancel: Callable[[], bool] | None,
 ) -> np.ndarray:
-    """Cells of each piece within ``depth`` of the seeds touching that piece."""
-    taken = np.zeros(state.labels.shape, dtype=bool)
-    reach = depth + 0.5 * state.cell
-    top_gap = np.concatenate([state.z, [np.inf]])
-    ids = np.flatnonzero(pieces.ravel())
-    if ids.size == 0:
-        return taken
-    values = pieces.ravel()[ids]
-    order = np.argsort(values, kind="stable")
-    ids, values = ids[order], values[order]
-    starts = np.flatnonzero(np.concatenate([[True], values[1:] != values[:-1]]))
-    ends = np.concatenate([starts[1:], [values.size]])
-    layers_total = state.n
-    for begin, end in zip(starts, ends):
+    """Cells of an etchable material the etchant reaches within ``budget``.
+
+    Cells are settled in order of arrival, a small time band at a time
+    (a group marching method). A cell next to open space enters through
+    the face it shares with it; a cell next to a settled cell of its own
+    material inherits that cell's entry face, as long as the straight line
+    to the face starts off through settled cells of the same material or
+    open space -- the line of sight. When it does not, the path bends at
+    the neighbour, which becomes a corner the front turns around. Crossing
+    into another material starts a new face on the interface, at the time
+    the front reached it. So the front is exact within a material in line
+    of sight of where it entered, and goes round barriers rather than
+    through them.
+    """
+    L, ny, nx = state.n, state.ny, state.nx
+    plane = ny * nx
+    labels = np.concatenate([state.labels, np.zeros((1, ny, nx), dtype=np.uint8)])
+    void = labels == VOID
+    columns = np.ones((ny, nx), dtype=bool) if opening is None else opening
+    kind = np.full(labels.shape, _WALL, dtype=np.uint8)
+    kind[(table[labels] > 0.0) & ~void] = _ETCHABLE
+    # Open space outside the mask is under resist and stays a wall; a
+    # sealed cavity fills with etchant the moment the front breaks in.
+    kind[live & columns[None]] = _SOURCE
+    kind[void & ~live] = _CAVITY
+    kind = kind.ravel()
+    flat_labels = labels.ravel()
+    slowness = np.zeros(256)
+    slowness[table > 0.0] = 1.0 / table[table > 0.0]
+    x_min, y_min = state.bounds[0], state.bounds[1]
+    hx, hy = state.cell_x, state.cell_y
+    thick = np.concatenate([np.diff(state.z), [hx]])
+    centre_z = np.concatenate([0.5 * (state.z[:-1] + state.z[1:]), [state.top + 0.5 * hx]])
+    probe = 1.25 * min(hx, hy, float(np.min(thick)))
+
+    size = labels.size
+    T = np.full(size, np.inf)
+    face_of = np.full(size, -1, dtype=np.int64)
+    known = np.zeros(size, dtype=bool)
+    queued = np.zeros(size, dtype=bool)
+    faces = _Faces()
+    sources = np.flatnonzero(kind == _SOURCE)
+    T[sources] = 0.0
+    known[sources] = True
+
+    cavity_cells = cavity_ids = cavity_of = None
+    if (kind == _CAVITY).any():
+        cavity_of = components(void & ~live).ravel()
+        cavity_cells = np.flatnonzero(kind == _CAVITY)
+        ids = cavity_of[cavity_cells]
+        order = np.argsort(ids, kind="stable")
+        cavity_cells, cavity_ids = cavity_cells[order], ids[order]
+
+    steps = ((-1, 0, -1), (1, 0, 1), (-nx, 1, -1), (nx, 1, 1), (-plane, 2, -1), (plane, 2, 1))
+
+    def where(cells):
+        k, rest = np.divmod(cells, plane)
+        y, x = np.divmod(rest, nx)
+        centre = np.stack(
+            [x_min + (x + 0.5) * hx, y_min + (y + 0.5) * hy, centre_z[k]], axis=1
+        )
+        half = np.stack([np.full(cells.size, 0.5 * hx), np.full(cells.size, 0.5 * hy), 0.5 * thick[k]], axis=1)
+        inside = (x > 0, x < nx - 1, y > 0, y < ny - 1, k > 0, k < L)
+        return k, centre, half, inside
+
+    def cell_at(points):
+        """The cell holding each point, or -1 outside the stack."""
+        ix = np.floor((points[:, 0] - x_min) / hx).astype(np.int64)
+        iy = np.floor((points[:, 1] - y_min) / hy).astype(np.int64)
+        iz = np.searchsorted(state.z, points[:, 2], side="right") - 1
+        iz = np.where(points[:, 2] >= state.top, L, iz)
+        ok = (ix >= 0) & (ix < nx) & (iy >= 0) & (iy < ny) & (iz >= 0)
+        return np.where(ok, iz * plane + iy * nx + ix, -1)
+
+    def update(cells):
+        """Best arrival for each cell from its settled neighbours, and how."""
+        _k, p, half, inside = where(cells)
+        s = slowness[flat_labels[cells]]
+        best = np.full(cells.size, np.inf)
+        # How the best candidate enters: an existing face, or a new face
+        # (centre, half extents, time) that is created if it wins.
+        how = np.full(cells.size, -1, dtype=np.int64)
+        new_centre = np.zeros((cells.size, 3))
+        new_half = np.zeros((cells.size, 3))
+        new_time = np.zeros(cells.size)
+        fresh = np.zeros(cells.size, dtype=bool)
+        for (step, axis, sign), ok in zip(steps, inside):
+            n = np.where(ok, cells + step, cells)
+            settled = ok & known[n]
+            if not settled.any():
+                continue
+            kn = kind[n]
+            # Through the face shared with open space, or with another
+            # material the front has reached (a new face on the interface).
+            shared_centre = p.copy()
+            shared_centre[:, axis] += sign * half[:, axis]
+            shared_half = half.copy()
+            shared_half[:, axis] = 0.0
+            open_side = settled & ((kn == _SOURCE) | (kn == _CAVITY))
+            other = settled & (kn == _ETCHABLE) & (flat_labels[n] != flat_labels[cells])
+            enter = np.where(open_side, T[n], np.inf)
+            if other.any():
+                _kk, pn, halfn, _in = where(n[other])
+                enter[other] = T[n[other]] + slowness[flat_labels[n[other]]] * halfn[:, axis]
+            t = enter + s * half[:, axis]
+            better = t < best
+            if better.any():
+                best[better] = t[better]
+                how[better] = -1
+                fresh[better] = True
+                new_centre[better] = shared_centre[better]
+                new_half[better] = shared_half[better]
+                new_time[better] = enter[better]
+            # Through a settled cell of the same material: its entry face,
+            # if the line to it starts off through open or settled ground.
+            same = settled & (kn == _ETCHABLE) & (flat_labels[n] == flat_labels[cells]) & (face_of[n] >= 0)
+            if not same.any():
+                continue
+            idx = np.flatnonzero(same)
+            f = face_of[n[idx]]
+            target = faces.nearest(f, p[idx])
+            gap = target - p[idx]
+            length = np.sqrt((gap * gap).sum(axis=1))
+            t = faces.time[f] + s[idx] * length
+            look = np.ones(idx.size, dtype=bool)
+            far = length > probe
+            if far.any():
+                ahead = p[idx[far]] + gap[far] * (probe / length[far])[:, None]
+                c = cell_at(ahead)
+                good = c >= 0
+                cc = np.where(good, c, 0)
+                clear = good & (
+                    (known[cc] & (kind[cc] == _ETCHABLE) & (flat_labels[cc] == flat_labels[cells[idx[far]]]))
+                    | (known[cc] & ((kind[cc] == _SOURCE) | (kind[cc] == _CAVITY)))
+                    | (cc == cells[idx[far]])
+                )
+                look[far] = clear
+            # Out of sight: the path bends at the neighbour.
+            _kk, pn, _halfn, _in = where(n[idx[~look]])
+            if (~look).any():
+                corner_gap = pn - p[idx[~look]]
+                t[~look] = T[n[idx[~look]]] + s[idx[~look]] * np.sqrt((corner_gap * corner_gap).sum(axis=1))
+            better = t < best[idx]
+            if better.any():
+                chosen = idx[better]
+                best[chosen] = t[better]
+                sight = look[better]
+                how[chosen[sight]] = f[better][sight]
+                fresh[chosen[sight]] = False
+                bend = chosen[~sight]
+                if bend.size:
+                    corners = np.flatnonzero(~look)
+                    lookup = np.full(idx.size, -1)
+                    lookup[corners] = np.arange(corners.size)
+                    at = lookup[np.flatnonzero(better)[~sight]]
+                    fresh[bend] = True
+                    new_centre[bend] = pn[at]
+                    new_half[bend] = 0.0
+                    new_time[bend] = T[n[idx[~look]]][at]
+        return best, how, fresh, new_centre, new_half, new_time
+
+    def settle_candidates(cells):
+        nonlocal trial
+        if cells.size == 0:
+            return
+        best, how, fresh, centre, half, time = update(cells)
+        improve = best < T[cells]
+        if not improve.any():
+            return
+        cells, best, how, fresh = cells[improve], best[improve], how[improve], fresh[improve]
+        T[cells] = best
+        made = faces.add(centre[improve][fresh], half[improve][fresh], time[improve][fresh])
+        how[fresh] = made
+        face_of[cells] = how
+        new = cells[~queued[cells]]
+        queued[new] = True
+        trial = np.concatenate([trial, new])
+
+    stamp = np.zeros(size, dtype=np.int32)
+
+    def reachable(fronts):
+        """Etchable cells next to ``fronts`` that are not settled, once each."""
+        k, rest = np.divmod(fronts, plane)
+        y, x = np.divmod(rest, nx)
+        inside = (x > 0, x < nx - 1, y > 0, y < ny - 1, k > 0, k < L)
+        found = np.concatenate([fronts[ok] + step for (step, _a, _s), ok in zip(steps, inside)])
+        found = found[(kind[found] == _ETCHABLE) & ~known[found]]
+        places = np.arange(found.size, dtype=np.int32)
+        stamp[found] = places
+        return found[stamp[found] == places]
+
+    trial = np.zeros(0, dtype=np.int64)
+    settle_candidates(reachable(sources))
+    fastest = slowness[slowness > 0.0].min()
+    delta = 0.5 * min(hx, hy) * fastest
+    while trial.size:
         _check(should_cancel, "an isotropic etch")
-        piece = int(values[begin])
-        k_idx, y_idx, x_idx = np.unravel_index(ids[begin:end], pieces.shape)
-        k0, k1 = int(k_idx.min()), int(k_idx.max())
-        y0, y1 = max(int(y_idx.min()) - 1, 0), min(int(y_idx.max()) + 2, state.ny)
-        x0, x1 = max(int(x_idx.min()) - 1, 0), min(int(x_idx.max()) + 2, state.nx)
-        s0, s1 = max(k0 - 1, 0), min(k1 + 2, layers_total + 1)
-        own = pieces[k0 : k1 + 1, y0:y1, x0:x1] == piece
-        # Seeds of this piece: open void next to one of its own cells.
-        padded = np.zeros((s1 - s0, y1 - y0, x1 - x0), dtype=bool)
-        padded[k0 - s0 : k0 - s0 + own.shape[0]] = own
-        mine = seeds[s0:s1, y0:y1, x0:x1] & _neighbours(padded)
-        if not mine.any():
-            continue
-        seed_layers = [j for j in range(s0, s1) if mine[j - s0].any()]
-        stacked = np.zeros(own.shape, dtype=bool)
-        for k in range(k0, k1 + 1):
-            for j in seed_layers:
-                # Gap between slab j (the top slab stands for everything
-                # above the device) and slab k; strictly under the depth.
-                if j < k:
-                    gap = state.z[k] - top_gap[j + 1]
-                elif j > k:
-                    gap = top_gap[j] - state.z[k + 1]
-                else:
-                    gap = 0.0
-                if gap < depth - Z_EPS:
-                    stacked[k - k0] |= mine[j - s0]
-        near = within(stacked, reach, state.cell_x, state.cell_y)
-        taken[k0 : k1 + 1, y0:y1, x0:x1] |= near & own
-    return taken
+        times = T[trial]
+        first = float(times.min())
+        if first > budget:
+            break
+        take = times <= first + delta
+        group = trial[take]
+        trial = trial[~take]
+        queued[group] = False
+        known[group] = True
+        fronts = [group]
+        if cavity_cells is not None:
+            k, rest = np.divmod(group, plane)
+            y, x = np.divmod(rest, nx)
+            inside = (x > 0, x < nx - 1, y > 0, y < ny - 1, k > 0, k < L)
+            wall = np.concatenate([group[ok] for ok in inside])
+            hit = np.concatenate([group[ok] + step for (step, _a, _s), ok in zip(steps, inside)])
+            breach = (kind[hit] == _CAVITY) & ~known[hit]
+            wall, hit = wall[breach], hit[breach]
+            for piece in np.unique(cavity_of[hit]):
+                lo = np.searchsorted(cavity_ids, piece, side="left")
+                hi = np.searchsorted(cavity_ids, piece, side="right")
+                cells = cavity_cells[lo:hi]
+                # It fills when the front reaches its wall: half a cell past
+                # the centre of the cell that broke through.
+                through = wall[cavity_of[hit] == piece]
+                T[cells] = float(np.min(T[through] + 0.5 * min(hx, hy) * slowness[flat_labels[through]]))
+                known[cells] = True
+                fronts.append(cells)
+        settle_candidates(reachable(np.concatenate(fronts)))
+    taken = (kind == _ETCHABLE) & known & (T <= budget)
+    return taken.reshape(labels.shape)[:L]
 
 
 def cmp(state: VoxelState, height: float) -> None:
@@ -943,24 +1230,30 @@ def build_meshes(state: VoxelState, *, buried: bool) -> dict[str, tuple[np.ndarr
     Each material's triangles face outward; a face against another
     material carries that material's place in the mesh order, and is left
     out unless ``buried`` asks for it.
+
+    The mesh is conforming: joining cells into rectangles leaves corners
+    of one rectangle part-way along the edge of the next (a T-junction),
+    and a GPU draws the two sides of such an edge along slightly
+    different lines, which shows as pixel cracks. So every corner that
+    lies on another drawn face's edge -- of any material -- is put into
+    that edge, and a face with such points is fanned from its centre.
+    Corners are on the lattice of cell boundaries, so this is exact
+    integer work.
     """
     order = state.present()
     place = np.full(_OUTSIDE + 1, -1, dtype=np.int64)
     for index, name in enumerate(order):
         place[state.known_id(name)] = index
-    x_min, y_min, _, _ = state.bounds
-    cx, cy = state.cell_x, state.cell_y
-    quads: dict[int, list[np.ndarray]] = {}
-    against: dict[int, list[np.ndarray]] = {}
+    n = state.n
+    owners: list[np.ndarray] = []
+    others: list[np.ndarray] = []
+    lattice: list[np.ndarray] = []  # (Q, 4, 3) corners as (i, j, b), counter-clockwise from outside
 
     def add(owner, neighbour, corners):
-        # owner, neighbour: (Q,) labels; corners: (Q, 4, 3)
         keep = (neighbour == VOID) | (neighbour == _OUTSIDE) | buried
-        owner, neighbour, corners = owner[keep], neighbour[keep], corners[keep]
-        for label in np.unique(owner):
-            chosen = owner == label
-            quads.setdefault(int(label), []).append(corners[chosen])
-            against.setdefault(int(label), []).append(neighbour[chosen])
+        owners.append(owner[keep].astype(np.int64))
+        others.append(neighbour[keep].astype(np.int64))
+        lattice.append(corners[keep].astype(np.int64))
 
     def faces_between(owner, neighbour, tag=None):
         # Keys only where a face is: most of the grid has none, and whole-
@@ -977,99 +1270,181 @@ def build_meshes(state: VoxelState, *, buried: bool) -> dict[str, tuple[np.ndarr
         keys = keys - 1
         return keys // 512, keys % 512
 
-    n = state.n
+    def quad(*corners):
+        return np.stack([np.stack(corner, -1) for corner in corners], axis=1)
+
     labels = state.labels.astype(np.int16)
     # Horizontal faces, at every slab boundary.
     for b in range(n + 1):
         below = labels[b - 1] if b > 0 else np.full((state.ny, state.nx), _OUTSIDE, dtype=np.int16)
         above = labels[b] if b < n else np.full((state.ny, state.nx), VOID, dtype=np.int16)
-        z = state.z[b]
         for owner, neighbour, up in ((below, above, True), (above, below, False)):
             key, r0, r1, c0, c1 = _rectangles(faces_between(owner, neighbour))
             if key.size == 0:
                 continue
             own, nb = split(key)
-            xa, xb = x_min + c0 * cx, x_min + c1 * cx
-            ya, yb = y_min + r0 * cy, y_min + r1 * cy
-            zz = np.full(key.size, z)
+            bb = np.full(key.size, b)
             if up:
-                corners = np.stack(
-                    [np.stack(v, -1) for v in ((xa, ya, zz), (xb, ya, zz), (xb, yb, zz), (xa, yb, zz))],
-                    axis=1,
-                )
+                corners = quad((c0, r0, bb), (c1, r0, bb), (c1, r1, bb), (c0, r1, bb))
             else:
-                corners = np.stack(
-                    [np.stack(v, -1) for v in ((xa, ya, zz), (xa, yb, zz), (xb, yb, zz), (xb, ya, zz))],
-                    axis=1,
-                )
+                corners = quad((c0, r0, bb), (c0, r1, bb), (c1, r1, bb), (c1, r0, bb))
             add(own, nb, corners)
-    # Walls facing x: between column i-1 and i, on every slab, joined along
-    # y and up through the slabs.
     if n:
+        # Walls facing x, between column i-1 and i, joined along y and up
+        # through the slabs. The wall line is folded into the key so runs
+        # never join across lines.
         edge = np.full((n, state.ny, 1), _OUTSIDE, dtype=np.int16)
-        # One grid per wall line: rows are slabs, columns are y. The wall
-        # line is folded into the key so that runs never join across lines.
-        left = np.concatenate([edge, labels], axis=2).transpose(2, 0, 1)  # column i-1 for wall i
-        right = np.concatenate([labels, edge], axis=2).transpose(2, 0, 1)  # column i for wall i
+        left = np.concatenate([edge, labels], axis=2).transpose(2, 0, 1)
+        right = np.concatenate([labels, edge], axis=2).transpose(2, 0, 1)
         walls = state.nx + 1
         line_of = np.arange(walls, dtype=np.int32)[:, None, None]
         for owner, neighbour, positive in ((left, right, True), (right, left, False)):
-            tagged = faces_between(owner, neighbour, (walls, line_of))  # (nx+1, n, ny)
+            tagged = faces_between(owner, neighbour, (walls, line_of))
             key, r0, r1, c0, c1 = _rectangles(tagged.reshape(-1, state.ny))
             if key.size:
                 line = key % walls
                 own, nb = split(key // walls)
-                slab0 = r0 - line * n
-                slab1 = r1 - line * n
-                xx = x_min + line * cx
-                ya, yb = y_min + c0 * cy, y_min + c1 * cy
-                za, zb = state.z[slab0], state.z[slab1]
+                s0, s1 = r0 - line * n, r1 - line * n
                 if positive:
-                    corners = [(xx, ya, za), (xx, yb, za), (xx, yb, zb), (xx, ya, zb)]
+                    corners = quad((line, c0, s0), (line, c1, s0), (line, c1, s1), (line, c0, s1))
                 else:
-                    corners = [(xx, ya, za), (xx, ya, zb), (xx, yb, zb), (xx, yb, za)]
-                add(own, nb, np.stack([np.stack(v, -1) for v in corners], axis=1))
-        # Walls facing y: between row j-1 and j.
+                    corners = quad((line, c0, s0), (line, c0, s1), (line, c1, s1), (line, c1, s0))
+                add(own, nb, corners)
+        # Walls facing y, between row j-1 and j.
         edge = np.full((n, 1, state.nx), _OUTSIDE, dtype=np.int16)
         low = np.concatenate([edge, labels], axis=1).transpose(1, 0, 2)
         high = np.concatenate([labels, edge], axis=1).transpose(1, 0, 2)
         walls = state.ny + 1
         line_of = np.arange(walls, dtype=np.int32)[:, None, None]
         for owner, neighbour, positive in ((low, high, True), (high, low, False)):
-            tagged = faces_between(owner, neighbour, (walls, line_of))  # (ny+1, n, nx)
+            tagged = faces_between(owner, neighbour, (walls, line_of))
             key, r0, r1, c0, c1 = _rectangles(tagged.reshape(-1, state.nx))
             if key.size:
                 line = key % walls
                 own, nb = split(key // walls)
-                slab0 = r0 - line * n
-                slab1 = r1 - line * n
-                yy = y_min + line * cy
-                xa, xb = x_min + c0 * cx, x_min + c1 * cx
-                za, zb = state.z[slab0], state.z[slab1]
+                s0, s1 = r0 - line * n, r1 - line * n
                 if positive:
-                    corners = [(xa, yy, za), (xa, yy, zb), (xb, yy, zb), (xb, yy, za)]
+                    corners = quad((c0, line, s0), (c0, line, s1), (c1, line, s1), (c1, line, s0))
                 else:
-                    corners = [(xa, yy, za), (xb, yy, za), (xb, yy, zb), (xa, yy, zb)]
-                add(own, nb, np.stack([np.stack(v, -1) for v in corners], axis=1))
+                    corners = quad((c0, line, s0), (c1, line, s0), (c1, line, s1), (c0, line, s1))
+                add(own, nb, corners)
+    if not owners:
+        return {}
+    owner = np.concatenate(owners)
+    neighbour = np.concatenate(others)
+    corners = np.concatenate(lattice)
+    x_min, y_min, _, _ = state.bounds
 
+    def place_of(points):
+        return np.stack(
+            [
+                x_min + points[:, 0] * state.cell_x,
+                y_min + points[:, 1] * state.cell_y,
+                state.z[points[:, 2]],
+            ],
+            axis=1,
+        )
+
+    coordinates, triangles, of_quad = _conforming(corners, place_of)
+    coordinates = coordinates.astype(np.float32)
     meshes: dict[str, tuple[np.ndarray, ...]] = {}
+    tri_owner = owner[of_quad]
+    tri_other = neighbour[of_quad]
     for name in order:
         label = state.known_id(name)
-        if label not in quads:
+        chosen = tri_owner == label
+        if not chosen.any():
             continue
-        corners = np.concatenate(quads[label], axis=0)
-        neighbour = np.concatenate(against[label], axis=0)
-        count = corners.shape[0]
-        vertices = corners.reshape(-1, 3).astype(np.float32)
-        base = np.arange(count, dtype=np.uint32) * 4
-        faces = np.empty((count * 2, 3), dtype=np.uint32)
-        faces[0::2] = np.stack([base, base + 1, base + 2], axis=1)
-        faces[1::2] = np.stack([base, base + 2, base + 3], axis=1)
-        other = np.repeat(neighbour, 2)
+        tris = triangles[chosen]
+        used, inverse = np.unique(tris.ravel(), return_inverse=True)
+        faces = inverse.reshape(-1, 3).astype(np.uint32)
+        other = tri_other[chosen]
         interface = ((other != VOID) & (other != _OUTSIDE)).astype(np.uint8)
         index = np.where(interface == 1, place[np.minimum(other, _OUTSIDE)], -1).astype(np.int16)
-        meshes[name] = (vertices, faces, interface, index)
+        meshes[name] = (coordinates[used], faces, interface, index)
     return meshes
+
+
+def _conforming(corners: np.ndarray, place_of) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Triangles for quads given by lattice corners, with every corner that
+    lies inside another quad's edge added to that edge.
+
+    ``place_of`` turns lattice points into coordinates. Returns the vertex
+    coordinates, the triangles (indices into them) and the quad each
+    triangle came from.
+    """
+    count = corners.shape[0]
+    points, point_of = np.unique(corners.reshape(-1, 3), axis=0, return_inverse=True)
+    point_of = point_of.reshape(count, 4)
+    # Every edge is parallel to one axis; along it only that coordinate
+    # moves. Points are looked up by (axis, the other two coordinates,
+    # position along the axis), sorted once per axis.
+    scale = int(points.max()) + 2 if points.size else 2
+    extras_at: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []  # (quad, edge, point) inserted
+    for axis in range(3):
+        other = [a for a in range(3) if a != axis]
+        line_key = points[:, other[0]] * scale + points[:, other[1]]
+        sort_key = line_key * scale + points[:, axis]
+        order = np.argsort(sort_key, kind="stable")
+        sorted_key = sort_key[order]
+        for e in range(4):
+            a = corners[:, e]
+            b = corners[:, (e + 1) % 4]
+            along = a[:, axis] != b[:, axis]
+            if not along.any():
+                continue
+            q = np.flatnonzero(along)
+            lo_pos = np.minimum(a[q, axis], b[q, axis])
+            hi_pos = np.maximum(a[q, axis], b[q, axis])
+            key = a[q, other[0]] * scale + a[q, other[1]]
+            lo = np.searchsorted(sorted_key, key * scale + lo_pos, side="right")
+            hi = np.searchsorted(sorted_key, key * scale + hi_pos, side="left")
+            many = hi - lo
+            has = many > 0
+            if not has.any():
+                continue
+            q, lo, many = q[has], lo[has], many[has]
+            forward = (b[q, axis] > a[q, axis])
+            # Ragged ranges, flattened: quad, rank along the edge, point.
+            repeat = np.repeat(np.arange(q.size), many)
+            offset = np.arange(repeat.size) - np.repeat(np.cumsum(many) - many, many)
+            rank = np.where(forward[repeat], offset, many[repeat] - 1 - offset)
+            inserted = order[lo[repeat] + offset]
+            extras_at.append((q[repeat], np.full(repeat.size, e) * 1_000_000 + 1 + rank, inserted))
+    base = np.arange(count)
+    if not extras_at:
+        triangles = np.concatenate([point_of[:, [0, 1, 2]], point_of[:, [0, 2, 3]]])
+        return place_of(points), triangles, np.concatenate([base, base])
+    quad_of = np.concatenate([e[0] for e in extras_at])
+    slot = np.concatenate([e[1] for e in extras_at])
+    point = np.concatenate([e[2] for e in extras_at])
+    split = np.zeros(count, dtype=bool)
+    split[quad_of] = True
+    plain = np.flatnonzero(~split)
+    triangles = [point_of[plain][:, [0, 1, 2]], point_of[plain][:, [0, 2, 3]]]
+    owners = [plain, plain]
+    # The split quads: corners and inserted points in order round the
+    # quad, fanned from a new vertex at the centre -- the midpoint of two
+    # opposite corners, in real coordinates, since slabs are not evenly
+    # spaced in z.
+    fanned = np.flatnonzero(split)
+    loop_quad = np.concatenate([np.repeat(fanned, 4), quad_of])
+    loop_slot = np.concatenate([np.tile(np.arange(4) * 1_000_000, fanned.size), slot])
+    loop_point = np.concatenate([point_of[fanned].ravel(), point])
+    order = np.lexsort((loop_slot, loop_quad))
+    loop_quad, loop_point = loop_quad[order], loop_point[order]
+    first = np.flatnonzero(np.concatenate([[True], loop_quad[1:] != loop_quad[:-1]]))
+    last = np.concatenate([first[1:], [loop_quad.size]]) - 1
+    following = np.arange(loop_quad.size) + 1
+    following[last] = first
+    located = place_of(points)
+    centres = 0.5 * (place_of(corners[fanned][:, 0]) + place_of(corners[fanned][:, 2]))
+    lookup = np.full(count, -1, dtype=np.int64)
+    lookup[fanned] = located.shape[0] + np.arange(fanned.size)
+    all_points = np.concatenate([located, centres])
+    triangles.append(np.stack([lookup[loop_quad], loop_point, loop_point[following]], axis=1))
+    owners.append(loop_quad)
+    return all_points, np.concatenate(triangles), np.concatenate(owners)
 
 
 def meshes_for(state: VoxelState, buried: bool) -> dict[str, tuple[np.ndarray, ...]]:
@@ -1292,6 +1667,13 @@ def run_step(
     parameters = dict(recipe.parameters)
     kind = recipe.process_type
     logger(f"RUN {step.name} [{kind.value}]")
+    logger(
+        f"VOXEL grid {new.nx} x {new.ny} cells of {new.cell_x * 1000:.4g} x "
+        f"{new.cell_y * 1000:.4g} nm; heights exact"
+    )
+    # A curved front is cut in z at the project's z step, as the detailed
+    # films are, and never finer than a cell.
+    z_step = max(slab.resolution_um(project), new.cell)
     try:
         if kind is ProcessType.DEPOSIT:
             opening = _opening(new, step, project, parameters, sketches)
@@ -1310,18 +1692,21 @@ def run_step(
                 logger(f"VOXEL etch vertical {text}")
                 etch_vertical(new, rates, budget, opening)
             else:
-                logger(f"VOXEL etch isotropic {text}")
-                depths = {name: rate * budget for name, rate in rates.items() if rate > 0.0}
-                etch_isotropic(new, depths, opening, should_cancel=should_cancel)
+                logger(f"VOXEL etch isotropic {text}, curved in z every {z_step * 1000:g} nm")
+                etch_isotropic(
+                    new, rates, budget, opening, dz=z_step, should_cancel=should_cancel
+                )
         elif kind is ProcessType.OXIDATION:
             opening = _opening(new, step, project, parameters, sketches)
             rates, budget, text = _budget(recipe, parameters, project, "oxidation")
             product = str(parameters.get("material") or recipe.output_material or "SiO2")
             if product in {name for name, rate in rates.items() if rate > 0.0}:
                 raise slab.SlabError(f"{product} cannot be both oxidised and the oxide it becomes")
-            logger(f"VOXEL oxidize {text} into {product}")
-            depths = {name: rate * budget for name, rate in rates.items() if rate > 0.0}
-            etch_isotropic(new, depths, opening, product=product, should_cancel=should_cancel)
+            logger(f"VOXEL oxidize {text} into {product}, curved in z every {z_step * 1000:g} nm")
+            etch_isotropic(
+                new, rates, budget, opening, product=product, dz=z_step,
+                should_cancel=should_cancel,
+            )
         elif kind is ProcessType.CMP:
             if parameters.get("target_z") is not None:
                 height = float(parameters["target_z"]) - new.z_offset

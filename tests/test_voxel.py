@@ -186,7 +186,7 @@ def sandwich_state(open_both: bool = True):
 def test_a_wet_etch_pulls_a_layer_back_from_the_trench_by_its_depth():
     state = sandwich_state()
     oxide_before = state.volume("SiO2")
-    voxel.etch_isotropic(state, {"SiN": 0.1}, None)
+    voxel.etch_isotropic(state, {"SiN": 1.0}, 0.1, None)
     sin = label(state, "SiN")
     k = int(np.searchsorted(state.z, 0.27)) - 1
     row = state.labels[k][50]
@@ -208,7 +208,7 @@ def test_a_wet_etch_does_not_reach_a_layer_through_the_oxide_above_it():
     state = make_state(
         [(0.0, 0.2, "Si"), (0.2, 0.25, sealed), (0.25, 0.3, oxide), (0.3, 0.35, open_), (0.35, 0.4, oxide_cut)]
     )
-    voxel.etch_isotropic(state, {"SiN": 0.1}, None)
+    voxel.etch_isotropic(state, {"SiN": 1.0}, 0.1, None)
     k = int(np.searchsorted(state.z, 0.22)) - 1
     assert (state.labels[k] == label(state, "SiN")).all()
 
@@ -218,11 +218,77 @@ def test_a_wet_etch_under_a_mask_starts_only_in_the_opening_and_creeps_under_it(
     state = make_state([(0.0, 0.2, "Si"), (0.2, 0.3, oxide)])
     opening = np.zeros((100, 100), dtype=bool)
     opening[:, 45:55] = True
-    voxel.etch_isotropic(state, {"SiO2": 0.05}, opening)
+    voxel.etch_isotropic(state, {"SiO2": 1.0}, 0.05, opening)
     top = state.labels[-1][50]
     assert (top[40:60] == voxel.VOID).all()  # 5 cells of undercut each side
     assert top[39] != voxel.VOID and top[60] != voxel.VOID
     assert state.labels[-1][50, 0] == label(state, "SiO2")
+
+
+def test_the_etchant_goes_round_a_barrier_not_through_it():
+    # A nitride U around an oxide block, opened over its left arm only. The
+    # right arm is 0.1 away through the oxide but 0.9 along the nitride.
+    base = np.full((100, 100), 2, dtype=np.uint8)
+    base[:, 20:50] = 3
+    arms = np.full((100, 100), 2, dtype=np.uint8)
+    arms[:, 20:30] = 3
+    arms[:, 40:50] = 3
+    cap = np.full((100, 100), 2, dtype=np.uint8)
+    cap[:, 20:30] = voxel.VOID
+    state = make_state([(0.0, 0.2, "Si"), (0.2, 0.25, base), (0.25, 0.65, arms), (0.65, 0.7, cap)])
+    voxel.etch_isotropic(state, {"SiN": 1.0}, 0.35, None)
+    k = int(np.searchsorted(state.z, 0.6)) - 1
+    assert (state.labels[k][50, 20:30] == voxel.VOID).all()  # the open arm goes
+    assert (state.labels[k][50, 40:50] == label(state, "SiN")).all()  # the far one stays
+
+
+def test_a_slow_material_is_etched_only_once_the_fast_one_has_exposed_it():
+    # 50 nm of oxide at rate 1 over nitride at rate 0.1, for a time that
+    # takes 150 nm of oxide: the nitride sees the etchant for 100 of it.
+    state = make_state([(0.0, 0.2, "Si"), (0.2, 0.25, "SiN"), (0.25, 0.3, "SiO2")])
+    voxel.etch_isotropic(state, {"SiO2": 1.0, "SiN": 0.1}, 0.15, None)
+    assert state.volume("SiO2") == 0.0
+    assert 0.05 - state.volume("SiN") == pytest.approx(0.01, abs=1e-9)
+
+
+def test_a_cavity_the_etch_breaks_into_etches_from_inside():
+    sheet = np.full((100, 100), 3, dtype=np.uint8)
+    sheet[:, 40:60] = voxel.VOID  # sealed, in the middle of a nitride sheet
+    upper = np.full((100, 100), 3, dtype=np.uint8)
+    upper[:, 0:5] = voxel.VOID
+    cap = np.full((100, 100), 2, dtype=np.uint8)
+    cap[:, 0:5] = voxel.VOID  # the only way in, far to the left
+    state = make_state([(0.0, 0.2, "Si"), (0.2, 0.25, sheet), (0.25, 0.3, upper), (0.3, 0.35, cap)])
+    voxel.etch_isotropic(state, {"SiN": 1.0}, 0.5, None)
+    k = int(np.searchsorted(state.z, 0.225)) - 1
+    # Reached at x = 0.4 after 0.35; the remaining 0.15 goes on from there.
+    left = int((state.labels[k][50, 60:] == label(state, "SiN")).sum())
+    assert left == pytest.approx(25, abs=1)
+
+
+def test_an_isotropic_front_is_round_in_z():
+    hole = np.zeros((200, 200), dtype=bool)
+    hole[99:101, 99:101] = True
+    state = make_state([(0.0, 0.2, "Si"), (0.2, 0.6, "SiO2")], size=200)
+    voxel.etch_isotropic(state, {"SiO2": 1.0}, 0.2, hole)
+    k = int(np.searchsorted(state.z, 0.5)) - 1
+    radius = int((state.labels[k][100] == voxel.VOID).sum()) * 0.005 / 2
+    # A ball reaches sqrt(0.2^2 - 0.1^2) = 0.173 sideways 0.1 down; a box 0.2.
+    assert radius == pytest.approx(0.173, abs=0.012)
+
+
+def test_open_holes_outside_the_mask_are_under_resist():
+    grid = np.full((100, 100), 3, dtype=np.uint8)
+    grid[:, 10:20] = voxel.VOID  # an open hole, outside the mask
+    grid[:, 70:80] = voxel.VOID  # an open hole, inside it
+    state = make_state([(0.0, 0.2, "Si"), (0.2, 0.3, grid)])
+    opening = np.zeros((100, 100), dtype=bool)
+    opening[:, 60:90] = True
+    voxel.etch_isotropic(state, {"SiN": 1.0}, 0.03, opening)
+    k = state.n - 1
+    assert state.labels[k][50, 9] == label(state, "SiN")  # beside the covered hole
+    assert state.labels[k][50, 20] == label(state, "SiN")
+    assert state.labels[k][50, 68] == voxel.VOID  # beside the open one
 
 
 def test_a_sealed_cavity_is_not_an_etchant_source():
@@ -230,7 +296,7 @@ def test_a_sealed_cavity_is_not_an_etchant_source():
     grid[40:60, 40:60] = voxel.VOID  # a buried cavity
     state = make_state([(0.0, 0.2, "Si"), (0.2, 0.3, grid), (0.3, 0.4, "SiO2")])
     before = state.volume("SiO2")
-    voxel.etch_isotropic(state, {"SiO2": 0.02}, None)
+    voxel.etch_isotropic(state, {"SiO2": 1.0}, 0.02, None)
     # Only the top 20 nm goes; the cavity walls stay.
     assert state.volume("SiO2") == pytest.approx(before - 0.02)
     k = int(np.searchsorted(state.z, 0.25)) - 1
@@ -240,7 +306,7 @@ def test_a_sealed_cavity_is_not_an_etchant_source():
 def test_oxidation_relabels_the_skin_without_changing_the_volume():
     state = sandwich_state()
     total = state.volume("SiN") + state.volume("SiO2")
-    voxel.etch_isotropic(state, {"SiN": 0.03}, None, product="SiO2")
+    voxel.etch_isotropic(state, {"SiN": 1.0}, 0.03, None, product="SiO2")
     assert state.volume("SiN") + state.volume("SiO2") == pytest.approx(total)
     assert state.volume("SiN") == pytest.approx(0.05 * (0.9 - 2 * 0.03))
 
@@ -276,7 +342,7 @@ def test_a_state_round_trips_and_the_kernel_tells_it_from_a_polygon_state(tmp_pa
 @pytest.mark.parametrize("buried", [False, True])
 def test_meshes_are_closed_and_face_outward(buried):
     state = sandwich_state()
-    voxel.etch_isotropic(state, {"SiN": 0.1}, None)
+    voxel.etch_isotropic(state, {"SiN": 1.0}, 0.1, None)
     voxel.deposit(state, "TiN", 0.02, planar=False)
     meshes = voxel.build_meshes(state, buried=True)
     for name, (vertices, faces, interface, neighbour) in meshes.items():
@@ -330,3 +396,49 @@ def test_a_voxel_project_runs_beside_the_other_film_models(tmp_path):
     document["project"]["fidelity"] = "simplified"
     back = call("save_document", root=root, document=document)
     assert back["stepStatuses"][branch["id"]][last] == "clean"
+
+
+@pytest.mark.parametrize("radius", [0.3, 0.4, 0.61])
+def test_a_long_reach_takes_the_envelope_and_stays_exact(radius, monkeypatch):
+    monkeypatch.setattr(voxel, "ENVELOPE_ROWS", 24)
+    assert radius / 0.011 > voxel.ENVELOPE_ROWS
+    rng = np.random.default_rng(2)
+    seed = rng.random((2, 60, 50)) < 0.002
+    seed[1] = False
+    got = voxel.within(seed, radius, 0.01, 0.011)
+    ys, xs = np.mgrid[0:60, 0:50]
+    sy, sx = np.nonzero(seed[0])
+    d = np.sqrt(((xs[..., None] - sx) * 0.01) ** 2 + ((ys[..., None] - sy) * 0.011) ** 2).min(axis=-1)
+    assert got[0].tolist() == (d <= radius + 1e-7).tolist()
+    assert not got[1].any()
+
+
+def _unmatched_edges(vertices, faces):
+    """Directed edges with no edge running the other way: 0 for a closed,
+    conforming surface -- a T-junction leaves the long edge unmatched."""
+    q = np.round(vertices.astype(np.float64) / 1e-7).astype(np.int64)
+    pairs = ((0, 1), (1, 2), (2, 0))
+    forward = np.concatenate([np.concatenate([q[faces[:, a]], q[faces[:, b]]], 1) for a, b in pairs])
+    backward = np.concatenate([np.concatenate([q[faces[:, b]], q[faces[:, a]]], 1) for a, b in pairs])
+    as_rows = lambda array: array.view([("", array.dtype)] * 6).ravel()
+    return int((~np.isin(as_rows(backward), as_rows(forward))).sum())
+
+
+def test_the_display_mesh_has_no_t_junctions():
+    # Round holes and films: rows of cells starting at different places,
+    # which is what used to leave corners part-way along long edges.
+    grid = np.full((100, 100), 2, dtype=np.uint8)
+    yy, xx = np.mgrid[0:100, 0:100]
+    grid[(xx - 50) ** 2 + (yy - 50) ** 2 < 23**2] = voxel.VOID
+    state = make_state([(0.0, 0.2, "Si"), (0.2, 0.3, grid)])
+    voxel.deposit(state, "TiN", 0.02, planar=False)
+    voxel.etch_isotropic(state, {"SiO2": 1.0}, 0.03, None)
+    for name, (vertices, faces, _interface, _neighbour) in voxel.build_meshes(state, buried=True).items():
+        assert _unmatched_edges(vertices, faces) == 0, name
+    # And across materials: everything drawn while all are shown is one
+    # closed surface, the outside of the whole stack.
+    free = voxel.build_meshes(state, buried=False)
+    offsets = np.cumsum([0] + [len(m[0]) for m in free.values()])[:-1]
+    vertices = np.concatenate([m[0] for m in free.values()])
+    faces = np.concatenate([m[1].astype(np.int64) + o for m, o in zip(free.values(), offsets)])
+    assert _unmatched_edges(vertices, faces) == 0
