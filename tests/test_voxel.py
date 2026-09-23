@@ -442,3 +442,341 @@ def test_the_display_mesh_has_no_t_junctions():
     vertices = np.concatenate([m[0] for m in free.values()])
     faces = np.concatenate([m[1].astype(np.int64) + o for m, o in zip(free.values(), offsets)])
     assert _unmatched_edges(vertices, faces) == 0
+
+
+# -- the two-level grid -----------------------------------------------------
+
+
+def fine_state(fine, refine, z, extent=1.0):
+    return voxel.VoxelState.from_fine(
+        (0.0, 0.0, extent, extent), fine, refine, np.array(z, float), ["Si", "SiO2", "SiN", "TiN"]
+    )
+
+
+def test_bricks_round_trip_and_stay_canonical(tmp_path):
+    rng = np.random.default_rng(3)
+    fine = np.zeros((3, 32, 32), np.uint8)
+    fine[0] = 1
+    fine[1, :, :13] = 2  # an edge that cuts through cells
+    fine[2] = (rng.random((32, 32)) < 0.1) * 3
+    state = fine_state(fine, 4, [0.0, 0.1, 0.2, 0.3])
+    state.check()
+    assert state.brick_keys.size > 0 and state.labels[0].max() == 1  # slab 0 needs no bricks
+    assert np.array_equal(state.to_fine(), fine)
+    assert state.volume("SiO2") == pytest.approx(13 / 32 * 0.1)
+    path = tmp_path / "s.dfz"
+    state.save(path)
+    back = voxel.VoxelState.load(path)
+    assert back.refine == 4 and np.array_equal(back.to_fine(), fine)
+
+
+def test_splitting_and_merging_slabs_carries_the_bricks():
+    fine = np.zeros((2, 16, 16), np.uint8)
+    fine[0] = 1
+    fine[1, 3:11, 5:7] = 2
+    state = fine_state(fine, 4, [0.0, 0.1, 0.3])
+    before = state.to_fine()
+    source = state.split([0.15, 0.2, 0.25])
+    assert list(source) == [0, 1, 1, 1, 1]
+    state.check()
+    assert all(np.array_equal(state.to_fine()[k], before[source[k]]) for k in range(state.n))
+    state.consolidate()
+    state.check()
+    assert state.n == 2 and np.array_equal(state.to_fine(), before)
+
+
+def test_sampling_reads_the_fine_level():
+    fine = np.zeros((1, 8, 8), np.uint8)
+    fine[0, 2, 5] = 3
+    state = fine_state(fine, 4, [0.0, 0.1])
+    x = (5 + 0.5) / 8
+    y = (2 + 0.5) / 8
+    assert state.sample(0, x, y) == 3
+    assert state.sample(0, x + 1 / 8, y) == 0
+
+
+def plain_twin(state):
+    """The same grid at the fine resolution, with no bricks: the reference."""
+    return voxel.VoxelState.from_fine(
+        state.bounds, state.to_fine(), 1, state.z.copy(), state.materials, state.z_offset
+    )
+
+
+def assert_same(two_level, plain):
+    two_level.check()
+    assert np.allclose(two_level.z, plain.z)
+    assert np.array_equal(two_level.to_fine(), plain.to_fine())
+
+
+def test_a_mask_is_rasterized_finely_along_its_outline():
+    from shapely.geometry import Point
+
+    state = fine_state(np.zeros((1, 64, 64), np.uint8), 8, [0.0, 0.1])
+    disc = Point(0.43, 0.51).buffer(0.21, quad_segs=32)
+    two = voxel.rasterize(state, disc)
+    ref = voxel.rasterize(plain_twin(state), disc)
+    assert np.array_equal(two.to_fine(8), ref.to_fine(1))
+    assert two.cells.size < 64  # only along the outline
+
+
+def layered_state(refine=4):
+    """Oxide over nitride over silicon, with a round hole in the oxide."""
+    size = 16 * refine
+    fine = np.zeros((3, size, size), np.uint8)
+    fine[0] = 1
+    fine[1] = 3
+    fine[2] = 2
+    yy, xx = np.mgrid[0:size, 0:size]
+    fine[2][(xx - size * 0.45) ** 2 + (yy - size * 0.55) ** 2 < (size * 0.23) ** 2] = voxel.VOID
+    return fine_state(fine, refine, [0.0, 0.2, 0.25, 0.4])
+
+
+def test_a_vertical_etch_on_two_levels_matches_the_fine_grid():
+    from shapely.geometry import box
+
+    state = layered_state()
+    plain = plain_twin(state)
+    square = box(0.2, 0.3, 0.71, 0.77)
+    voxel.etch_vertical(state, {"SiO2": 1.0, "SiN": 0.5}, 0.17, voxel.rasterize(state, square))
+    voxel.etch_vertical(plain, {"SiO2": 1.0, "SiN": 0.5}, 0.17, voxel.rasterize(plain, square))
+    assert_same(state, plain)
+
+
+def test_cmp_and_flip_on_two_levels_match_the_fine_grid():
+    state, plain = layered_state(), None
+    plain = plain_twin(state)
+    for st in (state, plain):
+        voxel.cmp(st, 0.33)
+        voxel.flip(st, "y")
+    assert_same(state, plain)
+    for st in (state, plain):
+        voxel.flip(st, "x")
+    assert_same(state, plain)
+
+
+def _distance_to_cells(solid2d, fx, fy):
+    """Brute force: each cell centre's distance to the union of the solid cells'
+    squares (from outside, the squares on the solid's edge are enough)."""
+    edge = solid2d.copy()
+    edge[1:-1, 1:-1] &= ~(solid2d[:-2, 1:-1] & solid2d[2:, 1:-1] & solid2d[1:-1, :-2] & solid2d[1:-1, 2:])
+    ys, xs = np.nonzero(edge)
+    gy, gx = np.mgrid[0 : solid2d.shape[0], 0 : solid2d.shape[1]]
+    px = (gx + 0.5)[..., None] * fx
+    py = (gy + 0.5)[..., None] * fy
+    ddx = np.maximum(np.maximum(xs * fx - px, px - (xs + 1) * fx), 0.0)
+    ddy = np.maximum(np.maximum(ys * fy - py, py - (ys + 1) * fy), 0.0)
+    return np.sqrt(ddx**2 + ddy**2).min(axis=-1)
+
+
+@pytest.mark.parametrize("thickness", [0.013, 0.031, 0.08])
+def test_a_film_on_two_levels_is_exact_to_the_fine_cell(thickness):
+    # A round pillar through the stack: at mid-height the film is every
+    # open fine cell within the thickness of the pillar, exactly.
+    B, size = 8, 24
+    fine = np.zeros((2, size * B, size * B), np.uint8)
+    fine[0] = 1
+    yy, xx = np.mgrid[0 : size * B, 0 : size * B]
+    pillar = (xx - size * B * 0.47) ** 2 + (yy - size * B * 0.52) ** 2 < (size * B * 0.18) ** 2
+    fine[1][pillar] = 2
+    state = fine_state(fine, B, [0.0, 0.1, 0.5])
+    plain = plain_twin(state)
+    voxel.deposit(state, "TiN", thickness, planar=False)
+    voxel.deposit(plain, "TiN", thickness, planar=False)
+    assert_same(state, plain)
+    k = int(np.searchsorted(state.z, 0.3)) - 1
+    got = state.to_fine()[k] == state.known_id("TiN")
+    f = 1.0 / (size * B)
+    ys, xs = np.nonzero(pillar)
+    gy, gx = np.mgrid[0 : size * B, 0 : size * B]
+    edge = pillar.copy()
+    edge[1:-1, 1:-1] &= ~(pillar[:-2, 1:-1] & pillar[2:, 1:-1] & pillar[1:-1, :-2] & pillar[1:-1, 2:])
+    ey, ex = np.nonzero(edge)
+    between = np.sqrt(((gx[..., None] - ex) * f) ** 2 + ((gy[..., None] - ey) * f) ** 2).min(axis=-1)
+    expected = (between <= thickness + 0.5 * f + 1e-12) & ~pillar
+    assert np.array_equal(got, expected)
+    assert state.brick_keys.size < 0.5 * state.n * state.plane  # refined only along edges
+
+
+def test_a_planar_film_on_two_levels_matches_the_fine_grid():
+    B, size = 4, 20
+    fine = np.zeros((3, size * B, size * B), np.uint8)
+    fine[0] = 1
+    fine[1, :, : size * B // 2 + 3] = 2  # a wall with an edge inside a cell
+    fine[2, 10:37, 13:51] = 3  # an overhang
+    state = fine_state(fine, B, [0.0, 0.1, 0.2, 0.25])
+    plain = plain_twin(state)
+    voxel.deposit(state, "TiN", 0.021, planar=True)
+    voxel.deposit(plain, "TiN", 0.021, planar=True)
+    assert_same(state, plain)
+
+
+def _same_at_common_heights(two_level, plain):
+    """Fine labels equal everywhere, compared slab piece by slab piece (the
+    two grids may cut the stack at different heights)."""
+    two_level.check()
+    a, b = two_level.to_fine(), plain.to_fine()
+    zs = np.union1d(two_level.z, plain.z)
+    mids = 0.5 * (zs[:-1] + zs[1:])
+    ka = np.searchsorted(two_level.z, mids, side="right") - 1
+    kb = np.searchsorted(plain.z, mids, side="right") - 1
+    assert np.array_equal(a[ka], b[kb])
+
+
+def wet_both(state, rates, budget, mask=None):
+    plain = plain_twin(state)
+    for st in (state, plain):
+        opening = None if mask is None else voxel.rasterize(st, mask)
+        voxel.etch_isotropic(st, rates, budget, opening, dz=0.05)
+    return plain
+
+
+def test_a_wet_etch_on_two_levels_rounds_a_hole_as_the_fine_grid_does():
+    # SiN pulled back from a round hole: the rim lies in bulk cells, and each
+    # fine row there must still measure to the nearest step of the hole's wall.
+    B, size = 8, 24
+    S = size * B
+    yy, xx = np.mgrid[0:S, 0:S]
+    hole = (xx - S * 0.47) ** 2 + (yy - S * 0.52) ** 2 < (S * 0.13) ** 2
+    fine = np.zeros((4, S, S), np.uint8)
+    fine[0], fine[1], fine[2], fine[3] = 1, 2, 3, 2
+    fine[1:, hole] = voxel.VOID
+    state = fine_state(fine, B, [0.0, 0.2, 0.25, 0.3, 0.35])
+    plain = wet_both(state, {"SiN": 1.0}, 0.1)
+    _same_at_common_heights(state, plain)
+    k = int(np.searchsorted(state.z, 0.275)) - 1
+    f = 1.0 / S
+    d = np.hypot((xx + 0.5) * f - 0.47, (yy + 0.5) * f - 0.52)
+    got = state.to_fine()[k] == voxel.VOID
+    assert got[d <= 0.13 + 0.1 - 0.5 * f].all() and not got[d > 0.13 + 0.1 + 1.5 * f].any()
+
+
+def test_a_wet_etch_on_two_levels_runs_along_a_wall_thinner_than_a_cell():
+    B, size = 8, 24
+    S = size * B
+    fine = np.zeros((3, S, S), np.uint8)
+    fine[0], fine[1], fine[2] = 1, 2, 2
+    fine[1, 100:103, 20:180] = 3  # three fine cells wide
+    fine[2, 100:103, 20:30] = voxel.VOID  # opened above its left end
+    state = fine_state(fine, B, [0.0, 0.2, 0.3, 0.35])
+    plain = wet_both(state, {"SiN": 1.0}, 0.25)
+    _same_at_common_heights(state, plain)
+    assert (state.to_fine()[1][101, 20:60] == voxel.VOID).all()
+
+
+def test_a_wet_etch_on_two_levels_does_not_leak_through_a_thin_barrier():
+    B, size = 8, 24
+    S = size * B
+    fine = np.zeros((3, S, S), np.uint8)
+    fine[0], fine[1], fine[2] = 1, 3, 2
+    fine[1, :, 97:99] = 4  # TiN, two fine cells, inside refined cells
+    fine[1:, :, 10:20] = voxel.VOID
+    state = fine_state(fine, B, [0.0, 0.2, 0.3, 0.35])
+    plain = wet_both(state, {"SiN": 1.0}, 0.6)
+    _same_at_common_heights(state, plain)
+    assert (state.to_fine()[1][:, 99:] == 3).all()
+
+
+def test_a_masked_wet_etch_on_two_levels_matches_the_fine_grid():
+    from shapely.geometry import box
+
+    B, size = 4, 20
+    S = size * B
+    fine = np.zeros((3, S, S), np.uint8)
+    fine[0], fine[1], fine[2] = 1, 3, 2
+    state = fine_state(fine, B, [0.0, 0.2, 0.3, 0.4])
+    plain = wet_both(state, {"SiO2": 1.0}, 0.07, mask=box(0.31, 0.27, 0.58, 0.64))
+    _same_at_common_heights(state, plain)
+
+
+def test_a_front_that_crosses_into_a_slower_layer_lands_near_the_exact_place():
+    # Oxide over nitride under a mask: the oxide is undercut and uncovers
+    # the nitride as it goes. The path bends where it crosses; both grids
+    # place the crossing at a face between cells, so allow two fine cells.
+    from shapely.geometry import box
+
+    B, size = 4, 20
+    S = size * B
+    fine = np.zeros((3, S, S), np.uint8)
+    fine[0], fine[1], fine[2] = 1, 3, 2
+    state = fine_state(fine, B, [0.0, 0.2, 0.3, 0.33])
+    wet_both(state, {"SiO2": 1.0, "SiN": 0.5}, 0.12, mask=box(0.31, 0.27, 0.58, 0.64))
+    k = int(np.searchsorted(state.z, 0.275)) - 1
+    row = state.to_fine()[k][S // 2]
+    last = int(np.flatnonzero(row == voxel.VOID).max())
+    # exact: oxide reaches the nitride d past the mask edge at sqrt(d^2 + 0.03^2)
+    d = np.linspace(0.0, 0.2, 20001)
+    exact = max(
+        c for c in range(S)
+        if (np.sqrt(d**2 + 0.03**2) + 2 * np.sqrt(((c + 0.5) / S - 0.58 - d) ** 2 + 0.025**2)).min() <= 0.12
+    )
+    assert exact - 2 <= last <= exact
+
+
+def _mesh_checks(state):
+    """Closed, outward, as much volume as the state holds, and conforming --
+    per material, and across materials for what is drawn with all shown."""
+    meshes = voxel.build_meshes(state, buried=True)
+    assert set(meshes) == set(state.present())
+    for name, (vertices, faces, _interface, _neighbour) in meshes.items():
+        a, b, c = (vertices[faces[:, i]].astype(np.float64) for i in range(3))
+        signed = np.einsum("ij,ij->i", a, np.cross(b, c)).sum() / 6.0
+        assert signed == pytest.approx(state.volume(name), rel=1e-5), name
+        assert _unmatched_edges(vertices, faces) == 0, name
+    free = voxel.build_meshes(state, buried=False)
+    offsets = np.cumsum([0] + [len(m[0]) for m in free.values()])[:-1]
+    vertices = np.concatenate([m[0] for m in free.values()])
+    faces = np.concatenate([m[1].astype(np.int64) + o for m, o in zip(free.values(), offsets)])
+    assert _unmatched_edges(vertices, faces) == 0
+    return meshes
+
+
+def test_a_two_level_mesh_is_closed_conforming_and_holds_the_volume():
+    state = layered_state(refine=4)
+    voxel.deposit(state, "TiN", 0.013, planar=False)
+    assert state.brick_keys.size
+    _mesh_checks(state)
+    # a film in refined cells only, on the window's edge too
+    fine = np.zeros((2, 32, 32), np.uint8)
+    fine[0] = 1
+    fine[1, :, :1] = 3
+    fine[1, 5:9, 13] = 2
+    _mesh_checks(fine_state(fine, 4, [0.0, 0.1, 0.2]))
+
+
+def test_pictures_of_a_fine_grid_are_drawn_coarser_by_the_majority(monkeypatch):
+    state = layered_state(refine=4)
+    monkeypatch.setattr(voxel, "SHOWN_CELLS", 32)
+    small = voxel.shown(state, 32)
+    assert small.refine == 2 and small is voxel.shown(state, 32)
+    small.check()
+    for k in range(state.n):
+        fine = state.to_fine()[k].reshape(32, 2, 32, 2).transpose(0, 2, 1, 3).reshape(32, 32, 4)
+        coarse = small.to_fine()[k]
+        # every shown cell holds a label that has the most fine cells in it
+        counts = np.stack([(fine == label).sum(axis=2) for label in range(5)], axis=2)
+        assert (counts[np.arange(32)[:, None], np.arange(32)[None, :], coarse] == counts.max(axis=2)).all()
+    _mesh_checks(small)
+
+
+def test_views_of_a_two_level_state_match_its_fine_twin():
+    state = layered_state(refine=4)
+    plain = plain_twin(state)
+    colors = {"Si": "#888888", "SiO2": "#99ccff", "SiN": "#ffcc44"}
+    for view in (
+        lambda st: voxel.top_view(st, colors, _rgb),
+        lambda st: voxel.section(st, colors, _rgb, z_max=0.5, axis="y", position=0.53),
+        lambda st: voxel.section(st, colors, _rgb, z_max=0.5, axis="x", position=0.41),
+        lambda st: voxel.section(st, colors, _rgb, z_max=0.5, line=((0.1, 0.2), (0.9, 0.7))),
+    ):
+        a, b = view(state), view(plain)
+        assert a["image"] == b["image"]
+
+
+def test_boundaries_are_refined_to_the_resolution_in_powers_of_two(monkeypatch):
+    from process_studio.kernels import slab
+
+    monkeypatch.setattr(slab, "_window", lambda project: (0.0, 0.0, 1.6, 1.6))
+    for resolution, refine in ((0.025, 1), (0.003125, 1), (0.003, 2), (0.001, 4), (0.0001, 32), (1e-6, 64)):
+        monkeypatch.setattr(slab, "resolution_xy_um", lambda project, r=resolution: r)
+        cell, got = voxel.grid_size(None)
+        assert cell == pytest.approx(1.6 / 512) and got == refine, resolution
