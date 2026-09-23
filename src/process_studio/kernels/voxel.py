@@ -120,6 +120,54 @@ def _z(value: float) -> float:
     return round(float(value), Z_DECIMALS)
 
 
+def _unique(values, return_index=False, return_inverse=False):
+    """``np.unique`` for 1-D integers, by sorting: numpy 2's hashing unique
+    is some ninety times slower on the tens of millions of keys a fine
+    grid makes."""
+    values = np.asarray(values).reshape(-1)
+    order = np.argsort(values, kind="stable") if (return_index or return_inverse) else None
+    ordered = values[order] if order is not None else np.sort(values)
+    fresh = np.ones(ordered.size, dtype=bool)
+    fresh[1:] = ordered[1:] != ordered[:-1]
+    out = ordered[fresh]
+    if not (return_index or return_inverse):
+        return out
+    result = [out]
+    if return_index:
+        result.append(order[fresh])
+    if return_inverse:
+        inverse = np.empty(values.size, dtype=np.int64)
+        inverse[order] = np.cumsum(fresh) - 1
+        result.append(inverse)
+    return tuple(result)
+
+
+def _labels_in(values) -> np.ndarray:
+    """The distinct labels in a uint8 array."""
+    return np.flatnonzero(np.bincount(np.asarray(values, dtype=np.uint8).reshape(-1), minlength=256)).astype(np.uint8)
+
+
+_HASH_MULT = np.random.default_rng(20250923).integers(1, 2**63, size=8192, dtype=np.uint64) | np.uint64(1)
+
+
+def _brick_hash(blocks: np.ndarray) -> np.ndarray:
+    """A 64-bit hash of each brick (for pooling; equality is checked)."""
+    n = blocks.shape[0]
+    if n == 0:
+        return np.zeros(0, dtype=np.uint64)
+    flat = np.ascontiguousarray(blocks, dtype=np.uint8).reshape(n, -1)
+    pad = (-flat.shape[1]) % 8
+    if pad:
+        flat = np.concatenate([flat, np.zeros((n, pad), np.uint8)], axis=1)
+    words = flat.view(np.uint64)
+    mult = _HASH_MULT[: words.shape[1]] if words.shape[1] <= _HASH_MULT.size else np.resize(_HASH_MULT, words.shape[1])
+    with np.errstate(over="ignore"):
+        h = (words * mult).sum(axis=1, dtype=np.uint64)
+        h ^= h >> np.uint64(31)
+        h *= np.uint64(0x9E3779B97F4A7C15)
+    return h
+
+
 # -- the state -------------------------------------------------------------
 
 
@@ -139,6 +187,13 @@ class VoxelState:
     fine labels in ``bricks``; a brick is only ever kept if it really is
     mixed, so two slabs are the same exactly when their arrays are. With
     ``refine`` 1 there are no bricks and the grid is a plain one.
+
+    Bricks are stored once each: ``pool`` holds the distinct bricks and
+    ``brick_ref`` which one each refined cell has. Thin slabs along a
+    front curving in z repeat every upright wall's bricks, and those cost
+    a reference each, not a copy. Equal bricks always share one entry, so
+    two cells hold the same fine labels exactly when their references are
+    equal.
     """
 
     def __init__(
@@ -166,9 +221,11 @@ class VoxelState:
         self.brick_keys = (
             np.zeros(0, dtype=np.int64) if brick_keys is None else np.asarray(brick_keys, dtype=np.int64)
         )
-        self.bricks = (
-            np.zeros((0, B, B), dtype=np.uint8) if bricks is None else np.asarray(bricks, dtype=np.uint8)
-        )
+        self.pool = np.zeros((0, B, B), dtype=np.uint8)
+        self._pool_hash = np.zeros(0, dtype=np.uint64)
+        self.brick_ref = np.zeros(0, dtype=np.int64)
+        if bricks is not None and len(bricks):
+            self.brick_ref = self._intern(np.asarray(bricks, dtype=np.uint8))
         #: Where this state was stored, if it was.
         self.path: Path | None = None
         #: Display meshes by ``buried``, once built.
@@ -223,6 +280,62 @@ class VoxelState:
 
     # bricks
 
+    @property
+    def bricks(self) -> np.ndarray:
+        """Every refined cell's fine labels, one copy each (for tests and
+        small states: a stack of thin slabs is mostly shared bricks)."""
+        return self.pool[self.brick_ref]
+
+    def _intern(self, blocks: np.ndarray) -> np.ndarray:
+        """Pool entries for ``blocks``, adding the ones not there yet."""
+        n = blocks.shape[0]
+        if n == 0:
+            return np.zeros(0, dtype=np.int64)
+        blocks = np.ascontiguousarray(blocks, dtype=np.uint8)
+        hashes = _brick_hash(blocks)
+        # among themselves: one entry per distinct brick
+        unique_hash, first, inverse = _unique(hashes, return_index=True, return_inverse=True)
+        inverse = inverse.reshape(-1)
+        same = (blocks == blocks[first[inverse]]).all(axis=(1, 2))
+        refs = np.empty(n, dtype=np.int64)
+        # against the pool
+        order = np.argsort(self._pool_hash, kind="stable")
+        sorted_hash = self._pool_hash[order]
+        at = np.searchsorted(sorted_hash, unique_hash)
+        found = at < sorted_hash.size
+        found[found] &= sorted_hash[at[found]] == unique_hash[found]
+        match = np.full(unique_hash.size, -1, dtype=np.int64)
+        match[found] = order[at[found]]
+        if found.any():
+            ok = (self.pool[match[found]] == blocks[first[found]]).all(axis=(1, 2))
+            match[np.flatnonzero(found)[~ok]] = -1
+        new = match < 0
+        start = self.pool.shape[0]
+        match[new] = start + np.arange(int(new.sum()))
+        added = [blocks[first[new]]]
+        added_hash = [unique_hash[new]]
+        refs[same] = match[inverse[same]]
+        # a hash shared by different bricks (never seen, but cheap to allow)
+        odd = np.flatnonzero(~same)
+        if odd.size:
+            rest, back = np.unique(blocks[odd].reshape(odd.size, -1), axis=0, return_inverse=True)
+            base = start + int(new.sum())
+            refs[odd] = base + back.reshape(-1)
+            added.append(rest.reshape(-1, self.refine, self.refine))
+            added_hash.append(_brick_hash(added[-1]))
+        self.pool = np.concatenate([self.pool] + added)
+        self._pool_hash = np.concatenate([self._pool_hash] + added_hash)
+        return refs
+
+    def _compact(self) -> None:
+        """Drop pool entries no cell refers to."""
+        used, back = _unique(self.brick_ref, return_inverse=True)
+        if used.size == self.pool.shape[0]:
+            return
+        self.pool = np.ascontiguousarray(self.pool[used])
+        self._pool_hash = self._pool_hash[used]
+        self.brick_ref = back.reshape(-1).astype(np.int64)
+
     def blocks(self, keys: np.ndarray) -> np.ndarray:
         """Fine labels of the cells ``keys`` (slab * plane + cell), a brick
         where there is one and the cell's label repeated where there is not."""
@@ -234,7 +347,7 @@ class VoxelState:
             at = np.searchsorted(self.brick_keys, keys)
             at = np.minimum(at, self.brick_keys.size - 1)
             hit = self.brick_keys[at] == keys
-            out[hit] = self.bricks[at[hit]]
+            out[hit] = self.pool[self.brick_ref[at[hit]]]
         return out
 
     def store(self, keys: np.ndarray, blocks: np.ndarray) -> None:
@@ -251,16 +364,22 @@ class VoxelState:
         flat[keys[~uniform]] = MIXED
         keep = ~np.isin(self.brick_keys, keys)
         new_keys = np.concatenate([self.brick_keys[keep], keys[~uniform]])
-        new_bricks = np.concatenate([self.bricks[keep], blocks[~uniform]])
+        new_refs = np.concatenate([self.brick_ref[keep], self._intern(blocks[~uniform])])
         order = np.argsort(new_keys, kind="stable")
         self.brick_keys = new_keys[order]
-        self.bricks = np.ascontiguousarray(new_bricks[order])
+        self.brick_ref = new_refs[order]
 
     def slab_bricks(self, k: int) -> tuple[np.ndarray, np.ndarray]:
         """The bricks of slab ``k``: their cells (flat in the slab) and labels."""
         lo = np.searchsorted(self.brick_keys, k * self.plane)
         hi = np.searchsorted(self.brick_keys, (k + 1) * self.plane)
-        return self.brick_keys[lo:hi] - k * self.plane, self.bricks[lo:hi]
+        return self.brick_keys[lo:hi] - k * self.plane, self.pool[self.brick_ref[lo:hi]]
+
+    def slab_refs(self, k: int) -> tuple[np.ndarray, np.ndarray]:
+        """The bricks of slab ``k`` as (cells, pool entries): no copies."""
+        lo = np.searchsorted(self.brick_keys, k * self.plane)
+        hi = np.searchsorted(self.brick_keys, (k + 1) * self.plane)
+        return self.brick_keys[lo:hi] - k * self.plane, self.brick_ref[lo:hi]
 
     def sample(self, k: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray:
         """The label at points ``(x, y)`` of slabs ``k`` (arrays, broadcast)."""
@@ -283,7 +402,7 @@ class VoxelState:
         if mixed.any():
             keys = k[mixed] * self.plane + iy[mixed] * self.nx + ix[mixed]
             at = np.searchsorted(self.brick_keys, keys)
-            out[mixed] = self.bricks[at, by[mixed], bx[mixed]]
+            out[mixed] = self.pool[self.brick_ref[at], by[mixed], bx[mixed]]
         return out.reshape(shape)
 
     @classmethod
@@ -311,10 +430,12 @@ class VoxelState:
         """That bricks and MIXED marks agree and no brick is uniform (for tests)."""
         marked = np.flatnonzero(self.labels.reshape(-1) == MIXED)
         assert np.array_equal(marked, self.brick_keys), "MIXED cells and bricks disagree"
-        if self.bricks.size:
-            first = self.bricks[:, :1, :1]
-            assert not (self.bricks == first).all(axis=(1, 2)).any(), "a brick is uniform"
-            assert not (self.bricks == MIXED).any(), "a brick holds the MIXED mark"
+        if self.brick_ref.size:
+            data = self.pool[_unique(self.brick_ref)]
+            first = data[:, :1, :1]
+            assert not (data == first).all(axis=(1, 2)).any(), "a brick is uniform"
+            assert not (data == MIXED).any(), "a brick holds the MIXED mark"
+            assert np.unique(self.pool.reshape(len(self.pool), -1), axis=0).shape[0] == len(self.pool), "a brick is pooled twice"
 
     # materials
 
@@ -335,10 +456,10 @@ class VoxelState:
         order: list[str] = []
         seen: set[int] = {VOID, MIXED}
         for k in range(self.n):
-            found = set(np.unique(self.labels[k]).tolist())
+            found = set(_labels_in(self.labels[k]).tolist())
             _cells, data = self.slab_bricks(k)
             if data.size:
-                found |= set(np.unique(data).tolist())
+                found |= set(_labels_in(data).tolist())
             for label in sorted(found - seen):
                 seen.add(label)
                 order.append(self.materials[label - 1])
@@ -349,19 +470,23 @@ class VoxelState:
         if label is None:
             return 0.0
         counts = (self.labels == label).sum(axis=(1, 2)).astype(np.float64)
-        if self.bricks.size:
-            fine = (self.bricks == label).sum(axis=(1, 2)) / float(self.refine**2)
-            np.add.at(counts, self.brick_keys // self.plane, fine)
+        if self.brick_ref.size:
+            fine = (self.pool == label).sum(axis=(1, 2)) / float(self.refine**2)
+            np.add.at(counts, self.brick_keys // self.plane, fine[self.brick_ref])
         return float(np.sum(counts * np.diff(self.z))) * self.cell_x * self.cell_y
 
     # structure
 
     def copy(self) -> "VoxelState":
-        return VoxelState(
+        out = VoxelState(
             self.bounds, self.nx, self.ny, self.z.copy(), self.labels.copy(),
-            self.materials, self.z_offset, self.refine,
-            self.brick_keys.copy(), self.bricks.copy(),
+            self.materials, self.z_offset, self.refine, self.brick_keys.copy(),
         )
+        out.brick_ref = self.brick_ref.copy()
+        out.pool = self.pool  # never written in place
+        out._pool_hash = self._pool_hash
+        out._compact()
+        return out
 
     def _reslab(self, source: np.ndarray) -> None:
         """Slabs become ``source``'s old slabs, bricks following them."""
@@ -379,7 +504,7 @@ class VoxelState:
         keys = new_slab * self.plane + cell[repeat]
         sort = np.argsort(keys, kind="stable")
         self.brick_keys = keys[sort]
-        self.bricks = np.ascontiguousarray(self.bricks[repeat][sort])
+        self.brick_ref = self.brick_ref[repeat][sort]
 
     def split(self, planes) -> np.ndarray:
         """Cut the slabs at every height in ``planes``; returns, for each
@@ -410,9 +535,9 @@ class VoxelState:
     def _same_slabs(self, k: int) -> bool:
         if not np.array_equal(self.labels[k], self.labels[k + 1]):
             return False
-        cells_a, data_a = self.slab_bricks(k)
-        cells_b, data_b = self.slab_bricks(k + 1)
-        return np.array_equal(cells_a, cells_b) and np.array_equal(data_a, data_b)
+        cells_a, refs_a = self.slab_refs(k)
+        cells_b, refs_b = self.slab_refs(k + 1)
+        return np.array_equal(cells_a, cells_b) and np.array_equal(refs_a, refs_b)
 
     def consolidate(self) -> None:
         """Merge neighbouring slabs that hold the same grid; drop empty ones on top."""
@@ -434,7 +559,7 @@ class VoxelState:
             renumber[keep] = np.arange(keep.size)
             wanted = renumber[slab] >= 0
             self.brick_keys = renumber[slab[wanted]] * self.plane + self.brick_keys[wanted] % self.plane
-            self.bricks = np.ascontiguousarray(self.bricks[wanted])
+            self.brick_ref = self.brick_ref[wanted]
         self.labels = np.ascontiguousarray(self.labels[keep])
         self.z = np.asarray(z, dtype=np.float64)
 
@@ -451,7 +576,8 @@ class VoxelState:
             materials=np.array(self.materials, dtype=str),
             z_offset=np.array(self.z_offset, dtype=np.float64),
             brick_keys=self.brick_keys,
-            bricks=self.bricks,
+            brick_ref=self.brick_ref,
+            pool=self.pool,
         )
         Path(path).write_bytes(MAGIC + buffer.getvalue())
         self.path = Path(path)
@@ -477,6 +603,10 @@ class VoxelState:
                 stored["brick_keys"] if "brick_keys" in stored.files else None,
                 stored["bricks"] if "bricks" in stored.files else None,
             )
+            if "pool" in stored.files:
+                state.pool = np.ascontiguousarray(stored["pool"], dtype=np.uint8)
+                state._pool_hash = _brick_hash(state.pool)
+                state.brick_ref = np.asarray(stored["brick_ref"], dtype=np.int64)
         state.path = Path(path)
         return state
 
@@ -725,7 +855,7 @@ def components2(
         rows = np.repeat(bricks, ids.shape[1])
         values = ids.reshape(-1)
         keep = values > 0
-        combined = np.unique(rows[keep] * (count + 1) + values[keep])
+        combined = _unique(rows[keep] * (count + 1) + values[keep])
         return combined // (count + 1), combined % (count + 1)
 
     for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
@@ -753,7 +883,7 @@ def components2(
                 theirs = fine_id[at[hit]]
                 theirs = theirs[:, :, side] if dx else theirs[:, side, :]
                 both = (mine[hit] > 0) & (theirs > 0)
-                pairs = np.unique(mine[hit][both] * (count + 1) + theirs[both])
+                pairs = _unique(mine[hit][both] * (count + 1) + theirs[both])
                 heads.append(pairs // (count + 1))
                 tails.append(pairs % (count + 1))
     for dk in (1, -1):
@@ -772,7 +902,7 @@ def components2(
                 mine = fine_id[idx[hit]]
                 theirs = fine_id[at[hit]]
                 both = (mine > 0) & (theirs > 0)
-                pairs = np.unique(mine[both] * (count + 1) + theirs[both])
+                pairs = _unique(mine[both] * (count + 1) + theirs[both])
                 heads.append(pairs // (count + 1))
                 tails.append(pairs % (count + 1))
     parent = _union_find(count, np.concatenate(heads) if heads else np.zeros(0), np.concatenate(tails) if tails else np.zeros(0))
@@ -1097,7 +1227,7 @@ def _surface(state: VoxelState, mask: Mask2) -> np.ndarray:
     fy_all = np.concatenate(ys).astype(np.int64) if ys else np.zeros(0, np.int64)
     if fx_all.size == 0:
         return np.zeros((0, 4))
-    key = np.unique(fy_all * (nx * B + 1) + fx_all)
+    key = _unique(fy_all * (nx * B + 1) + fx_all)
     fy_all, fx_all = np.divmod(key, nx * B + 1)
     # Runs along rows.
     new = np.ones(key.size, dtype=bool)
@@ -1316,6 +1446,7 @@ def etch_isotropic(
     *,
     product: str | None = None,
     dz: float | None = None,
+    fine_z: float | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> None:
     """Etch by the etchant's arrival time (see the module notes).
@@ -1323,9 +1454,15 @@ def etch_isotropic(
     ``rates`` are per material and ``budget`` is the time they run for, in
     the same units: a depth of the reference material with relative rates,
     or minutes with rates per minute. With ``product`` the cells taken
-    become that material (an oxidation) instead of void. ``dz`` is how
-    finely a slab holding an etchable material is cut in z, so the front
-    can curve there; never finer than a cell.
+    become that material (an oxidation) instead of void.
+
+    In z: near the slab boundaries where the front can bend, slabs are
+    cut every ``dz`` (never finer than a bulk cell) for the march. The
+    front is then placed exactly: a front that lies level becomes a slab
+    boundary at its exact height, and where it curves the slab is cut
+    into thin slabs no thicker than ``fine_z`` (when finer than ``dz``),
+    each placed at its own height. Slabs the front crosses upright stay
+    whole.
     """
     table = np.zeros(256)
     for name, rate in rates.items():
@@ -1338,8 +1475,8 @@ def etch_isotropic(
     holding = np.isin(state.labels, etchable).any(axis=(1, 2))
     if state.brick_keys.size:
         # a thin film may live wholly in refined cells
-        in_bricks = np.isin(state.bricks, etchable).any(axis=(1, 2))
-        holding[np.unique(state.brick_keys[in_bricks] // state.plane)] = True
+        in_bricks = np.isin(state.pool, etchable).any(axis=(1, 2))[state.brick_ref]
+        holding[_unique(state.brick_keys[in_bricks] // state.plane)] = True
     if not holding.any():
         return
     product_label = state.material_id(product) if product is not None else None
@@ -1361,13 +1498,59 @@ def etch_isotropic(
     live._reslab(np.concatenate([source, [live.n - 1]]))
     from . import voxel_wet
 
-    whole, keys, fine = voxel_wet.arrival(state, table, float(budget), mask, live, should_cancel)
-    state.labels[whole] = fill
-    if keys.size:
-        blocks = state.blocks(keys)
-        blocks[fine] = fill
-        state.store(keys, blocks)
+    front = voxel_wet.arrival(state, table, float(budget), mask, live, should_cancel, step=step)
+    del live
+    L = state.n
+    z0, z1 = state.z[:-1].copy(), state.z[1:].copy()
+    everywhere = np.ones(L, dtype=bool)
+    # Where the front curves in a slab: it is not the same at the slab's
+    # top as at its bottom (a level front is cut exactly instead).
+    layers = 1
+    if fine_z and fine_z < step:
+        layers = 2 ** math.ceil(math.log2(step / float(fine_z) - 1e-9))
+    cuts = [float(h) for h in front.flat_heights]
+    if layers > 1:
+        half = 0.5 * (z1 - z0) / layers
+        top = front.place(z1 - half, everywhere, skip_flat=True)
+        bottom = front.place(z0 + half, everywhere, skip_flat=True)
+        curved = (top[0] != bottom[0]).any(axis=(1, 2))
+        curved[_unique(_differing(top[1:], bottom[1:], state.refine) // state.plane)] = True
+        for k in np.flatnonzero(curved):
+            cuts.extend(z0[k] + (z1[k] - z0[k]) * j / layers for j in range(1, layers))
+    source = state.split(cuts) if cuts else np.arange(L)
+    # Each new slab, placed at its middle, from the slab it was cut from.
+    first = np.searchsorted(source, np.arange(L), side="left")
+    count = np.bincount(source, minlength=L)
+    middles = 0.5 * (state.z[:-1] + state.z[1:])
+    B = state.refine
+    for r in range(int(count.max()) if count.size else 0):
+        subset = count > r
+        heights = np.where(subset, middles[np.minimum(first + r, state.n - 1)], 0.0)
+        whole, keys, fine = front.place(heights, subset)
+        for k in np.flatnonzero(subset):
+            target = first[k] + r
+            state.labels[target][whole[k]] = fill
+        if keys.size:
+            k, cell = np.divmod(keys, state.plane)
+            new_keys = (first[k] + r) * state.plane + cell
+            order = np.argsort(new_keys, kind="stable")
+            new_keys, fine = new_keys[order], fine[order]
+            blocks = state.blocks(new_keys)
+            blocks[fine] = fill
+            state.store(new_keys, blocks)
     state.consolidate()
+
+
+def _differing(a, b, refine):
+    """Keys whose fine cells differ between two (keys, fine) placements."""
+    keys = np.union1d(a[0], b[0])
+    blocks = []
+    for part_keys, part_fine in (a, b):
+        full = np.zeros((keys.size, refine, refine), dtype=bool)
+        if part_keys.size:
+            full[np.searchsorted(keys, part_keys)] = part_fine
+        blocks.append(full)
+    return keys[(blocks[0] != blocks[1]).any(axis=(1, 2))]
 
 
 def _curving(state: VoxelState, table: np.ndarray, live: "VoxelState", opening: "Mask2 | None") -> list[float]:
@@ -1433,9 +1616,9 @@ def _live(state: VoxelState) -> "VoxelState":
     plus one slab on top for the ambient itself (1 where reached); the
     rest of the open space is a sealed cavity."""
     plain = np.concatenate([state.labels == VOID, np.ones((1, state.ny, state.nx), dtype=bool)])
-    fine = state.bricks == VOID
+    fine = (state.pool == VOID)[state.brick_ref]
     coarse_id, fine_id = components2(plain, state.brick_keys, fine, state.nx, state.ny)
-    ambient = np.unique(coarse_id[-1])
+    ambient = _unique(coarse_id[-1])
     ambient = ambient[ambient > 0]
     labels = np.isin(coarse_id, ambient).astype(np.uint8)
     reached = np.isin(fine_id, ambient) & fine
@@ -1458,7 +1641,7 @@ def cmp(state: VoxelState, height: float) -> None:
     state.labels = np.ascontiguousarray(state.labels[:keep])
     wanted = state.brick_keys < keep * state.plane
     state.brick_keys = state.brick_keys[wanted]
-    state.bricks = np.ascontiguousarray(state.bricks[wanted])
+    state.brick_ref = state.brick_ref[wanted]
     state.consolidate()
 
 
@@ -1475,14 +1658,15 @@ def flip(state: VoxelState, axis: str) -> None:
         k = state.n - 1 - k
         if axis == "y":
             ix = state.nx - 1 - ix
-            bricks = state.bricks[:, :, ::-1]
+            state.pool = np.ascontiguousarray(state.pool[:, :, ::-1])
         else:
             iy = state.ny - 1 - iy
-            bricks = state.bricks[:, ::-1, :]
+            state.pool = np.ascontiguousarray(state.pool[:, ::-1, :])
+        state._pool_hash = _brick_hash(state.pool)
         keys = k * state.plane + iy * state.nx + ix
         order = np.argsort(keys, kind="stable")
         state.brick_keys = keys[order]
-        state.bricks = np.ascontiguousarray(bricks[order])
+        state.brick_ref = state.brick_ref[order]
     state.labels = np.ascontiguousarray(labels)
     state.z = np.array([_z(top - value) for value in state.z[::-1]], dtype=np.float64)
     state.consolidate()
@@ -1608,12 +1792,14 @@ def shown(state: VoxelState, limit: int = SHOWN_CELLS) -> VoxelState:
         state.materials, state.z_offset, refine,
     )
     out.labels.reshape(-1)[state.brick_keys] = VOID  # rewritten by store
-    present = np.unique(state.bricks) if state.bricks.size else np.zeros(0, np.uint8)
+    used, back = _unique(state.brick_ref, return_inverse=True)
+    present = _labels_in(state.pool[used]) if used.size else np.zeros(0, np.uint8)
     # solid first, so a tie goes to the solid
     present = np.concatenate([present[present != VOID], present[present == VOID]])
+    reduced = np.zeros((used.size, refine, refine), dtype=np.uint8)
     chunk = max(1, 16_000_000 // max(1, state.refine**2))
-    for start in range(0, state.brick_keys.size, chunk):
-        blocks = state.bricks[start : start + chunk].reshape(-1, refine, step, refine, step)
+    for start in range(0, used.size, chunk):
+        blocks = state.pool[used[start : start + chunk]].reshape(-1, refine, step, refine, step)
         best = np.full(blocks.shape[:1] + (refine, refine), -1, dtype=np.int32)
         label = np.zeros(best.shape, dtype=np.uint8)
         for value in present:
@@ -1621,7 +1807,8 @@ def shown(state: VoxelState, limit: int = SHOWN_CELLS) -> VoxelState:
             more = count > best
             best[more] = count[more]
             label[more] = value
-        out.store(state.brick_keys[start : start + chunk], label)
+        reduced[start : start + chunk] = label
+    out.store(state.brick_keys, reduced[back.reshape(-1)])
     with state.mesh_lock:
         state.shown[refine] = out
     return out
@@ -2017,7 +2204,7 @@ def build_meshes(state: VoxelState, *, buried: bool) -> dict[str, tuple[np.ndarr
         if not chosen.any():
             continue
         tris = triangles[chosen]
-        used, inverse = np.unique(tris.ravel(), return_inverse=True)
+        used, inverse = _unique(tris.ravel(), return_inverse=True)
         faces = inverse.reshape(-1, 3).astype(np.uint32)
         other = tri_other[chosen]
         interface = ((other != VOID) & (other != _OUTSIDE)).astype(np.uint8)
@@ -2171,7 +2358,7 @@ def _conforming(corners: np.ndarray, place_of) -> tuple[np.ndarray, np.ndarray, 
     triangle came from.
     """
     count = corners.shape[0]
-    points, point_of = np.unique(corners.reshape(-1, 3), axis=0, return_inverse=True)
+    points, point_of = _unique_rows(corners.reshape(-1, 3))
     point_of = point_of.reshape(count, 4)
     # Every edge is parallel to one axis; along it only that coordinate
     # moves. Points are looked up by (axis, the other two coordinates,
@@ -2307,9 +2494,9 @@ def surfaces(
 
 
 def state_bytes(state: VoxelState) -> int:
-    total = 64 * 1024 + state.labels.nbytes + state.bricks.nbytes + state.brick_keys.nbytes
-    for copy in list(state.shown.values()):
-        total += copy.labels.nbytes + copy.bricks.nbytes + copy.brick_keys.nbytes
+    total = 64 * 1024
+    for part in [state] + list(state.shown.values()):
+        total += part.labels.nbytes + part.pool.nbytes + part.brick_ref.nbytes + part.brick_keys.nbytes
     for meshes in state.meshes.values():
         for arrays in meshes.values():
             total += sum(array.nbytes for array in arrays)
@@ -2482,9 +2669,11 @@ def run_step(
         f"VOXEL grid {new.nx} x {new.ny} cells of {new.cell_x * 1000:.4g} x "
         f"{new.cell_y * 1000:.4g} nm{boundary}; heights exact"
     )
-    # A curved front is cut in z at the project's z step, as the detailed
-    # films are, and never finer than a bulk cell.
-    z_step = max(slab.resolution_um(project), new.cell)
+    # The march cuts slabs near a bending front at the project's z step,
+    # never finer than a bulk cell; the front is then placed at the z step
+    # itself, in thin slabs only where it curves.
+    z_fine = slab.resolution_um(project)
+    z_step = max(z_fine, new.cell)
     try:
         if kind is ProcessType.DEPOSIT:
             opening = _opening(new, step, project, parameters, sketches)
@@ -2503,9 +2692,9 @@ def run_step(
                 logger(f"VOXEL etch vertical {text}")
                 etch_vertical(new, rates, budget, opening)
             else:
-                logger(f"VOXEL etch isotropic {text}, curved in z every {z_step * 1000:g} nm")
+                logger(f"VOXEL etch isotropic {text}, curved in z every {z_fine * 1000:g} nm")
                 etch_isotropic(
-                    new, rates, budget, opening, dz=z_step, should_cancel=should_cancel
+                    new, rates, budget, opening, dz=z_step, fine_z=z_fine, should_cancel=should_cancel
                 )
         elif kind is ProcessType.OXIDATION:
             opening = _opening(new, step, project, parameters, sketches)
@@ -2513,9 +2702,9 @@ def run_step(
             product = str(parameters.get("material") or recipe.output_material or "SiO2")
             if product in {name for name, rate in rates.items() if rate > 0.0}:
                 raise slab.SlabError(f"{product} cannot be both oxidised and the oxide it becomes")
-            logger(f"VOXEL oxidize {text} into {product}, curved in z every {z_step * 1000:g} nm")
+            logger(f"VOXEL oxidize {text} into {product}, curved in z every {z_fine * 1000:g} nm")
             etch_isotropic(
-                new, rates, budget, opening, product=product, dz=z_step,
+                new, rates, budget, opening, product=product, dz=z_step, fine_z=z_fine,
                 should_cancel=should_cancel,
             )
         elif kind is ProcessType.CMP:

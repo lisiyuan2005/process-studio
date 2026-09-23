@@ -780,3 +780,74 @@ def test_boundaries_are_refined_to_the_resolution_in_powers_of_two(monkeypatch):
         monkeypatch.setattr(slab, "resolution_xy_um", lambda project, r=resolution: r)
         cell, got = voxel.grid_size(None)
         assert cell == pytest.approx(1.6 / 512) and got == refine, resolution
+
+
+# -- z at the fine resolution -------------------------------------------------
+
+
+def test_a_level_front_is_cut_at_its_exact_height():
+    # Oxide etched from the top through a slit: the floor is flat, at exactly
+    # the depth, whatever the slabs the march used.
+    from shapely.geometry import box
+
+    B, size = 4, 24
+    fine = np.zeros((2, size * B, size * B), np.uint8)
+    fine[0], fine[1] = 1, 2
+    state = fine_state(fine, B, [0.0, 0.2, 0.5])
+    opening = voxel.rasterize(state, box(0.4, 0.0, 0.6, 1.0))
+    voxel.etch_isotropic(state, {"SiO2": 1.0}, 0.0937, opening, dz=state.cell, fine_z=state.cell / 8)
+    state.check()
+    assert np.isclose(state.z, 0.5 - 0.0937).any()
+    k = int(np.searchsorted(state.z, 0.5 - 0.0937 + 1e-6)) - 1
+    middle = int(0.5 / state.fine)
+    assert state.sample_fine(k, middle, middle) == voxel.VOID
+    assert state.sample_fine(k - 1, middle, middle) == state.known_id("SiO2")
+
+
+def test_a_curved_front_is_placed_at_the_fine_z_step():
+    # A round opening: every fine cell of every thin slab is taken exactly when
+    # its centre is within the etch distance of the opening (to half a fine
+    # cell's diagonal), and thin slabs are only where the front curves.
+    from shapely.geometry import Point
+
+    B, size = 8, 24
+    S = B * size
+    fine = np.zeros((2, S, S), np.uint8)
+    fine[0], fine[1] = 1, 2
+    state = fine_state(fine, B, [0.0, 0.2, 0.5])
+    fz = state.cell / 8
+    opening = voxel.rasterize(state, Point(0.47, 0.52).buffer(0.1, quad_segs=64))
+    voxel.etch_isotropic(state, {"SiO2": 1.0}, 0.12, opening, dz=state.cell, fine_z=fz)
+    state.check()
+    thick = np.diff(state.z)
+    assert thick[state.z[:-1] >= 0.38 - 1e-9].max() <= fz * (1 + 1e-6)  # thin where it curves
+    assert thick[(state.z[:-1] < 0.38 - 1e-9) & (state.z[:-1] >= 0.2)].min() > 0.1  # whole below
+    f = state.fine
+    centres = (np.arange(S) + 0.5) * f
+    X, Y = np.meshgrid(centres, centres)
+    oy, ox = np.nonzero(opening.to_fine(B))
+    gap_x = np.maximum(np.abs(X[..., None] - (ox + 0.5) * f) - f / 2, 0)
+    gap_y = np.maximum(np.abs(Y[..., None] - (oy + 0.5) * f) - f / 2, 0)
+    sideways = (gap_x**2 + gap_y**2).min(axis=-1)
+    slack = 0.5 * np.sqrt(2 * f * f + fz * fz)
+    grid = state.to_fine()
+    for k in range(state.n):
+        middle = 0.5 * (state.z[k] + state.z[k + 1])
+        if not 0.2 < middle < 0.5:
+            continue
+        d = np.sqrt(sideways + (0.5 - middle) ** 2)
+        taken = grid[k] == voxel.VOID
+        assert taken[d < 0.12 - slack].all() and not taken[d > 0.12 + slack].any(), k
+
+
+def test_equal_bricks_are_stored_once():
+    fine = np.zeros((3, 32, 32), np.uint8)
+    fine[:, :, :13] = 2
+    fine[:, :, 13:] = 1
+    state = fine_state(fine, 8, [0.0, 0.1, 0.2, 0.3])
+    assert state.brick_keys.size == 3 * 4 and len(state.pool) == 1
+    flipped = state.copy()
+    voxel.flip(flipped, "y")  # the three equal slabs become one
+    flipped.check()
+    assert flipped.n == 1 and np.array_equal(flipped.to_fine()[0], fine[0][:, ::-1])
+    assert len(state.pool) == 1  # the copy shared the pool and did not write it

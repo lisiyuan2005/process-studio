@@ -36,6 +36,8 @@ from typing import Callable
 
 import numpy as np
 
+from .voxel import _unique
+
 WALL, ETCHABLE, SOURCE, CAVITY, REFINED = 0, 1, 2, 3, 4
 
 
@@ -71,14 +73,27 @@ class Faces:
         return np.sqrt((gap * gap).sum(axis=-1))
 
 
-def arrival(state, table, budget, opening, live, should_cancel: Callable[[], bool] | None, trace: dict | None = None):
+
+
+class Front:
+    """Where the etchant got to: ``place(heights, slabs)`` says what is
+    taken at a height in each slab, and ``flat_heights`` are the exact
+    heights of fronts that lie level (to cut slabs at)."""
+
+    def __init__(self, place, flat_heights) -> None:
+        self.place = place
+        self.flat_heights = flat_heights
+
+
+def arrival(
+    state, table, budget, opening, live, should_cancel: Callable[[], bool] | None,
+    trace: dict | None = None, step: float | None = None,
+):
     """Where the etchant gets to within ``budget``.
 
-    Returns (plain, keys, fine): the plain bulk cells wholly taken
-    (slabs, ny, nx), and for the cells taken in part their keys
-    (slab * ny * nx + cell) and fine cells taken.
+    Returns a :class:`Front`.
     """
-    from .voxel import MIXED, VOID, Mask2, _check, _row_order, _unique_rows, components
+    from .voxel import MIXED, VOID, Mask2, _check, _row_order, _unique, _unique_rows, components
 
     L, ny, nx, B = state.n, state.ny, state.nx, state.refine
     plane = ny * nx
@@ -667,11 +682,19 @@ def arrival(state, table, budget, opening, live, should_cancel: Callable[[], boo
     settle(reachable(sources))
     rates = slowness[slowness > 0.0]
     delta = 0.5 * min(cx, cy) * (rates.min() if rates.size else 1.0)
+    # On past the budget by a node's reach: a node whose centre the front
+    # misses can still have a corner, or the top of its slab, within it.
+    # Slabs no thicker than ``step`` may be placed at other heights than
+    # their middle (cut where the front curves or lies level); thicker ones
+    # the front crosses upright, and their middle is where the node is.
+    step = float(step) if step else float(np.max(thick[:L], initial=cx))
+    tall = np.where(thick[:L] <= step * (1 + 1e-9), 0.5 * thick[:L], 0.0)
+    past = (rates.max() if rates.size else 1.0) * (math.hypot(cx, cy) + float(np.max(tall, initial=0.0)))
     while trial.size:
         _check(should_cancel, "an isotropic etch")
         times = T[trial]
         first_time = float(times.min())
-        if first_time > budget:
+        if first_time > budget + past:
             break
         take = times <= first_time + delta
         group = trial[take]
@@ -688,7 +711,7 @@ def arrival(state, table, budget, opening, live, should_cancel: Callable[[], boo
             hit = np.concatenate([grid[ok] + step for (step, _a, _s), ok in zip(steps, inside)])
             breach = (kind_flat[hit] == CAVITY) & ~known[hit]
             wall, hit = wall[breach], hit[breach]
-            for piece in np.unique(cavity_of[hit]):
+            for piece in _unique(cavity_of[hit]):
                 lo = np.searchsorted(cavity_ids, piece, side="left")
                 hi = np.searchsorted(cavity_ids, piece, side="right")
                 cells = cavity_cells[lo:hi]
@@ -703,18 +726,19 @@ def arrival(state, table, budget, opening, live, should_cancel: Callable[[], boo
                      piece_pos=piece_pos, entry_node=entry_node, entry_face=entry_face, known=known,
                      adj_ptr=adj_ptr, adj_idx=adj_idx)
     # -- place the front at the fine level ---------------------------------
+    # The march settles nodes; where the front is is placed from the faces,
+    # at whatever height the caller asks, so a slab can be cut finely in z
+    # where the front curves and exactly where it lies flat.
     grid_T = T[:size].reshape(L + 1, ny, nx)[:L]
     grid_etch = (kind3 == ETCHABLE)[:L]
     grid_s = slowness[lab[:L]]
-    if B == 1:
-        return grid_etch & (grid_T <= budget), np.zeros(0, np.int64), np.zeros((0, 1, 1), bool)
     reach_xy = 0.5 * math.hypot(cx, cy)
-    whole = grid_etch & (grid_T + grid_s * reach_xy <= budget)
-    band = grid_etch & ~whole & np.isfinite(grid_T) & (grid_T - grid_s * reach_xy <= budget)
-    out_keys: list[np.ndarray] = []
-    out_blocks: list[np.ndarray] = []
+    # every point of a cell, up and down its slab too
+    reach3 = np.sqrt(reach_xy**2 + tall**2)[:, None, None]
+    whole = grid_etch & (grid_T + grid_s * reach3 <= budget)
+    band = grid_etch & ~whole & np.isfinite(grid_T) & (grid_T - grid_s * reach3 <= budget)
 
-    def candidates(nodes):
+    def candidates(nodes, walk=True):
         """(row, face) pairs: each node's own face and its settled same-material neighbours' faces."""
         rows_list, face_list = [], []
         own = face_of[nodes]
@@ -755,132 +779,200 @@ def arrival(state, table, budget, opening, live, should_cancel: Callable[[], boo
                 rows_list.append(rows)
                 face_list.append(entry_face[order][at])
         # The faces nearest the cell's other points lie between, on the
-        # walks from its own face to the cell's centre and corners.
-        own_rows = rows_list[0]
-        where = nodes.copy()
-        in_piece = nodes >= size
-        where[in_piece] = rkeys[piece_brick[nodes[in_piece] - size]]
-        k, rest = np.divmod(where[own_rows], plane)
-        iy, ix = np.divmod(rest, nx)
-        z = zc[k]
-        for ax, ay in ((0.5, 0.5), (0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)):
-            point = np.stack([x_min + (ix + ax) * cx, y_min + (iy + ay) * cy, z], 1)
+        # walks from its own face to the cell's centre and corners. Cells
+        # side by side share corners, and mostly their face too: each walk
+        # is taken once.
+        if walk and rows_list[0].size:
+            own_rows = rows_list[0]
+            own_face = face_list[0]
+            k, rest = np.divmod(nodes[own_rows], plane)
+            iy, ix = np.divmod(rest, nx)
+            corners = (nx + 1) * (ny + 1)
+            span = corners + nx * ny  # corners, then centres, per slab
+            ids = [k * span + (iy + ay) * (nx + 1) + ix + ax for ax, ay in ((0, 0), (1, 0), (0, 1), (1, 1))]
+            ids.append(k * span + corners + iy * nx + ix)
+            owner = np.tile(own_rows, 5)
+            walks, which = _unique_rows(np.stack([np.concatenate(ids), np.tile(own_face, 5)], 1))
+            pk, rest = np.divmod(walks[:, 0], span)
+            centre = rest >= corners
+            cy_, cx_ = np.divmod(np.where(centre, rest - corners, 0), nx)
+            py, px = np.divmod(np.where(centre, 0, rest), nx + 1)
+            point = np.stack(
+                [
+                    np.where(centre, x_min + (cx_ + 0.5) * cx, x_min + px * cx),
+                    np.where(centre, y_min + (cy_ + 0.5) * cy, y_min + py * cy),
+                    zc[pk],  # at the node's height: the heights placed later are near it
+                ],
+                1,
+            )
             steps_taken: list[np.ndarray] = []
-            climb(face_list[0], point, steps_taken)
-            for st in steps_taken:
-                rows_list.append(own_rows[st[:, 0]])
-                face_list.append(st[:, 1])
+            climb(walks[:, 1], point, steps_taken)
+            if steps_taken:
+                taken = np.concatenate(steps_taken)  # (walk, face)
+                # every row whose walk this was
+                order = np.argsort(which, kind="stable")
+                first = np.searchsorted(which[order], taken[:, 0], side="left")
+                many = np.searchsorted(which[order], taken[:, 0], side="right") - first
+                at = np.arange(many.sum()) - np.repeat(np.cumsum(many) - many, many) + np.repeat(first, many)
+                rows_list.append(owner[order][at])
+                face_list.append(np.repeat(taken[:, 1], many))
         count = faces.time.size
-        code = np.unique(np.concatenate(rows_list) * count + np.concatenate(face_list))
+        code = _unique(np.concatenate(rows_list) * count + np.concatenate(face_list))
         return code // count, code % count
 
-    # Plain cells the front's edge crosses: each fine row cut exactly.
+    # Plain cells near the front. Under a flat front -- the cell's face lies
+    # level over the whole cell and each neighbour sideways is a wall or
+    # came through a level face of the same height and time -- the front is
+    # a plane at an exact height, the same for every fine row.
     band_keys = np.flatnonzero(band.reshape(-1))
-    if band_keys.size:
-        # Under a flat front -- the cell's face lies level over the whole
-        # cell and its neighbours sideways came through the same face or
-        # are walls -- every fine row is as far as the centre.
-        own = face_of[band_keys]
-        k, rest = np.divmod(band_keys, plane)
-        iy, ix = np.divmod(rest, nx)
-        safe = np.maximum(own, 0)
+    own = face_of[band_keys]
+    bk, rest = np.divmod(band_keys, plane)
+    biy, bix = np.divmod(rest, nx)
+
+    def level(f, iy_, ix_):
+        safe = np.maximum(f, 0)
         lo, hi = faces.lo[safe], faces.hi[safe]
-        flat = (
-            (own >= 0) & (hi[:, 2] == lo[:, 2])
-            & (lo[:, 0] <= x_min + ix * cx + 1e-12) & (hi[:, 0] >= x_min + (ix + 1) * cx - 1e-12)
-            & (lo[:, 1] <= y_min + iy * cy + 1e-12) & (hi[:, 1] >= y_min + (iy + 1) * cy - 1e-12)
+        return (
+            (f >= 0) & (hi[:, 2] == lo[:, 2])
+            & (lo[:, 0] <= x_min + ix_ * cx + 1e-12) & (hi[:, 0] >= x_min + (ix_ + 1) * cx - 1e-12)
+            & (lo[:, 1] <= y_min + iy_ * cy + 1e-12) & (hi[:, 1] >= y_min + (iy_ + 1) * cy - 1e-12)
         )
-        for step, ok in ((-1, ix > 0), (1, ix < nx - 1), (-nx, iy > 0), (nx, iy < ny - 1)):
-            n = np.where(ok, band_keys + step, band_keys)
-            kn = kind_flat[n]
-            flat &= ~ok | (kn == WALL) | ((kn == ETCHABLE) & (face_of[n] == own))
-        whole.reshape(-1)[band_keys[flat & (T[band_keys] <= budget)]] = True
-        band_keys = band_keys[~flat]
+
+    flat = level(own, biy, bix)
+    safe_own = np.maximum(own, 0)
+    for step, dy_, dx_, ok in ((-1, 0, -1, bix > 0), (1, 0, 1, bix < nx - 1), (-nx, -1, 0, biy > 0), (nx, 1, 0, biy < ny - 1)):
+        n = np.where(ok, band_keys + step, band_keys)
+        kn = kind_flat[n]
+        fn = face_of[n]
+        same = (
+            (kn == ETCHABLE) & level(fn, biy + dy_, bix + dx_)
+            & (faces.lo[np.maximum(fn, 0), 2] == faces.lo[safe_own, 2])
+            & (np.abs(faces.time[np.maximum(fn, 0)] - faces.time[safe_own]) <= 1e-12 * (1.0 + np.abs(faces.time[safe_own])))
+        )
+        flat &= ~ok | (kn == WALL) | same
+    flat_keys = band_keys[flat]
+    fk = bk[flat]
+    f_own = own[flat]
+    f_plane = faces.lo[f_own, 2]
+    f_side = np.where(f_plane > zc[fk], 1.0, -1.0)  # +1: the face is above, the front goes down
+    f_height = f_plane - f_side * (budget - faces.time[f_own]) / slowness[lab_flat[flat_keys]]
+    inside = (f_height > zb[fk] + 1e-12) & (f_height < zb[fk + 1] - 1e-12)
+    flat_heights = np.unique(np.round(f_height[inside], 9))
+    band_keys = band_keys[~flat]
     if band_keys.size:
-        rows, fcs = candidates(band_keys)
-        k, rest = np.divmod(band_keys, plane)
-        iy, ix = np.divmod(rest, nx)
-        counts = np.zeros((band_keys.size, B, B + 1), dtype=np.int32)
-        s_rows = slowness[lab_flat[band_keys]][rows]
-        radius = (budget - faces.time[fcs]) / s_rows
-        good = radius >= 0.0
-        rows, fcs, radius = rows[good], fcs[good], radius[good]
-        by = np.arange(B)
-        c0 = faces.centre[fcs]
-        h0 = faces.half[fcs]
-        yv = y_min + (iy[rows][:, None] * B + by[None, :] + 0.5) * fy
-        dyv = np.maximum(np.abs(yv - c0[:, 1:2]) - h0[:, 1:2], 0.0)
-        dz = np.maximum(np.abs(zc[k[rows]] - c0[:, 2]) - h0[:, 2], 0.0)[:, None]
-        w2 = radius[:, None] ** 2 - dyv**2 - dz**2
-        ok = w2 >= 0.0
-        w = np.sqrt(np.maximum(w2, 0.0))
-        lo = c0[:, 0:1] - h0[:, 0:1] - w
-        hi = c0[:, 0:1] + h0[:, 0:1] + w
-        base = ix[rows][:, None] * B
-        first_col = np.clip(np.ceil((lo - x_min) / fx - 0.5 - 1e-9).astype(np.int64) - base, 0, B)
-        last_col = np.clip(np.floor((hi - x_min) / fx - 0.5 + 1e-9).astype(np.int64) - base, -1, B - 1)
-        ok &= last_col >= first_col
-        m, r = np.nonzero(ok)
-        np.add.at(counts, (rows[m], r, first_col[m, r]), 1)
-        np.add.at(counts, (rows[m], r, last_col[m, r] + 1), -1)
-        taken = np.cumsum(counts, axis=2)[:, :, :B] > 0
-        out_keys.append(band_keys)
-        out_blocks.append(taken)
+        band_rows, band_faces = candidates(band_keys)
+    band_k, rest = np.divmod(band_keys, plane)
+    band_iy, band_ix = np.divmod(rest, nx)
 
     # Pieces in refined cells: whole, none, or fine cell by fine cell.
     if pieces:
         ids = np.arange(size, total)
         t = T[ids]
-        s = slowness[piece_label]
+        s_piece = slowness[piece_label]
         # a piece's centre can be anywhere in its cell: a whole diagonal away
-        spread = 2.0 * reach_xy
-        near_all = t + s * spread <= budget
-        maybe = np.isfinite(t) & ~near_all & (t - s * spread <= budget)
-        taken_fine = np.zeros((R, B, B), dtype=bool)
-        whole_piece = np.zeros(pieces, dtype=bool)
-        whole_piece[near_all] = True
+        spread = np.sqrt((2.0 * reach_xy) ** 2 + tall[np.minimum(rk[piece_brick], L - 1)] ** 2)
+        whole_piece = t + s_piece * spread <= budget
+        maybe = np.isfinite(t) & ~whole_piece & (t - s_piece * spread <= budget)
         close = ids[maybe]
-        if close.size:
-            rows, fcs = candidates(close)
-            order = np.argsort(rows, kind="stable")
-            rows_sorted, fcs_sorted = rows[order], fcs[order]
         piece_row = np.full(pieces, -1, dtype=np.int64)
         piece_row[close - size] = np.arange(close.size)
-        # brick by brick, a few million fine cells at a time
-        step = max(1, 1_000_000 // (B * B))
-        for first in range(0, R, step):
-            block = fnode[first : first + step].reshape(-1)
-            has = block >= 0
-            piece = np.where(has, block - size, 0)
-            taken = has & whole_piece[piece]
-            if close.size:
-                cells = np.flatnonzero(has & (piece_row[piece] >= 0))
-                if cells.size:
-                    # every fine cell of the close pieces against its piece's faces
-                    r, rem = np.divmod(cells, B * B)
-                    by, bx = np.divmod(rem, B)
-                    r += first
-                    owner = piece_row[piece[cells]]
-                    lo = np.searchsorted(rows_sorted, owner, side="left")
-                    many = np.searchsorted(rows_sorted, owner, side="right") - lo
-                    point = np.stack(
-                        [x_min + (rix[r] * B + bx + 0.5) * fx, y_min + (riy[r] * B + by + 0.5) * fy, zc[rk[r]]], 1
-                    )
-                    which = np.repeat(np.arange(cells.size), many)
-                    at = np.arange(which.size) - np.repeat(np.cumsum(many) - many, many) + np.repeat(lo, many)
-                    f = fcs_sorted[at]
-                    s_cell = slowness[piece_label[close[owner] - size]]
-                    tt = faces.time[f] + s_cell[which] * faces.distance(f, point[which])
-                    best = np.full(cells.size, np.inf)
-                    np.minimum.at(best, which, tt)
-                    taken[cells[best <= budget]] = True
-            taken_fine[first : first + step] = taken.reshape(-1, B, B)
-        keep = taken_fine.reshape(R, -1).any(axis=1) & in_stack
-        out_keys.append(rkeys[keep])
-        out_blocks.append(taken_fine[keep])
-    keys = np.concatenate(out_keys) if out_keys else np.zeros(0, np.int64)
-    blocks = np.concatenate(out_blocks) if out_blocks else np.zeros((0, B, B), bool)
-    return whole, keys, blocks
+        if close.size:
+            # a piece is a fine cell or so from its neighbours: no walk
+            rows, fcs = candidates(close, walk=False)
+            order = np.argsort(rows, kind="stable")
+            piece_rows, piece_faces = rows[order], fcs[order]
+
+    def place(heights, subset, skip_flat=False):
+        """Where the front is at ``heights`` (one per slab), in the slabs
+        ``subset``: (wholly taken plain cells (slabs, ny, nx), keys of the
+        cells taken in part, their fine cells taken)."""
+        out_whole = whole & subset[:, None, None]
+        out_keys: list[np.ndarray] = []
+        out_blocks: list[np.ndarray] = []
+        if flat_keys.size and not skip_flat:
+            go = subset[fk] & (f_side * (heights[fk] - f_height) >= 0.0)
+            out_whole.reshape(-1)[flat_keys[go]] = True
+        chosen = subset[band_k]
+        if chosen.any():
+            keys_here = band_keys[chosen]
+            index = np.full(band_keys.size, -1, dtype=np.int64)
+            index[chosen] = np.arange(int(chosen.sum()))
+            pick = index[band_rows] >= 0
+            rows, fcs = index[band_rows[pick]], band_faces[pick]
+            k, iy, ix = band_k[chosen], band_iy[chosen], band_ix[chosen]
+            counts = np.zeros((keys_here.size, B, B + 1), dtype=np.int32)
+            s_rows = slowness[lab_flat[keys_here]][rows]
+            radius = (budget - faces.time[fcs]) / s_rows
+            good = radius >= 0.0
+            rows, fcs, radius = rows[good], fcs[good], radius[good]
+            by = np.arange(B)
+            c0 = faces.centre[fcs]
+            h0 = faces.half[fcs]
+            yv = y_min + (iy[rows][:, None] * B + by[None, :] + 0.5) * fy
+            dyv = np.maximum(np.abs(yv - c0[:, 1:2]) - h0[:, 1:2], 0.0)
+            dz = np.maximum(np.abs(heights[k[rows]] - c0[:, 2]) - h0[:, 2], 0.0)[:, None]
+            w2 = radius[:, None] ** 2 - dyv**2 - dz**2
+            ok = w2 >= 0.0
+            w = np.sqrt(np.maximum(w2, 0.0))
+            lo = c0[:, 0:1] - h0[:, 0:1] - w
+            hi = c0[:, 0:1] + h0[:, 0:1] + w
+            base = ix[rows][:, None] * B
+            first_col = np.clip(np.ceil((lo - x_min) / fx - 0.5 - 1e-9).astype(np.int64) - base, 0, B)
+            last_col = np.clip(np.floor((hi - x_min) / fx - 0.5 + 1e-9).astype(np.int64) - base, -1, B - 1)
+            ok &= last_col >= first_col
+            m, r = np.nonzero(ok)
+            at = (rows[m] * B + r) * (B + 1)
+            length = keys_here.size * B * (B + 1)
+            counts = np.bincount(at + first_col[m, r], minlength=length) - np.bincount(
+                at + last_col[m, r] + 1, minlength=length
+            )
+            taken = np.cumsum(counts.reshape(keys_here.size, B, B + 1), axis=2)[:, :, :B] > 0
+            out_keys.append(keys_here)
+            out_blocks.append(taken)
+        if pieces:
+            bricks_here = np.flatnonzero(subset[np.minimum(rk, L - 1)] & in_stack)
+            taken_fine = np.zeros((bricks_here.size, B, B), dtype=bool)
+            step = max(1, 1_000_000 // (B * B))
+            for first in range(0, bricks_here.size, step):
+                part = bricks_here[first : first + step]
+                block = fnode[part].reshape(-1)
+                has = block >= 0
+                piece = np.where(has, block - size, 0)
+                taken = has & whole_piece[piece]
+                if close.size:
+                    cells = np.flatnonzero(has & (piece_row[piece] >= 0))
+                    if cells.size:
+                        # every fine cell of the close pieces against its piece's faces
+                        r, rem = np.divmod(cells, B * B)
+                        by, bx = np.divmod(rem, B)
+                        r = part[r]
+                        owner = piece_row[piece[cells]]
+                        lo = np.searchsorted(piece_rows, owner, side="left")
+                        many = np.searchsorted(piece_rows, owner, side="right") - lo
+                        point = np.stack(
+                            [x_min + (rix[r] * B + bx + 0.5) * fx, y_min + (riy[r] * B + by + 0.5) * fy, heights[rk[r]]], 1
+                        )
+                        which = np.repeat(np.arange(cells.size), many)
+                        at = np.arange(which.size) - np.repeat(np.cumsum(many) - many, many) + np.repeat(lo, many)
+                        f = piece_faces[at]
+                        s_cell = slowness[piece_label[close[owner] - size]]
+                        tt = faces.time[f] + s_cell[which] * faces.distance(f, point[which])
+                        best = np.full(cells.size, np.inf)
+                        np.minimum.at(best, which, tt)
+                        taken[cells[best <= budget]] = True
+                taken_fine[first : first + part.size] = taken.reshape(-1, B, B)
+            keep = taken_fine.reshape(bricks_here.size, -1).any(axis=1)
+            out_keys.append(rkeys[bricks_here[keep]])
+            out_blocks.append(taken_fine[keep])
+        keys = np.concatenate(out_keys) if out_keys else np.zeros(0, np.int64)
+        blocks = np.concatenate(out_blocks) if out_blocks else np.zeros((0, B, B), bool)
+        return out_whole, keys, blocks
+
+    if trace is not None:
+        trace.update(band_keys=band_keys, flat_keys=flat_keys, whole=whole,
+                     band_rows=band_rows if band_keys.size else None, band_faces=band_faces if band_keys.size else None,
+                     zb=zb)
+    return Front(place, flat_heights)
 
 
 def _touching(record, rect_of_record, count):
@@ -920,7 +1012,7 @@ def _touching(record, rect_of_record, count):
         differ = a != b
         a, b = a[differ], b[differ]
         code += [a * count + b, b * count + a]
-    code = np.unique(np.concatenate(code)) if code else np.zeros(0, np.int64)
+    code = _unique(np.concatenate(code)) if code else np.zeros(0, np.int64)
     ptr, idx = _csr(code // count, code % count, count)
     # Two steps as well: on a staircase the faces either side of a corner
     # are equally far from a point beyond it (both nearest at the corner),
@@ -930,7 +1022,7 @@ def _touching(record, rect_of_record, count):
     many = ptr[idx + 1] - lo
     at2 = np.arange(many.sum()) - np.repeat(np.cumsum(many) - many, many) + np.repeat(lo, many)
     a2, b2 = np.repeat(src, many), idx[at2]
-    code = np.unique(np.concatenate([code, (a2 * count + b2)[a2 != b2]]))
+    code = _unique(np.concatenate([code, (a2 * count + b2)[a2 != b2]]))
     return _csr(code // count, code % count, count)
 
 
@@ -953,7 +1045,7 @@ def _unique_pairs(a, b):
     a, b = a[fresh], b[fresh]
     base = int(b.max()) + 1
     if (int(a.max()) + 1) * base < 2**62:
-        code = np.unique(a * base + b)
+        code = _unique(a * base + b)
         return code // base, code % base
     pairs = np.unique(np.stack([a, b], 1), axis=0)
     return pairs[:, 0], pairs[:, 1]
