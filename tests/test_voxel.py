@@ -988,6 +988,25 @@ def test_a_flip_mirrors_the_cuts(axis):
     assert (now == was).mean() > 0.999
 
 
+def test_filling_a_whole_cell_that_holds_a_cut_leaves_no_stale_brick():
+    from process_studio.kernels import voxel_cut
+
+    # a bulk cell of open fine cells, one of them cut against the SiO2 wall
+    # beside it: a brick. A thick film fills the whole cell.
+    fine = np.zeros((2, 32, 32), np.uint8)
+    fine[0] = 1
+    fine[1, :, :12] = 2
+    cuts = np.zeros(fine.shape, np.uint16)
+    cuts[1, 5, 12] = voxel_cut.pack(np.array(voxel_cut.CODE_OF[5, 1]), np.array(2))
+    state = voxel.VoxelState.from_fine(
+        (0.0, 0.0, 1.0, 1.0), fine, 4, np.array([0.0, 0.1, 0.2]), ["Si", "SiO2", "SiN"], cuts=cuts
+    )
+    state.check()
+    assert state.labels[1, 1, 3] == voxel.MIXED
+    voxel.deposit(state, "SiN", 0.3, planar=False)
+    state.check()
+
+
 def _outline_area(picture, name):
     vec = picture["vector"]
     extent = picture["extent"]
