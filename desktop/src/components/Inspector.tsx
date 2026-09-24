@@ -311,7 +311,7 @@ export function Inspector({
 
   // A parameter another kernel reads would do nothing here, so it is not
   // offered: the fields are what this project's kernel actually uses.
-  const kernelId = kernel?.id ?? "levelset";
+  const kernelId = kernel?.id ?? "slab";
   const depositionModes = kernel?.depositionModes ?? [
     "conformal",
     "directional",

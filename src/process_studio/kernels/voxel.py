@@ -770,14 +770,17 @@ def _union_find(count: int, a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return parent
 
 
-def components(mask: np.ndarray, *, connect_layers: bool = True) -> np.ndarray:
+def components(mask: np.ndarray, *, connect_layers: bool = True, check: Callable[[], None] | None = None) -> np.ndarray:
     """Label the 6-connected pieces of a stack of grids (0 = not in the mask).
 
     Runs along x are found first, then runs that touch in the row above or
     in the slab above are joined (not across the first axis when
     ``connect_layers`` is false: a stack of separate grids). Labels are
-    positive but not consecutive.
+    positive but not consecutive. ``check`` is called between passes (a
+    stop can be raised from it).
     """
+    check = check or (lambda: None)
+    check()
     layers, rows, cols = mask.shape
     flat = mask.reshape(-1, cols)
     starts = flat.copy()
@@ -795,6 +798,7 @@ def components(mask: np.ndarray, *, connect_layers: bool = True) -> np.ndarray:
     if connect_layers:
         pairs.append((run3[:-1], run3[1:]))
     for below, above in pairs:
+        check()
         if below.size == 0:
             continue
         both = (below > 0) & (above > 0)
@@ -811,12 +815,14 @@ def components(mask: np.ndarray, *, connect_layers: bool = True) -> np.ndarray:
         tails.append(above[keep])
     if not heads:
         return run3
+    check()
     parent = _union_find(count, np.concatenate(heads), np.concatenate(tails))
     return parent[run3]
 
 
 def components2(
-    plain: np.ndarray, keys: np.ndarray, fine: np.ndarray, nx: int, ny: int
+    plain: np.ndarray, keys: np.ndarray, fine: np.ndarray, nx: int, ny: int,
+    check: Callable[[], None] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """The 6-connected pieces of a set given at the grid's two levels.
 
@@ -826,15 +832,16 @@ def components2(
     fine cell (0 outside the set); a piece may run through both levels.
     Fine cells of a refined cell join each other inside it, the plain
     cell or refined cell's fine cells beside them, and those above and
-    below.
+    below. ``check`` is called between passes.
     """
+    check = check or (lambda: None)
     plane = ny * nx
     layers = plain.shape[0]
-    coarse_id = components(plain)
+    coarse_id = components(plain, check=check)
     base = int(coarse_id.max()) if coarse_id.size else 0
     if keys.size == 0:
         return coarse_id, np.zeros(fine.shape, dtype=np.int64)
-    fine_id = components(fine, connect_layers=False)
+    fine_id = components(fine, connect_layers=False, check=check)
     fine_id[fine_id > 0] += base
     count = int(fine_id.max()) if fine_id.size else base
     count = max(count, base)
@@ -859,6 +866,7 @@ def components2(
         return combined // (count + 1), combined % (count + 1)
 
     for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        check()
         ok = (ix + dx >= 0) & (ix + dx < nx) & (iy + dy >= 0) & (iy + dy < ny)
         idx = np.flatnonzero(ok)
         other = k[idx] * plane + (iy[idx] + dy) * nx + ix[idx] + dx
@@ -887,6 +895,7 @@ def components2(
                 heads.append(pairs // (count + 1))
                 tails.append(pairs % (count + 1))
     for dk in (1, -1):
+        check()
         ok = (k + dk >= 0) & (k + dk < layers)
         idx = np.flatnonzero(ok)
         other = (k[idx] + dk) * plane + rest[idx]
@@ -905,6 +914,7 @@ def components2(
                 pairs = _unique(mine[both] * (count + 1) + theirs[both])
                 heads.append(pairs // (count + 1))
                 tails.append(pairs % (count + 1))
+    check()
     parent = _union_find(count, np.concatenate(heads) if heads else np.zeros(0), np.concatenate(tails) if tails else np.zeros(0))
     return parent[coarse_id], parent[fine_id]
 
@@ -1389,6 +1399,7 @@ def etch_vertical(
     rates: Mapping[str, float],
     budget: float,
     opening: Mask2 | None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> None:
     """Etch straight down inside ``opening`` for ``budget`` (see the module notes).
 
@@ -1408,6 +1419,7 @@ def etch_vertical(
     cells = np.flatnonzero(fine_columns.reshape(-1))
     stops: list[np.ndarray] = []
     for part in _chunks(cells, n * B * B):
+        _check(should_cancel, "a vertical etch")
         keys = (np.arange(n)[:, None] * plane + part[None, :]).reshape(-1)
         columns = state.blocks(keys).reshape(n, -1)
         ins = inside.blocks_for(part, B).reshape(-1)
@@ -1422,6 +1434,7 @@ def etch_vertical(
         keys_out, blocks_out = [], []
         at = 0
         for part in _chunks(cells, n * B * B):
+            _check(should_cancel, "a vertical etch")
             size = part.size * B * B
             stop = stop_fine[at : at + size].reshape(part.size, B, B)
             at += size
@@ -1484,7 +1497,8 @@ def etch_isotropic(
     # Which open space the ambient reaches is settled before the slabs are
     # cut: cutting changes no connection, and the cut stack is many times
     # taller.
-    live = _live(state)
+    live = _live(state, check=lambda: _check(should_cancel, "an isotropic etch"))
+    _check(should_cancel, "an isotropic etch")
     step = max(float(dz or 0.0), state.cell)
     mask = _as_mask(state, opening)
     reach = float(budget) * float(table.max()) + step
@@ -1496,6 +1510,7 @@ def etch_isotropic(
         planes.update(j * step for j in range(lo, hi + 1))
     lows, highs = state.z[:-1][holding], state.z[1:][holding]
     planes = [p for p in sorted(planes) if ((lows < p) & (p < highs)).any()]
+    _check(should_cancel, "an isotropic etch")
     source = state.split(planes)
     live._reslab(np.concatenate([source, [live.n - 1]]))
     from . import voxel_wet
@@ -1518,6 +1533,7 @@ def etch_isotropic(
             curved = np.zeros(state.n, dtype=bool)
             tops = dict(_placed(front, source[maybe], (z1 - half)[maybe], L))
             for slab_index, (whole_b, keys_b, fine_b) in _placed(front, source[maybe], (z0 + half)[maybe], L):
+                _check(should_cancel, "an isotropic etch")
                 whole_a, keys_a, fine_a = tops[slab_index]
                 k = maybe[slab_index]
                 curved[k] = (whole_a != whole_b).any() or _differing((keys_a, fine_a), (keys_b, fine_b), state.refine).size > 0
@@ -1527,6 +1543,7 @@ def etch_isotropic(
     # Each slab placed at its middle, from the slab the march had.
     middles = 0.5 * (state.z[:-1] + state.z[1:])
     for target, (whole, keys, fine) in _placed(front, source, middles, L):
+        _check(should_cancel, "an isotropic etch")
         state.labels[target][whole] = fill
         if keys.size:
             new_keys = target * state.plane + keys
@@ -1627,13 +1644,13 @@ def _curving(state: VoxelState, table: np.ndarray, live: "VoxelState", opening: 
     return events
 
 
-def _live(state: VoxelState) -> "VoxelState":
+def _live(state: VoxelState, check: Callable[[], None] | None = None) -> "VoxelState":
     """Open space the ambient reaches, as a two-level field over the stack
     plus one slab on top for the ambient itself (1 where reached); the
     rest of the open space is a sealed cavity."""
     plain = np.concatenate([state.labels == VOID, np.ones((1, state.ny, state.nx), dtype=bool)])
     fine = (state.pool == VOID)[state.brick_ref]
-    coarse_id, fine_id = components2(plain, state.brick_keys, fine, state.nx, state.ny)
+    coarse_id, fine_id = components2(plain, state.brick_keys, fine, state.nx, state.ny, check=check)
     ambient = _unique(coarse_id[-1])
     ambient = ambient[ambient > 0]
     labels = np.isin(coarse_id, ambient).astype(np.uint8)
@@ -2706,7 +2723,7 @@ def run_step(
             rates, budget, text = _budget(recipe, parameters, project, "etch")
             if fraction == 1.0:
                 logger(f"VOXEL etch vertical {text}")
-                etch_vertical(new, rates, budget, opening)
+                etch_vertical(new, rates, budget, opening, should_cancel=should_cancel)
             else:
                 logger(f"VOXEL etch isotropic {text}, curved in z every {z_fine * 1000:g} nm")
                 etch_isotropic(

@@ -186,6 +186,9 @@ def arrival(
     """
     from .voxel import MIXED, VOID, Mask2, _check, components
 
+    def check():
+        _check(should_cancel, "an isotropic etch")
+
     L, ny, nx, B = state.n, state.ny, state.nx, state.refine
     plane = ny * nx
     x_min, y_min = state.bounds[0], state.bounds[1]
@@ -223,6 +226,7 @@ def arrival(
     in_stack = rk < L
     if in_stack.any():
         fl[in_stack] = state.blocks(rkeys[in_stack])
+    check()
     flive = live.blocks(rkeys) if R else np.zeros((0, B, B), np.uint8)
     fcol = columns.blocks_for(rcell, B) if R else np.zeros((0, B, B), bool)
     fkind = np.full((R, B, B), WALL, dtype=np.uint8)
@@ -230,6 +234,7 @@ def arrival(
     fkind[(fl == VOID) & (flive == 1) & fcol] = SOURCE
 
     # -- the bulk as graded squares: one node each --------------------------
+    check()
     code = np.where(kind == ETCHABLE, 10 + lab.astype(np.int64), kind.astype(np.int64))
     code[kind == REFINED] = -1
     sq_k, sq_x, sq_y, sq_s, sq_code = _graded_squares(code)
@@ -239,6 +244,7 @@ def arrival(
     nk, nqx, nqy, ns = sq_k[etch_sq], sq_x[etch_sq], sq_y[etch_sq], sq_s[etch_sq]
     nlab = sq_code[etch_sq] - 10
     del sq_k, sq_x, sq_y, sq_s, sq_code, etch_sq
+    check()
     owner = np.full(kind.shape, -1, dtype=np.int32)
     for s in np.unique(ns):
         pick = np.flatnonzero(ns == s)
@@ -249,6 +255,7 @@ def arrival(
     leaf_pos = 0.5 * (leaf_lo + leaf_hi)
 
     # -- pieces of etchable material inside refined cells ------------------
+    check()
     fnode = np.full((R, B, B), -1, dtype=np.int32)
     found: list[tuple[int, np.ndarray, np.ndarray]] = []
     next_id = NL
@@ -257,7 +264,8 @@ def arrival(
         """Number the pieces of material ``m``; their bricks and centres."""
         nonlocal next_id
         mask = (fkind == ETCHABLE) & (fl == m)
-        ids = components(mask, connect_layers=False)[mask]
+        ids = components(mask, connect_layers=False, check=check)[mask]
+        check()
         # the pieces numbered 0, 1, ... (the labels are run numbers)
         used = np.zeros(int(ids.max()) + 1, dtype=bool)
         used[ids] = True
@@ -265,8 +273,10 @@ def arrival(
         del ids, used
         count = int(inverse.max()) + 1
         fnode[mask] = next_id + inverse
+        check()
         r, by, bx = np.nonzero(mask)
         del mask
+        check()
         weight = np.bincount(inverse, minlength=count).astype(float)
         brick = np.zeros(count, np.int64)
         brick[inverse] = r
@@ -276,6 +286,7 @@ def arrival(
         next_id += count
 
     for m in np.flatnonzero(np.bincount(fl[fkind == ETCHABLE], minlength=256)) if R else []:
+        check()
         add_pieces(m)
     if next_id >= 2**31:
         raise MemoryError("too many pieces for this etch")
@@ -315,6 +326,7 @@ def arrival(
     link_b: list[np.ndarray] = []
     # square to square, sideways and up and down
     for a_, b_ in ((owner[:, :, :-1], owner[:, :, 1:]), (owner[:, :-1, :], owner[:, 1:, :]), (owner[:-1], owner[1:])):
+        check()
         touch = (a_ >= 0) & (b_ >= 0) & (a_ != b_)
         if touch.any():
             a2, b2 = _unique_pairs(a_[touch], b_[touch])
@@ -371,7 +383,7 @@ def arrival(
     cav_lattice: list[np.ndarray] = []
     cavity_of = None
     if (kind == CAVITY).any():
-        cavity_of = components(kind == CAVITY).reshape(-1)
+        cavity_of = components(kind == CAVITY, check=check).reshape(-1)
 
     def entry(node, orient, plane_at, u0, u1, v0, v1, into=None):
         n = np.asarray(node).size
@@ -422,6 +434,7 @@ def arrival(
 
     for dx, dy, dk in directions:
         for start in range(0, R, 4096):  # a few million fine cells at a time
+            check()
             border(dx, dy, dk, np.arange(start, min(R, start + 4096)))
     # Inside refined cells, sideways.
     if R:
@@ -449,6 +462,7 @@ def arrival(
                 link_a.append(a2); link_b.append(b2)
     # Plain etchable against plain open space or a plain sealed cavity.
     for dx, dy, dk in directions:
+        check()
         sl_me = [slice(None)] * 3
         sl_th = [slice(None)] * 3
         for axis, d in ((0, dk), (1, dy), (2, dx)):
@@ -496,6 +510,7 @@ def arrival(
     if lattice:
         table_e = np.concatenate(lattice)
         del lattice
+        check()
         rects, rect_of_entry, _records, _rect_of_record = _merge_rectangles(
             table_e[:, 1:3], table_e[:, 3], table_e[:, 4], table_e[:, 5], table_e[:, 6]
         )
@@ -503,6 +518,7 @@ def arrival(
         first_face = faces.add(centre, half, np.zeros(rects.shape[0]))
         entry_node, entry_face = _unique_pairs(table_e[:, 0], first_face[rect_of_entry])
         if B > 1 or (ns > 1).any():
+            check()
             adj_ptr, adj_idx = _touching(rects[:, :6], first_face, rects.shape[0])
         else:  # nodes a fine cell apart need no walk
             adj_ptr, adj_idx = np.zeros(rects.shape[0] + 1, np.int64), np.zeros(0, np.int64)
@@ -544,6 +560,7 @@ def arrival(
             return face
         dist = faces.distance(face[active], point[active])
         while active.size:
+            check()
             f = face[active]
             lo = adj_ptr[f]
             many = adj_ptr[f + 1] - lo
@@ -867,7 +884,7 @@ def arrival(
         math.hypot(cx, cy) + float(np.max(tall, initial=0.0)) + 2.0 * float(np.max(leaf_reach3, initial=0.0))
     )
     while trial.size:
-        _check(should_cancel, "an isotropic etch")
+        check()
         times = T[trial]
         first_time = float(times.min())
         if first_time > budget + past:
@@ -923,6 +940,7 @@ def arrival(
         """(row, face) pairs: each node's own face, its settled same-material
         neighbours' faces, its entry faces, and the walks from its own face
         to the corners and middle of its square."""
+        check()
         rows_list, face_list = [], []
         own = face_of[nodes]
         ok = own >= 0
@@ -1081,6 +1099,7 @@ def arrival(
         grow = is_level[f0] & over(r0, f0)
         g_rows, g_f = r0[grow], f0[grow]
         while g_rows.size:
+            check()
             lo_a = adj_ptr[g_f]
             many = adj_ptr[g_f + 1] - lo_a
             r2 = np.repeat(g_rows, many)
@@ -1117,19 +1136,6 @@ def arrival(
     if trace is not None:
         trace.update(band_ids=band_ids.copy(), band_rows=band_rows.copy(), band_faces=band_faces.copy(), adj_ptr=adj_ptr, adj_idx=adj_idx)
 
-    def arrive(rows, points):
-        """Arrival at ``points`` (one per row of band_ids) over its faces."""
-        lo = np.searchsorted(band_rows, rows, side="left")
-        many = np.searchsorted(band_rows, rows, side="right") - lo
-        which = np.repeat(np.arange(rows.size), many)
-        at = np.arange(which.size) - np.repeat(np.cumsum(many) - many, many) + np.repeat(lo, many)
-        f = band_faces[at]
-        sl = slowness[nlab[band_ids[rows]]][which]
-        t = faces.time[f] + sl * faces.distance(f, points[which])
-        out = np.full(rows.size, np.inf)
-        np.minimum.at(out, which, t)
-        return out
-
     # Flat fronts: where the arrival is the same at a square's middle and
     # corners, at its top and at its bottom, and differs between the two by
     # the slab's thickness at the material's rate, the front is a plane at
@@ -1149,16 +1155,40 @@ def arrival(
         )
         sq_row = _unique(band_rows[level])
         sq_x, sq_y, sq_s = nqx[band_ids[sq_row]], nqy[band_ids[sq_row]], ns[band_ids[sq_row]]
+        # (part, face) pairs go down with the parts, as in placing: only the
+        # faces that can be nearest somewhere in the part are kept, and a
+        # part the front cannot cross inside its slab (reached nowhere, or
+        # everywhere) is dropped -- there is no level front in it to find.
+        lo_c = np.searchsorted(band_rows, sq_row, side="left")
+        many = np.searchsorted(band_rows, sq_row, side="right") - lo_c
+        p_sq = np.repeat(np.arange(sq_row.size), many)
+        p_f = band_faces[np.arange(p_sq.size) - np.repeat(np.cumsum(many) - many, many) + np.repeat(lo_c, many)]
         while sq_row.size:
+            check()
             ids = band_ids[sq_row]
             k_ = nk[ids]
             sl = slowness[nlab[ids]]
+            box_lo = np.stack([x_min + sq_x * cx, y_min + sq_y * cy, zb[k_]], 1)
+            box_hi = np.stack([x_min + (sq_x + sq_s) * cx, y_min + (sq_y + sq_s) * cy, zb[k_ + 1]], 1)
+            low = faces.time[p_f] + sl[p_sq] * _box_gap(faces.lo[p_f], faces.hi[p_f], box_lo[p_sq], box_hi[p_sq])
+            high = faces.time[p_f] + sl[p_sq] * _box_far(faces.lo[p_f], faces.hi[p_f], box_lo[p_sq], box_hi[p_sq])
+            lower = np.full(sq_row.size, np.inf); upper = np.full(sq_row.size, np.inf)
+            np.minimum.at(lower, p_sq, low); np.minimum.at(upper, p_sq, high)
+            upper = np.minimum(upper, covered(p_sq, p_f, box_lo, box_hi, sl, sq_row.size))
+            keep = low <= upper[p_sq]
+            keep[keep] = rivals(p_sq[keep], p_f[keep], box_lo[p_sq[keep]], box_hi[p_sq[keep]], sl[p_sq[keep]])
+            p_sq, p_f = p_sq[keep], p_f[keep]
+            live_sq = (lower <= budget) & (upper > budget)
+            # arrival at the middle and corners of each part, top and bottom
             values = []
             for zz in (zb[k_ + 1], zb[k_]):
                 at_h = []
                 for ax, ay in ((0.5, 0.5), (0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)):
                     pts = np.stack([x_min + (sq_x + ax * sq_s) * cx, y_min + (sq_y + ay * sq_s) * cy, zz], 1)
-                    at_h.append(arrive(sq_row, pts))
+                    t = faces.time[p_f] + sl[p_sq] * faces.distance(p_f, pts[p_sq])
+                    out = np.full(sq_row.size, np.inf)
+                    np.minimum.at(out, p_sq, t)
+                    at_h.append(out)
                 values.append(np.stack(at_h, 1))
             top_t, bottom_t = values
             tol = 1e-9 * (1.0 + np.abs(top_t[:, 0]))
@@ -1170,14 +1200,21 @@ def arrival(
             )
             down = top_t[:, 0] < bottom_t[:, 0]  # the etchant came from above
             h = np.where(down, zb[k_ + 1] - (budget - top_t[:, 0]) / sl, zb[k_] + (budget - bottom_t[:, 0]) / sl)
-            inside = flat & (h > zb[k_] + 1e-12) & (h < zb[k_ + 1] - 1e-12)
+            inside = live_sq & flat & (h > zb[k_] + 1e-12) & (h < zb[k_ + 1] - 1e-12)
             heights_found.append(h[inside])
-            more = ~flat & (sq_s > 1)
-            half_ = sq_s[more] // 2
-            sq_row = np.repeat(sq_row[more], 4)
-            sq_x = (np.repeat(sq_x[more], 4) + np.tile([0, 1, 0, 1], half_.size) * np.repeat(half_, 4))
-            sq_y = (np.repeat(sq_y[more], 4) + np.tile([0, 0, 1, 1], half_.size) * np.repeat(half_, 4))
+            more = live_sq & ~flat & (sq_s > 1)
+            idx = np.flatnonzero(more)
+            renum = np.full(sq_row.size, -1, np.int64)
+            renum[idx] = np.arange(idx.size)
+            half_ = sq_s[idx] // 2
+            sq_row = np.repeat(sq_row[idx], 4)
+            sq_x = np.repeat(sq_x[idx], 4) + np.tile([0, 1, 0, 1], idx.size) * np.repeat(half_, 4)
+            sq_y = np.repeat(sq_y[idx], 4) + np.tile([0, 0, 1, 1], idx.size) * np.repeat(half_, 4)
             sq_s = np.repeat(half_, 4)
+            mine = more[p_sq]
+            parent = renum[p_sq[mine]]
+            p_sq = 4 * np.repeat(parent, 4) + np.tile(np.arange(4), parent.size)
+            p_f = np.repeat(p_f[mine], 4)
     flat_heights = np.unique(np.round(np.concatenate(heights_found), 9)) if heights_found else np.zeros(0)
 
     # Pieces in refined cells: whole, none, or fine cell by fine cell.
@@ -1235,6 +1272,7 @@ def arrival(
             done_rows, done_x, done_y, done_pc, done_pf = [], [], [], [], []
             n_done = 0
             while sq_row.size:
+                check()
                 node = band_ids[sq_row]
                 k_ = nk[node]
                 w_ = p_sq
@@ -1301,6 +1339,7 @@ def arrival(
             p_b, p_f = pair_cell, pair_face
             full_cell, full_x0, full_y0, full_R = [], [], [], []
             while True:
+                check()
                 s_b = slowness[nlab[node[b_cell]]]
                 w_ = p_b
                 cxl = x_min + (cells_x[b_cell] * B + b_x0 + 0.5) * fx
@@ -1392,6 +1431,7 @@ def arrival(
             taken_fine = np.zeros((bricks_here.size, B, B), dtype=bool)
             step_ = max(1, 1_000_000 // (B * B))
             for first in range(0, bricks_here.size, step_):
+                check()
                 part = bricks_here[first : first + step_]
                 block = fnode[part].reshape(-1)
                 has = block >= 0

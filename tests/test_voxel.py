@@ -885,3 +885,41 @@ def test_longer_etches_take_more_and_keep_what_shorter_ones_took():
             assert (void | ~before).all() and void.sum() > before.sum()
         before = void
         assert state.volume("TiN") == start.volume("TiN")
+
+
+def test_a_round_etch_into_one_material_is_the_bowl_it_should_be():
+    # A slab of one material is one square as wide as the window: finding
+    # where the front lies level must not look at every cell of it with
+    # every face (that ran out of memory), and the bowl is still right.
+    import math
+
+    from shapely.geometry import Point
+
+    S = 256
+    fine = np.full((1, S, S), 1, np.uint8)
+    state = fine_state(fine, 1, [0.0, 0.5])
+    before = state.volume("Si")
+    R, r = 0.15, 0.12
+    opening = voxel.rasterize(state, Point(0.5, 0.5).buffer(R, quad_segs=64))
+    voxel.etch_isotropic(state, {"Si": 1.0}, r, opening, dz=0.01, fine_z=0.01)
+    state.check()
+    exact = math.pi * R * R * r + math.pi**2 * R * r * r / 2 + 2 / 3 * math.pi * r**3
+    assert before - state.volume("Si") == pytest.approx(exact, rel=0.02)
+
+
+@pytest.mark.parametrize("fraction", [0.0, 1.0])
+def test_a_stop_is_honoured_inside_an_etch(fraction):
+    from shapely.geometry import Point
+
+    from process_studio.worker.errors import Cancelled
+
+    B, size = 4, 16
+    fine = np.zeros((2, B * size, B * size), np.uint8)
+    fine[0], fine[1] = 1, 2
+    state = fine_state(fine, B, [0.0, 0.2, 0.4])
+    opening = voxel.rasterize(state, Point(0.5, 0.5).buffer(0.2))
+    with pytest.raises(Cancelled):
+        if fraction == 0.0:
+            voxel.etch_isotropic(state, {"SiO2": 1.0}, 0.1, opening, should_cancel=lambda: True)
+        else:
+            voxel.etch_vertical(state, {"SiO2": 1.0}, 0.1, opening, should_cancel=lambda: True)

@@ -1289,7 +1289,9 @@ export function Workspace({
       ]);
     } catch (reason) {
       const message = errorMessage(reason);
-      const stopped = /cancelled|Stopped before/i.test(message);
+      // "Stopped before <step>" between steps, "Stopped during ..." when a
+      // kernel gives up inside one: both are a stop, not a failure.
+      const stopped = /cancelled|stopped (before|during)/i.test(message);
       const failed = stopped ? undefined : runningStepId.current;
       // Whatever finished before the failure is stored; the worker's own
       // statuses say which steps those are.
@@ -1549,7 +1551,7 @@ export function Workspace({
         busy={busy}
         error={homeError}
         kernels={capabilities?.kernels ?? []}
-        defaultKernel={capabilities?.defaultKernel ?? "levelset"}
+        defaultKernel={capabilities?.defaultKernel ?? ""}
         recent={recent}
         onCreate={handleCreate}
         onOpen={handleOpen}
