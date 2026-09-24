@@ -120,6 +120,21 @@ def test_the_updater_script_waits_copies_and_restarts(tmp_path, monkeypatch):
     assert f"mv '{bundle}.previous' '{bundle}'" in script
 
 
+def test_the_updater_restarts_the_application_not_the_uninstaller(tmp_path, monkeypatch):
+    # an installed copy holds the installer's uninstall.exe beside the app
+    app = tmp_path / "Process Studio"
+    app.mkdir()
+    (app / "uninstall.exe").write_bytes(b"")
+    (app / "ProcessStudio.exe").write_bytes(b"")
+    staged = tmp_path / "work" / "unpacked"
+    staged.mkdir(parents=True)
+    monkeypatch.setattr(update.sys, "platform", "win32")
+    update.write_updater(app, staged, [11])
+    script = (tmp_path / "process-studio-update.cmd").read_text()
+    assert f'start "" "{app / "ProcessStudio.exe"}"' in script
+    assert "uninstall.exe" not in script
+
+
 def test_installing_needs_a_packaged_application_and_the_repository_url():
     with pytest.raises(WorkerError, match="source checkout"):
         update.install_update("https://github.com/lisiyuan2005/process-studio/releases/download/v1/x.zip")

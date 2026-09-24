@@ -70,18 +70,30 @@ jobs:
         run: ./scripts/build_desktop.ps1
 
       # The executable resolves its worker under <exe dir>/resources, so the
-      # artifact carries that directory next to the binary.
+      # folder build carries that directory next to the binary (the in-app
+      # updater installs from it). The installer is one file holding both.
       - name: Collect the application
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path release/ProcessStudio | Out-Null
-          Copy-Item desktop/src-tauri/target/release/process-studio-desktop.exe release/ProcessStudio/ProcessStudio.exe
+          $Exe = "desktop/src-tauri/target/release/ProcessStudio.exe"
+          if (-not (Test-Path $Exe)) { $Exe = "desktop/src-tauri/target/release/process-studio-desktop.exe" }
+          Copy-Item $Exe release/ProcessStudio/ProcessStudio.exe
           Copy-Item desktop/src-tauri/resources release/ProcessStudio/resources -Recurse
+          New-Item -ItemType Directory -Force -Path release/setup | Out-Null
+          $Setup = Get-ChildItem desktop/src-tauri/target/release/bundle/nsis -Filter "*-setup.exe" | Select-Object -First 1
+          Copy-Item $Setup.FullName release/setup/ProcessStudio-Setup.exe
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT }}
           path: release/ProcessStudio
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ProcessStudio-Windows-Setup
+          path: release/setup/ProcessStudio-Setup.exe
           if-no-files-found: error
 
   macos:
@@ -175,6 +187,9 @@ jobs:
           mkdir -p release
           if [ -d "artifacts/ProcessStudio-Windows" ]; then
             (cd artifacts/ProcessStudio-Windows && zip -qr ../../release/ProcessStudio-Windows.zip .)
+          fi
+          if [ -d "artifacts/ProcessStudio-Windows-Setup" ]; then
+            cp artifacts/ProcessStudio-Windows-Setup/ProcessStudio-Setup.exe release/
           fi
           if [ -d "artifacts/ProcessStudio-macOS" ]; then
             find artifacts/ProcessStudio-macOS \( -name '*.zip' -o -name '*.dmg' \) -exec cp {} release/ \;

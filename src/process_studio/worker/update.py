@@ -267,7 +267,10 @@ def write_updater(app: Path, staged: Path, wait_for: list[int]) -> tuple[list[st
     log = app.parent / "process-studio-update.log"
     if sys.platform.startswith("win"):
         script = app.parent / "process-studio-update.cmd"
-        exe = next(app.glob("*.exe"), app / "ProcessStudio.exe")
+        # an installed copy also holds the installer's uninstall.exe
+        exe = app / "ProcessStudio.exe"
+        if not exe.is_file():
+            exe = next((p for p in app.glob("*.exe") if p.name.lower() != "uninstall.exe"), exe)
         # The updater is started detached and with no console, so `timeout`
         # is not available to it: without a console it fails at once with
         # "input redirection is not supported", which turned every wait

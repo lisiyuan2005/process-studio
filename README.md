@@ -36,14 +36,15 @@ npm run tauri dev
 
 ### 桌面安装产物
 
-发布版本就是 Tauri 外壳，只提供应用本身，不做安装程序。`Desktop builds` GitHub Actions 在推送 `v*` tag 或手动触发时构建，产出：
+发布版本就是 Tauri 外壳。`Desktop builds` GitHub Actions 在推送 `v*` tag 或手动触发时构建，产出：
 
 | 产物 | 内容 |
 | --- | --- |
-| `ProcessStudio-Windows.zip` | `ProcessStudio.exe` 与同级的 `resources/` |
+| `ProcessStudio-Setup.exe` | Windows 安装程序，单个文件：双击装到当前用户目录（`%LOCALAPPDATA%`，不需要管理员），带开始菜单和卸载 |
+| `ProcessStudio-Windows.zip` | 免安装版：`ProcessStudio.exe` 与同级的 `resources/`；应用内「检查更新」也装这个 |
 | `ProcessStudio-macOS.zip` | `Process Studio.app`（同时出一个 DMG） |
 
-Windows 产物必须整个目录一起用：exe 会在自己同级的 `resources/worker` 下找 worker，单独拷出 exe 无法运行。
+Windows 免安装版必须整个目录一起用：exe 会在自己同级的 `resources/python` 下找 worker，单独拷出 exe 无法运行。安装程序装好后是同样的目录结构，所以应用内更新对两种装法都适用。
 
 **版本号从 `0.9.8` 重置成 `0.1.0`**：只剩一个内核、一个版本，从这里重新数。应用里的「检查更新」按"最新 release 和当前构建不一样"判断，不是按"更大"，所以 `0.9.8` 的用户照样会被告知 `0.1.0` 可装。
 

@@ -7,11 +7,22 @@ $Product = "Process Studio"
 $Identifier = "com.processstudio.desktop"
 New-Item -ItemType Directory -Force -Path (Join-Path $ProjectRoot "work") | Out-Null
 $VariantConfig = Join-Path $ProjectRoot "work/tauri-variant.json"
+# The executable keeps the name the folder build and the updater use, and
+# the installer carries the embeddable Python as resources\python beside it
+# (the resource directory is the install directory on Windows), so an
+# installed copy has the same layout as the unpacked folder. Per-user: the
+# in-app updater copies over the install directory, which must then be the
+# user's own to write.
 @{
   productName = $Product
   identifier = $Identifier
+  mainBinaryName = "ProcessStudio"
   app = @{ windows = @(@{ title = $Product; width = 1440; height = 900; minWidth = 720; minHeight = 600; resizable = $true; fullscreen = $false; center = $true }) }
-} | ConvertTo-Json -Depth 5 | Set-Content -Path $VariantConfig -Encoding UTF8
+  bundle = @{
+    resources = @{ "resources/python/" = "resources/python/" }
+    windows = @{ nsis = @{ installMode = "currentUser" } }
+  }
+} | ConvertTo-Json -Depth 6 | Set-Content -Path $VariantConfig -Encoding UTF8
 Write-Host "Building $Product"
 
 # The worker ships as an embeddable Python distribution with the package
@@ -151,7 +162,11 @@ Get-ChildItem -Path $PythonDir -Recurse -Directory -Filter "__pycache__" -ErrorA
 Set-Location (Join-Path $ProjectRoot "desktop")
 npm ci
 npm run test
-npm run tauri build -- --no-bundle --config $VariantConfig
+# The executable, and an installer (one setup .exe) that carries it with
+# its resources.
+npm run tauri build -- --bundles nsis --config $VariantConfig
 if ($LASTEXITCODE -ne 0) { throw "Tauri failed to build the desktop shell." }
+$Setup = Get-ChildItem -Path (Join-Path $ProjectRoot "desktop/src-tauri/target/release/bundle/nsis") -Filter "*-setup.exe" -ErrorAction SilentlyContinue
+if (-not $Setup) { throw "Tauri built no installer." }
 
-Write-Host "Built desktop/src-tauri/target/release/process-studio-desktop.exe"
+Write-Host "Built desktop/src-tauri/target/release/ProcessStudio.exe and $($Setup[0].Name)"
