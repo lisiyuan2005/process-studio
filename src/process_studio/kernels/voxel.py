@@ -1503,46 +1503,58 @@ def etch_isotropic(
     front = voxel_wet.arrival(state, table, float(budget), mask, live, should_cancel, step=step)
     del live
     L = state.n
-    z0, z1 = state.z[:-1].copy(), state.z[1:].copy()
-    everywhere = np.ones(L, dtype=bool)
-    # Where the front curves in a slab: it is not the same at the slab's
-    # top as at its bottom (a level front is cut exactly instead).
-    # each slab in as many layers as it takes to be no thicker than fine_z
-    layers = np.ones(L, dtype=np.int64)
+    # A level front is a slab boundary at its exact height.
+    source = state.split([float(h) for h in front.flat_heights]) if front.flat_heights.size else np.arange(L)
+    # Where the front curves inside a slab -- not the same at the slab's top
+    # as at its bottom -- the slab is cut into layers no thicker than
+    # fine_z; slabs thicker than the march's step the front crosses upright.
     if fine_z and fine_z < step:
+        z0, z1 = state.z[:-1].copy(), state.z[1:].copy()
         layers = np.maximum(1, np.ceil((z1 - z0) / float(fine_z) - 1e-9)).astype(np.int64)
-        layers[(z1 - z0) > step * (1 + 1e-9)] = 1  # thicker slabs the front crosses upright
-    cuts = [float(h) for h in front.flat_heights]
-    if (layers > 1).any():
-        half = 0.5 * (z1 - z0) / layers
-        top = front.place(z1 - half, everywhere, skip_flat=True)
-        bottom = front.place(z0 + half, everywhere, skip_flat=True)
-        curved = (top[0] != bottom[0]).any(axis=(1, 2))
-        curved[_unique(_differing(top[1:], bottom[1:], state.refine) // state.plane)] = True
-        for k in np.flatnonzero(curved & (layers > 1)):
-            cuts.extend(z0[k] + (z1[k] - z0[k]) * j / layers[k] for j in range(1, int(layers[k])))
-    source = state.split(cuts) if cuts else np.arange(L)
-    # Each new slab, placed at its middle, from the slab it was cut from.
-    first = np.searchsorted(source, np.arange(L), side="left")
-    count = np.bincount(source, minlength=L)
+        layers[(z1 - z0) > step * (1 + 1e-6)] = 1
+        maybe = np.flatnonzero(layers > 1)
+        if maybe.size:
+            half = 0.5 * (z1 - z0) / layers
+            curved = np.zeros(state.n, dtype=bool)
+            tops = dict(_placed(front, source[maybe], (z1 - half)[maybe], L))
+            for slab_index, (whole_b, keys_b, fine_b) in _placed(front, source[maybe], (z0 + half)[maybe], L):
+                whole_a, keys_a, fine_a = tops[slab_index]
+                k = maybe[slab_index]
+                curved[k] = (whole_a != whole_b).any() or _differing((keys_a, fine_a), (keys_b, fine_b), state.refine).size > 0
+            cuts = [z0[k] + (z1[k] - z0[k]) * j / layers[k] for k in np.flatnonzero(curved) for j in range(1, int(layers[k]))]
+            if cuts:
+                source = source[state.split(cuts)]
+    # Each slab placed at its middle, from the slab the march had.
     middles = 0.5 * (state.z[:-1] + state.z[1:])
-    B = state.refine
-    for r in range(int(count.max()) if count.size else 0):
-        subset = count > r
-        heights = np.where(subset, middles[np.minimum(first + r, state.n - 1)], 0.0)
-        whole, keys, fine = front.place(heights, subset)
-        for k in np.flatnonzero(subset):
-            target = first[k] + r
-            state.labels[target][whole[k]] = fill
+    for target, (whole, keys, fine) in _placed(front, source, middles, L):
+        state.labels[target][whole] = fill
         if keys.size:
-            k, cell = np.divmod(keys, state.plane)
-            new_keys = (first[k] + r) * state.plane + cell
-            order = np.argsort(new_keys, kind="stable")
-            new_keys, fine = new_keys[order], fine[order]
+            new_keys = target * state.plane + keys
             blocks = state.blocks(new_keys)
             blocks[fine] = fill
             state.store(new_keys, blocks)
     state.consolidate()
+
+
+def _placed(front, source, heights, L):
+    """The front placed for many slabs: slab i is placed at ``heights[i]``
+    with the march's slab ``source[i]``. Yields (i, (whole cells (ny, nx),
+    cells taken in part, their fine cells)), a few slabs of one march slab
+    at a time."""
+    order = np.argsort(source, kind="stable")
+    first = np.searchsorted(source[order], np.arange(L), side="left")
+    count = np.bincount(source, minlength=L)
+    for r in range(int(count.max()) if count.size else 0):
+        subset = count > r
+        pick = order[np.minimum(first + r, source.size - 1)]
+        at = np.where(subset, heights[pick], 0.0)
+        whole, keys, fine = front.place(at, subset)
+        k, cell = np.divmod(keys, whole.shape[1] * whole.shape[2])
+        order_k = np.argsort(k, kind="stable")
+        k, cell, fine = k[order_k], cell[order_k], fine[order_k]
+        for m in np.flatnonzero(subset):
+            lo, hi = np.searchsorted(k, m), np.searchsorted(k, m, side="right")
+            yield int(pick[m]), (whole[m], cell[lo:hi], fine[lo:hi])
 
 
 def _differing(a, b, refine):
