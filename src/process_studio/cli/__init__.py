@@ -553,6 +553,60 @@ def _write_png(payload: Mapping[str, Any], destination: Path) -> None:
     destination.write_bytes(base64.b64decode(payload["image"]))
 
 
+def _wants_svg(destination: Path) -> bool:
+    return destination.suffix.lower() == ".svg"
+
+
+# the app's picture background
+PICTURE_BACKGROUND = "#f7f9fc"
+
+
+def _path_data(shape: Mapping[str, Any], closed: bool) -> str:
+    """SVG path data for a shape's loops (closed) or lines (open)."""
+    import numpy as np
+
+    points = np.frombuffer(base64.b64decode(shape["points"]), dtype="<f4").reshape(-1, 2)
+    starts = [int(i) for i in np.frombuffer(base64.b64decode(shape["starts"]), dtype="<i4")] + [len(points)]
+    parts = []
+    for a, b in zip(starts[:-1], starts[1:]):
+        if b - a < 2:
+            continue
+        d = "M" + "L".join(f"{x:.4f} {y:.4f}" for x, y in points[a:b])
+        parts.append(d + ("Z" if closed else ""))
+    return "".join(parts)
+
+
+def _write_picture(payload: Mapping[str, Any], destination: Path) -> str:
+    """Write a section or top view: outlines to .svg, pixels to anything
+    else. Returns how it was written, for the report."""
+    if not _wants_svg(destination):
+        _write_png(payload, destination)
+        return f"{payload['width']}×{payload['height']} px"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    vector = payload.get("vector")
+    if not vector:
+        # a kernel without outlines: its picture, wrapped
+        width, height = payload["width"], payload["height"]
+        body = f'<image width="{width}" height="{height}" href="data:image/png;base64,{payload["image"]}"/>'
+    else:
+        width, height = vector["width"], vector["height"]
+        body = f'<rect width="{width}" height="{height}" fill="{PICTURE_BACKGROUND}"/>'
+        for shape in vector.get("shapes", []):
+            color = shape["color"]
+            body += (
+                f'<path d="{_path_data(shape, True)}" fill="{color}" fill-rule="evenodd"'
+                f' stroke="{color}" stroke-width="0.6" stroke-linejoin="round"><title>{shape["material"]}</title></path>'
+            )
+        for line in vector.get("lines", []):
+            body += f'<path d="{_path_data(line, False)}" fill="none" stroke="{line["color"]}" stroke-width="1.5"/>'
+    destination.write_text(
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
+        f"{body}</svg>\n",
+        encoding="utf-8",
+    )
+    return "vector outlines" if vector else f"{width}×{height} px, no outlines"
+
+
 def _named_line(document: Mapping[str, Any], reference: str) -> dict[str, Any]:
     lines = document["project"].get("sectionLines", [])
     wanted = reference.strip().lower()
@@ -598,14 +652,16 @@ def cmd_view_section(session: Session, args: argparse.Namespace) -> int:
         request["axis"] = args.axis
         if args.at is not None:
             request["position"] = args.at
-    payload = session.call("get_section", root=str(session.root), **request)
     destination = Path(args.output)
-    _write_png(payload, destination)
+    if _wants_svg(destination):
+        request["vector"] = True
+    payload = session.call("get_section", root=str(session.root), **request)
+    written = _write_picture(payload, destination)
     extent = payload["extent"]
     session.emit(
-        {key: value for key, value in payload.items() if key != "image"} | {"path": str(destination)},
+        {key: value for key, value in payload.items() if key not in ("image", "vector")} | {"path": str(destination)},
         [
-            f"Wrote {destination} ({payload['width']}×{payload['height']} px)",
+            f"Wrote {destination} ({written})",
             f"Cut along {payload['axis']} at {format_number(payload['position'])} µm; "
             f"{payload.get('horizontalAxis', 'h')} {format_number(extent['horizontalMin'])}..{format_number(extent['horizontalMax'])}, "
             f"z {format_number(extent['verticalMin'])}..{format_number(extent['verticalMax'])} µm",
@@ -618,15 +674,15 @@ def cmd_view_top(session: Session, args: argparse.Namespace) -> int:
     document = session.document()
     branch = Session.branch(document)
     step_id = step_reference(session, document, args.step)
+    destination = Path(args.output)
     payload = session.call(
         "get_top_view", root=str(session.root), branchId=branch["id"], stepId=step_id,
-        steps=not args.no_steps,
+        steps=not args.no_steps, vector=_wants_svg(destination),
     )
-    destination = Path(args.output)
-    _write_png(payload, destination)
+    written = _write_picture(payload, destination)
     session.emit(
-        {key: value for key, value in payload.items() if key != "image"} | {"path": str(destination)},
-        [f"Wrote {destination} ({payload['width']}×{payload['height']} px)"],
+        {key: value for key, value in payload.items() if key not in ("image", "vector")} | {"path": str(destination)},
+        [f"Wrote {destination} ({written})"],
     )
     return EXIT_OK
 
@@ -1074,7 +1130,11 @@ def _step_options(parser: argparse.ArgumentParser) -> None:
 
 def _view_step(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--step", help="a step number or name; 0 is the bare wafer; default: the last step")
-    parser.add_argument("-o", "--output", required=True, help="the file to write")
+    parser.add_argument(
+        "-o", "--output", required=True,
+        help="the file to write; a section or top view is outlines as .svg and pixels as .png, "
+        "a mesh takes its format from the extension",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:

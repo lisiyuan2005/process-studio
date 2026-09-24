@@ -124,6 +124,14 @@ def test_run_reports_progress_and_the_views_write_files(workspace: Path, tmp_pat
     assert top.stat().st_size > 0
     wafer = tmp_path / "wafer.png"
     assert run("view", "top", "--step", "0", "-o", str(wafer), root=workspace)[0] == EXIT_OK
+    # .svg: the outlines themselves, one filled path per material
+    outline = tmp_path / "cut.svg"
+    result = as_json("view", "section", "--axis", "x", "--at", "0.1", "-o", str(outline), root=workspace)
+    assert "vector" not in result and "image" not in result
+    text = outline.read_text()
+    assert text.startswith("<svg") and "<title>Si</title>" in text and "<title>Al2O3</title>" in text
+    assert run("view", "top", "-o", str(tmp_path / "top.svg"), root=workspace)[0] == EXIT_OK
+    assert (tmp_path / "top.svg").read_text().startswith("<svg")
     mesh = tmp_path / "mesh.glb"
     result = as_json("view", "mesh", "-o", str(mesh), root=workspace)
     assert set(result["triangles"]) == {"Si", "Al2O3"}

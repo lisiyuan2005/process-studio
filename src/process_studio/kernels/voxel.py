@@ -2931,7 +2931,10 @@ def _top_field(state: VoxelState, hidden_ids: set[int]):
         other.reshape(-1)[flat] = under
         h_right.reshape(-1)[flat] = under_h
     # no cut left where nothing differs across it
-    none = (code > 0) & (other == lab) & (np.abs(h_left - h_right) <= Z_EPS)
+    # (open to the bottom on both sides is the same height too: -inf)
+    with np.errstate(invalid="ignore"):
+        level = (h_left == h_right) | (np.abs(h_left - h_right) <= Z_EPS)
+    none = (code > 0) & (other == lab) & level
     code[none] = 0
     return coarse, height, cells, lab, code, other, h_left, h_right
 
