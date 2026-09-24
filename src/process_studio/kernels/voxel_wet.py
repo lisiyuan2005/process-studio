@@ -961,7 +961,7 @@ def arrival(
                         np.minimum.at(best, which, tt)
                         taken[cells[best <= budget]] = True
                 taken_fine[first : first + part.size] = taken.reshape(-1, B, B)
-            keep = taken_fine.reshape(bricks_here.size, -1).any(axis=1)
+            keep = taken_fine.reshape(bricks_here.size, B * B).any(axis=1)
             out_keys.append(rkeys[bricks_here[keep]])
             out_blocks.append(taken_fine[keep])
         keys = np.concatenate(out_keys) if out_keys else np.zeros(0, np.int64)

@@ -1488,12 +1488,14 @@ def etch_isotropic(
     step = max(float(dz or 0.0), state.cell)
     mask = _as_mask(state, opening)
     reach = float(budget) * float(table.max()) + step
-    planes = []
+    # One grid of planes for every bend, so the cuts near two boundaries
+    # line up instead of leaving slivers between them.
+    planes = set()
     for zb in _curving(state, table, live, mask):
-        count = math.ceil(reach / step)
-        planes.extend(zb + j * step for j in range(-count, count + 1) if j)
+        lo, hi = math.floor((zb - reach) / step), math.ceil((zb + reach) / step)
+        planes.update(j * step for j in range(lo, hi + 1))
     lows, highs = state.z[:-1][holding], state.z[1:][holding]
-    planes = [p for p in planes if ((lows < p) & (p < highs)).any()]
+    planes = [p for p in sorted(planes) if ((lows < p) & (p < highs)).any()]
     source = state.split(planes)
     live._reslab(np.concatenate([source, [live.n - 1]]))
     from . import voxel_wet
@@ -1505,18 +1507,20 @@ def etch_isotropic(
     everywhere = np.ones(L, dtype=bool)
     # Where the front curves in a slab: it is not the same at the slab's
     # top as at its bottom (a level front is cut exactly instead).
-    layers = 1
+    # each slab in as many layers as it takes to be no thicker than fine_z
+    layers = np.ones(L, dtype=np.int64)
     if fine_z and fine_z < step:
-        layers = 2 ** math.ceil(math.log2(step / float(fine_z) - 1e-9))
+        layers = np.maximum(1, np.ceil((z1 - z0) / float(fine_z) - 1e-9)).astype(np.int64)
+        layers[(z1 - z0) > step * (1 + 1e-9)] = 1  # thicker slabs the front crosses upright
     cuts = [float(h) for h in front.flat_heights]
-    if layers > 1:
+    if (layers > 1).any():
         half = 0.5 * (z1 - z0) / layers
         top = front.place(z1 - half, everywhere, skip_flat=True)
         bottom = front.place(z0 + half, everywhere, skip_flat=True)
         curved = (top[0] != bottom[0]).any(axis=(1, 2))
         curved[_unique(_differing(top[1:], bottom[1:], state.refine) // state.plane)] = True
-        for k in np.flatnonzero(curved):
-            cuts.extend(z0[k] + (z1[k] - z0[k]) * j / layers for j in range(1, layers))
+        for k in np.flatnonzero(curved & (layers > 1)):
+            cuts.extend(z0[k] + (z1[k] - z0[k]) * j / layers[k] for j in range(1, int(layers[k])))
     source = state.split(cuts) if cuts else np.arange(L)
     # Each new slab, placed at its middle, from the slab it was cut from.
     first = np.searchsorted(source, np.arange(L), side="left")

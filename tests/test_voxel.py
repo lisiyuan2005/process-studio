@@ -820,7 +820,8 @@ def test_a_curved_front_is_placed_at_the_fine_z_step():
     voxel.etch_isotropic(state, {"SiO2": 1.0}, 0.12, opening, dz=state.cell, fine_z=fz)
     state.check()
     thick = np.diff(state.z)
-    assert thick[state.z[:-1] >= 0.38 - 1e-9].max() <= fz * (1 + 1e-6)  # thin where it curves
+    # thin where it curves (equal neighbours merge where the wall is near upright)
+    assert (thick[state.z[:-1] >= 0.38 - 1e-9] <= fz * (1 + 1e-6)).sum() >= 8
     assert thick[(state.z[:-1] < 0.38 - 1e-9) & (state.z[:-1] >= 0.2)].min() > 0.1  # whole below
     f = state.fine
     centres = (np.arange(S) + 0.5) * f
@@ -851,3 +852,36 @@ def test_equal_bricks_are_stored_once():
     flipped.check()
     assert flipped.n == 1 and np.array_equal(flipped.to_fine()[0], fine[0][:, ::-1])
     assert len(state.pool) == 1  # the copy shared the pool and did not write it
+
+
+def test_longer_etches_take_more_and_keep_what_shorter_ones_took():
+    # A stack with a barrier and a sealed cavity under a round opening, etched
+    # for longer and longer (the frames of an animation).
+    from shapely.geometry import Point
+
+    B, n = 4, 32
+    S = n * B
+    centres = (np.arange(S) + 0.5) / S
+    X, Y = np.meshgrid(centres, centres)
+    lower = np.full((S, S), 2, np.uint8)
+    lower[(X >= 0.34) & (X < 0.36)] = 4
+    cavity = np.full((S, S), 2, np.uint8)
+    cavity[(X >= 0.66) & (X < 0.78) & (Y >= 0.40) & (Y < 0.60)] = voxel.VOID
+    fine = np.stack([np.full((S, S), 1, np.uint8), lower, np.full((S, S), 3, np.uint8),
+                     np.full((S, S), 2, np.uint8), cavity, np.full((S, S), 2, np.uint8)])
+    start = fine_state(fine, B, [0.0, 0.20, 0.32, 0.34, 0.40, 0.48, 0.56])
+    before = None
+    for budget in (0.005, 0.05, 0.15, 0.3):
+        state = start.copy()
+        opening = voxel.rasterize(state, Point(0.5, 0.5).buffer(0.06, quad_segs=32))
+        voxel.etch_isotropic(state, {"SiO2": 1.0, "SiN": 0.3}, budget, opening, dz=state.cell, fine_z=state.cell / 4)
+        state.check()
+        # thin slabs at the fine z step where the front curves, not slivers of them
+        assert state.n < 2 * (0.56 - 0.2) / (state.cell / 4)
+        heights = np.linspace(0.001, 0.559, 280)
+        k = np.searchsorted(state.z, heights) - 1
+        void = np.stack([state.to_fine()[kk] == voxel.VOID for kk in k])
+        if before is not None:
+            assert (void | ~before).all() and void.sum() > before.sum()
+        before = void
+        assert state.volume("TiN") == start.volume("TiN")
