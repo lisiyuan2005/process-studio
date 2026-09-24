@@ -91,12 +91,14 @@ class Faces:
 
 class Front:
     """Where the etchant got to: ``place(heights, slabs)`` says what is
-    taken at a height in each slab, and ``flat_heights`` are the exact
+    taken at a height in each slab, ``at(height, slab, x, y)`` whether any
+    points of a slab at a height are, and ``flat_heights`` are the exact
     heights of fronts that lie level (to cut slabs at)."""
 
-    def __init__(self, place, flat_heights) -> None:
+    def __init__(self, place, flat_heights, at=None) -> None:
         self.place = place
         self.flat_heights = flat_heights
+        self.at = at
 
 
 def _graded_squares(code):
@@ -1241,6 +1243,8 @@ def arrival(
             view = target.reshape(target.shape[0], ny // size_, size_, nx // size_, size_)
             view[k[pick], y0[pick] // size_, :, x0[pick] // size_, :] = True
 
+    blocks_at: dict[tuple[int, float], tuple[np.ndarray, int, np.ndarray, np.ndarray]] = {}
+
     def place(heights, subset):
         """Where the front is at ``heights`` (one per slab), in the slabs
         ``subset``: (wholly taken plain cells (slabs, ny, nx), keys of the
@@ -1375,6 +1379,20 @@ def arrival(
                 parent = renum[p_b]
                 p_b = 4 * np.repeat(parent, 4) + np.tile(np.arange(4), parent.size)
                 p_f = np.repeat(p_f, 4)
+            # kept for asking points later: each block's slab, height, place and faces
+            if b_cell.size:
+                bk = k[b_cell]
+                block_key = ((bk * plane + cells_y[b_cell] * nx + cells_x[b_cell]) * B + b_y0) * B + b_x0
+                for kk in _unique(bk):
+                    mine = bk == kk
+                    order_b = np.argsort(block_key[mine], kind="stable")
+                    keys_k = block_key[mine][order_b]
+                    renum_b = np.full(b_cell.size, -1, np.int64)
+                    renum_b[np.flatnonzero(mine)[order_b]] = np.arange(keys_k.size)
+                    pair_here = renum_b[p_b] >= 0
+                    pb, pf = renum_b[p_b][pair_here], p_f[pair_here]
+                    order_p = np.argsort(pb, kind="stable")
+                    blocks_at[(int(kk), round(float(heights[kk]), 12))] = (keys_k, R, pb[order_p], pf[order_p])
             # fine rows of the blocks left, against their faces
             rows_b, fcs = p_b, p_f
             s_rows = slowness[nlab[node[b_cell]]][rows_b]
@@ -1467,7 +1485,98 @@ def arrival(
         # a cell painted whole and also cut in rows: the rows are the answer
         return out_whole, keys, blocks
 
-    return Front(place, flat_heights)
+    band_row_of = np.full(max(NL, 1), -1, dtype=np.int64)
+    band_row_of[band_ids] = np.arange(band_ids.size)
+
+    def nearest_time(rows, faces_by_row_rows, faces_by_row, points, sl):
+        """Earliest arrival at ``points`` over the faces of each point's row.
+
+        In two steps: for each fine cell the points are in, the arrival at
+        its centre over the row's faces, keeping only the faces that can be
+        the earliest somewhere in the cell (within twice its half-diagonal,
+        at the material's rate, of the earliest at the centre); then each
+        point against those."""
+        out = np.full(rows.size, np.inf)
+        if rows.size == 0:
+            return out
+        gx = np.floor((points[:, 0] - x_min) / fx).astype(np.int64)
+        gy = np.floor((points[:, 1] - y_min) / fy).astype(np.int64)
+        key = (rows * (ny * B + 1) + gy) * (nx * B + 1) + gx
+        cells_, first_, back = _unique(key, return_index=True, return_inverse=True)
+        c_rows = rows[first_]
+        centre = np.stack([x_min + (gx[first_] + 0.5) * fx, y_min + (gy[first_] + 0.5) * fy, points[first_, 2]], 1)
+        c_sl = sl[first_]
+        lo = np.searchsorted(faces_by_row_rows, c_rows, side="left")
+        many = np.searchsorted(faces_by_row_rows, c_rows, side="right") - lo
+        which = np.repeat(np.arange(cells_.size), many)
+        idx = np.arange(which.size) - np.repeat(np.cumsum(many) - many, many) + np.repeat(lo, many)
+        f = faces_by_row[idx]
+        t = faces.time[f] + c_sl[which] * faces.distance(f, centre[which])
+        best = np.full(cells_.size, np.inf)
+        np.minimum.at(best, which, t)
+        slack = 2.0 * math.hypot(0.5 * fx, 0.5 * fy) * c_sl
+        keep = t <= best[which] + slack[which] * (1 + 1e-9) + 1e-12
+        kc, kf = which[keep], f[keep]
+        order = np.argsort(kc, kind="stable")
+        kc, kf = kc[order], kf[order]
+        lo2 = np.searchsorted(kc, back, side="left")
+        many2 = np.searchsorted(kc, back, side="right") - lo2
+        which2 = np.repeat(np.arange(rows.size), many2)
+        idx2 = np.arange(which2.size) - np.repeat(np.cumsum(many2) - many2, many2) + np.repeat(lo2, many2)
+        f2 = kf[idx2]
+        t2 = faces.time[f2] + sl[which2] * faces.distance(f2, points[which2])
+        np.minimum.at(out, which2, t2)
+        return out
+
+    def at(height, k, x, y):
+        """Whether the etchant got to points (x, y) at ``height`` in slab ``k``
+        of the march: 1 yes, 0 no, -1 where placing that slab at that height
+        settled the point's whole fine cell (ask what it wrote there)."""
+        x = np.asarray(x, dtype=np.float64).reshape(-1)
+        y = np.asarray(y, dtype=np.float64).reshape(-1)
+        out = np.full(x.size, -1, dtype=np.int8)
+        gx = np.clip(np.floor((x - x_min) / fx).astype(np.int64), 0, nx * B - 1)
+        gy = np.clip(np.floor((y - y_min) / fy).astype(np.int64), 0, ny * B - 1)
+        key = k * plane + (gy // B) * nx + gx // B
+        kc = kind_flat[key]
+        points = np.stack([x, y, np.full(x.size, float(height))], 1)
+        plain = np.flatnonzero(kc == ETCHABLE)
+        found = blocks_at.get((int(k), round(float(height), 12)))
+        if plain.size and found is not None:
+            keys_k, R_, pb, pf = found
+            by, bx = gy[plain] % B, gx[plain] % B
+            block = ((key[plain]) * B + (by // R_) * R_) * B + (bx // R_) * R_
+            at_ = np.minimum(np.searchsorted(keys_k, block), max(keys_k.size - 1, 0))
+            hit = keys_k.size > 0
+            hit = (keys_k[at_] == block) if hit else np.zeros(plain.size, dtype=bool)
+            ask = plain[hit]
+            if ask.size:
+                row = at_[hit]
+                lo = np.searchsorted(pb, row, side="left")
+                many = np.searchsorted(pb, row, side="right") - lo
+                which = np.repeat(np.arange(ask.size), many)
+                idx = np.arange(which.size) - np.repeat(np.cumsum(many) - many, many) + np.repeat(lo, many)
+                f = pf[idx]
+                node = owner_flat[key[ask]].astype(np.int64)
+                t = faces.time[f] + slowness[nlab[node]][which] * faces.distance(f, points[ask][which])
+                best = np.full(ask.size, np.inf)
+                np.minimum.at(best, which, t)
+                out[ask] = (best <= budget).astype(np.int8)
+        ref = np.flatnonzero(kc == REFINED)
+        if ref.size and pieces:
+            at_, hit = refined_at(key[ref])
+            pn = np.where(hit, fnode[at_, gy[ref] % B, gx[ref] % B], -1).astype(np.int64)
+            ok = pn >= 0
+            ref, piece = ref[ok], pn[ok] - NL
+            out[ref] = whole_piece[piece].astype(np.int8)
+            row = piece_row[piece]
+            ask = (row >= 0) & ~whole_piece[piece]
+            if ask.any():
+                t = nearest_time(row[ask], piece_rows, piece_faces, points[ref[ask]], slowness[piece_label[piece[ask]]])
+                out[ref[ask]] = (t <= budget).astype(np.int8)
+        return out
+
+    return Front(place, flat_heights, at)
 
 
 def _box_gap(lo_a, hi_a, lo_b, hi_b):

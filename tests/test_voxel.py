@@ -140,7 +140,7 @@ def test_a_sidewall_film_thinner_than_a_cell_is_kept_one_cell_thick():
     state = trench_state()
     voxel.deposit(state, "TiN", 0.002, planar=False)
     k = int(np.searchsorted(state.z, 0.3)) - 1
-    row = state.labels[k][50]
+    row = state.to_fine()[k][50 * state.refine]
     tin = label(state, "TiN")
     assert row[35] == tin and row[36] == voxel.VOID
 
@@ -923,3 +923,104 @@ def test_a_stop_is_honoured_inside_an_etch(fraction):
             voxel.etch_isotropic(state, {"SiO2": 1.0}, 0.1, opening, should_cancel=lambda: True)
         else:
             voxel.etch_vertical(state, {"SiO2": 1.0}, 0.1, opening, should_cancel=lambda: True)
+
+
+def _round_hole(B=4, size=32, R=0.3):
+    from shapely.geometry import Point
+
+    S = B * size
+    fine = np.zeros((2, S, S), np.uint8)
+    fine[0], fine[1] = 1, 2
+    state = fine_state(fine, B, [0.0, 0.2, 0.4])
+    voxel.etch_vertical(state, {"SiO2": 1.0}, 1.0, voxel.rasterize(state, Point(0.5, 0.5).buffer(R, quad_segs=256)))
+    return state
+
+
+def test_a_round_hole_is_drawn_with_cuts_that_follow_the_circle():
+    from process_studio.kernels import voxel_cut
+
+    R = 0.3
+    state = _round_hole(R=R)
+    state.check()
+    k = state.n - 1
+    cuts = state.to_fine_cuts()[k]
+    yy, xx = np.nonzero(cuts)
+    assert yy.size > 50
+    code = voxel_cut.code_of(cuts[yy, xx])
+    assert np.unique(code).size > 8  # not only the axis lines
+    a, b = voxel_cut.START[code], voxel_cut.END[code]
+    f = state.fine
+    for t in np.linspace(0.0, 1.0, 5):
+        px = (xx + voxel_cut.ANCHORS[a, 0] * (1 - t) + voxel_cut.ANCHORS[b, 0] * t) * f
+        py = (yy + voxel_cut.ANCHORS[a, 1] * (1 - t) + voxel_cut.ANCHORS[b, 1] * t) * f
+        assert np.abs(np.hypot(px - 0.5, py - 0.5) - R).max() < 0.3 * f
+    hole = 0.2 - state.volume("SiO2") / 1.0
+    assert hole / 0.2 == pytest.approx(np.pi * R * R, rel=2e-3)
+
+
+def test_a_cut_state_meshes_closed_and_conforming_and_survives_storage(tmp_path):
+    state = _round_hole()
+    _mesh_checks(state)
+    path = tmp_path / "cut.dfz"
+    state.save(path)
+    back = voxel.VoxelState.load(path)
+    back.check()
+    assert np.array_equal(back.to_fine_cuts(), state.to_fine_cuts())
+    assert back.volume("SiO2") == pytest.approx(state.volume("SiO2"))
+
+
+@pytest.mark.parametrize("axis", ["x", "y"])
+def test_a_flip_mirrors_the_cuts(axis):
+    state = _round_hole(R=0.27)
+    # off centre, so a mirror is not the same state
+    from shapely.geometry import Point
+
+    voxel.etch_vertical(state, {"SiO2": 1.0}, 1.0, voxel.rasterize(state, Point(0.2, 0.25).buffer(0.1, quad_segs=128)))
+    before = state.volume("SiO2")
+    points = np.random.default_rng(5).random((2, 4000))
+    k = state.n - 1
+    was = state.sample(k, points[0], points[1])
+    voxel.flip(state, axis)
+    state.check()
+    assert state.volume("SiO2") == pytest.approx(before)
+    mx, my = (1.0 - points[0], points[1]) if axis == "y" else (points[0], 1.0 - points[1])
+    now = state.sample(0, mx, my)  # the top slab is now the bottom one
+    assert (now == was).mean() > 0.999
+
+
+def _outline_area(picture, name):
+    vec = picture["vector"]
+    extent = picture["extent"]
+    sx = (extent["horizontalMax"] - extent["horizontalMin"]) / vec["width"]
+    sy = (extent["verticalMax"] - extent["verticalMin"]) / vec["height"]
+    total = 0.0
+    for shape in vec["shapes"]:
+        if shape["material"] != name:
+            continue
+        points = np.frombuffer(base64.b64decode(shape["points"]), np.float32).reshape(-1, 2).astype(float)
+        starts = list(np.frombuffer(base64.b64decode(shape["starts"]), np.int32)) + [len(points)]
+        for a, b in zip(starts[:-1], starts[1:]):
+            x, y = points[a:b, 0] * sx, points[a:b, 1] * sy
+            total += 0.5 * (np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
+    return abs(total)
+
+
+def test_the_pictures_are_outlines_that_hold_what_the_state_holds():
+    state = _round_hole(R=0.3)
+    k = state.n - 1
+    thick = state.z[k + 1] - state.z[k]
+    top = voxel.top_view(state, {}, _rgb, vector=True)
+    assert top["image"] == ""
+    # SiO2 around the hole, Si seen through it: exactly the cut cells' shares
+    assert _outline_area(top, "SiO2") == pytest.approx(state.volume("SiO2") / thick, rel=1e-6)
+    assert _outline_area(top, "Si") == pytest.approx(1.0 - state.volume("SiO2") / thick, rel=1e-6)
+    for kwargs in ({"axis": "y", "position": 0.5}, {"axis": "x", "position": 0.37}):
+        section = voxel.section(state, {}, _rgb, z_max=0.5, vector=True, **kwargs)
+        assert section["image"] == ""
+        assert _outline_area(section, "Si") == pytest.approx(0.2, rel=1e-6)
+        # the hole's chord through SiO2 at the cut
+        coord = kwargs["position"]
+        chord = 2 * np.sqrt(0.3**2 - (coord - 0.5) ** 2)
+        assert _outline_area(section, "SiO2") == pytest.approx(0.2 * (1.0 - chord), abs=0.2 * 2 * state.fine)
+    line = voxel.section(state, {}, _rgb, z_max=0.5, vector=True, line=((0.0, 0.5), (1.0, 0.5)))
+    assert _outline_area(line, "Si") == pytest.approx(0.2, rel=1e-3)

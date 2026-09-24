@@ -1172,17 +1172,18 @@ class SlabKernel:
         position: float | None = None,
         interpolation: int = 1,
         line: tuple[tuple[float, float], tuple[float, float]] | None = None,
+        vector: bool = False,
     ) -> dict[str, Any]:
         if isinstance(state, _voxel().VoxelState):
             return _voxel().section(
                 state, colors, _rgb, z_max=float(project.grid["z_max"]), axis=axis,
-                position=position, line=line, interpolation=interpolation,
+                position=position, line=line, interpolation=interpolation, vector=vector,
             )
         device = state.device
         x_min, y_min, x_max, y_max = device.bounds
         if line is not None:
             return self._line_section(
-                state, colors, project=project, line=line, interpolation=interpolation
+                state, colors, project=project, line=line, interpolation=interpolation, vector=vector
             )
         if axis == "y":
             coordinates = np.linspace(y_min, y_max, SECTION_POSITIONS)
@@ -1214,6 +1215,28 @@ class SlabKernel:
             for rings, name in _section_shapes(section, state.z_offset)
         ]
         pixels_per_um = _pixels_per_um(extent, interpolation)
+        if vector:
+            outline, width, height = _vector(shapes, [], colors, extent)
+            return {
+                "image": "",
+                "vector": outline,
+                "axis": axis,
+                "position": cut,
+                "index": index,
+                "interpolation": interpolation,
+                "sampledSpacingUm": 1.0 / pixels_per_um,
+                "exact": True,
+                "width": width,
+                "height": height,
+                "horizontalAxis": horizontal_label,
+                "extent": {
+                    "horizontalMin": extent[0],
+                    "horizontalMax": extent[1],
+                    "verticalMin": extent[2],
+                    "verticalMax": extent[3],
+                },
+                "positions": [float(value) for value in coordinates],
+            }
         rgb = _raster(shapes, colors, extent, pixels_per_um)
         return {
             "image": _png(rgb),
@@ -1243,6 +1266,7 @@ class SlabKernel:
         project: ProjectDefinition,
         line: tuple[tuple[float, float], tuple[float, float]],
         interpolation: int,
+        vector: bool = False,
     ) -> dict[str, Any]:
         """The exact cut along any line: DeviceFlow sections are not axis-bound."""
         device = state.device
@@ -1259,17 +1283,22 @@ class SlabKernel:
             max(float(project.grid["z_max"]), top + state.z_offset),
         )
         pixels_per_um = _pixels_per_um(extent, interpolation)
-        rgb = _raster(_section_shapes(section, state.z_offset), colors, extent, pixels_per_um)
-        return {
-            "image": _png(rgb),
+        if vector:
+            outline, width, height = _vector(_section_shapes(section, state.z_offset), [], colors, extent)
+            image, width_px, height_px = "", width, height
+        else:
+            rgb = _raster(_section_shapes(section, state.z_offset), colors, extent, pixels_per_um)
+            outline, image, width_px, height_px = None, _png(rgb), int(rgb.shape[1]), int(rgb.shape[0])
+        result = {
+            "image": image,
             "axis": "line",
             "position": 0.0,
             "index": 0,
             "interpolation": interpolation,
             "sampledSpacingUm": 1.0 / pixels_per_um,
             "exact": True,
-            "width": int(rgb.shape[1]),
-            "height": int(rgb.shape[0]),
+            "width": width_px,
+            "height": height_px,
             "horizontalAxis": "s",
             "extent": {
                 "horizontalMin": 0.0,
@@ -1283,6 +1312,9 @@ class SlabKernel:
                 "end": [float(end[0]), float(end[1])],
             },
         }
+        if outline is not None:
+            result["vector"] = outline
+        return result
 
     def top_view(
         self,
@@ -1292,13 +1324,31 @@ class SlabKernel:
         project: ProjectDefinition,
         hidden: Sequence[str] = (),
         steps: bool = True,
+        vector: bool = False,
     ) -> dict[str, Any]:
         if isinstance(state, _voxel().VoxelState):
-            return _voxel().top_view(state, colors, _rgb, hidden=hidden, steps=steps)
+            return _voxel().top_view(state, colors, _rgb, hidden=hidden, steps=steps, vector=vector)
         device = state.device
         x_min, y_min, x_max, y_max = device.bounds
         extent = (x_min, x_max, y_min, y_max)
         top_view = device.top_view(hidden)
+        if vector:
+            outline, width, height = _vector(
+                _top_view_shapes(top_view), _step_lines(top_view) if steps else [], colors, extent
+            )
+            return {
+                "image": "",
+                "vector": outline,
+                "exact": True,
+                "width": width,
+                "height": height,
+                "extent": {
+                    "horizontalMin": x_min,
+                    "horizontalMax": x_max,
+                    "verticalMin": y_min,
+                    "verticalMax": y_max,
+                },
+            }
         rgb = _raster(_top_view_shapes(top_view), colors, extent, _pixels_per_um(extent, 1))
         if steps:
             # Colour says which material; the lines say where that material
@@ -1316,6 +1366,36 @@ class SlabKernel:
                 "verticalMax": y_max,
             },
         }
+
+
+def _vector(shapes, lines, colors, extent) -> tuple[dict, int, int]:
+    """Exact polygons (and step lines) as outlines in a picture frame of the
+    true shape: (payload, width, height)."""
+    from . import voxel_vector
+
+    h0, h1, v0, v1 = extent
+    span = max(h1 - h0, v1 - v0, 1e-12)
+    width = max(2, round(BASE_PIXELS * (h1 - h0) / span))
+    height = max(2, round(BASE_PIXELS * (v1 - v0) / span))
+
+    def as_loops(rings_list):
+        points, starts, at = [], [], 0
+        for rings in rings_list:
+            for ring in rings:
+                if len(ring) < 2:
+                    continue
+                starts.append(at)
+                points.extend(ring)
+                at += len(ring)
+        return np.asarray(points, dtype=np.float64).reshape(-1, 2), np.asarray(starts, dtype=np.int64)
+
+    fills = [(name, *as_loops([rings])) for rings, name in shapes if rings]
+    strokes = [(name, *as_loops([strands])) for strands, name in lines if strands]
+
+    def darker(color: str) -> str:
+        return "#%02x%02x%02x" % _darker(_rgb(color))
+
+    return voxel_vector.payload(fills, strokes, colors, extent, width, height, darker), width, height
 
 
 def _voxel():

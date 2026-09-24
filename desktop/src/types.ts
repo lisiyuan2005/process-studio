@@ -312,9 +312,28 @@ export interface SectionLine {
 
 export type SectionAxis = "x" | "y" | "line";
 
+/** One material's region (or step lines) as loops in the picture's frame. */
+export interface VectorShape {
+  material: string;
+  color: string;
+  /** Base64 float32 (x, y) pairs, x to the right and y down, in picture units. */
+  points: string;
+  /** Base64 int32: where each loop (or line) starts in `points`. */
+  starts: string;
+}
+
+/** A picture as outlines: filled even-odd in order, then the lines on top. */
+export interface VectorPicture {
+  width: number;
+  height: number;
+  shapes: VectorShape[];
+  lines: VectorShape[];
+}
+
 export interface SectionDocument {
-  /** Base64 PNG of the cut, already flipped so row zero is the top. */
+  /** Base64 PNG of the cut, already flipped so row zero is the top; empty when `vector` is sent. */
   image: string;
+  vector?: VectorPicture;
   axis: SectionAxis;
   position: number;
   index: number;
@@ -351,6 +370,7 @@ export type Triangulation = "ears" | "delaunay";
 
 export interface TopViewDocument {
   image: string;
+  vector?: VectorPicture;
   width: number;
   height: number;
   extent: ImageExtent;

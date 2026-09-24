@@ -1211,3 +1211,47 @@ def test_oxidation_refuses_to_oxidise_the_oxide_itself(kernel, project, sketches
                  material_responses={"SiO2": MaterialResponse("SiO2", 0.1)}),
             project, sketches, materials,
         )
+
+
+def test_the_pictures_can_be_outlines(kernel, project, sketches):
+    """Asked for outlines, the section and the top view send each material's
+    loops instead of a PNG, and a loop's area is the material's."""
+    import base64
+
+    materials = default_materials()
+    state = kernel.initial_state(project, materials=materials)
+    trenched = run(
+        kernel,
+        state,
+        step(
+            ProcessType.ETCH,
+            mask_source="quick_sketch",
+            parameters={"target": 0.3, "directional_fraction": 1.0, "sketch_id": "default"},
+            material_responses={"Si": MaterialResponse("Si", 0.1)},
+        ),
+        project, sketches, materials,
+    )
+
+    def area(picture, name):
+        vec = picture["vector"]
+        extent = picture["extent"]
+        sx = (extent["horizontalMax"] - extent["horizontalMin"]) / vec["width"]
+        sy = (extent["verticalMax"] - extent["verticalMin"]) / vec["height"]
+        total = 0.0
+        for shape in vec["shapes"]:
+            if shape["material"] != name:
+                continue
+            points = np.frombuffer(base64.b64decode(shape["points"]), np.float32).reshape(-1, 2).astype(float)
+            starts = list(np.frombuffer(base64.b64decode(shape["starts"]), np.int32)) + [len(points)]
+            for a, b in zip(starts[:-1], starts[1:]):
+                x, y = points[a:b, 0] * sx, points[a:b, 1] * sy
+                total += 0.5 * (np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
+        return abs(total)
+
+    top = kernel.top_view(trenched, {}, project=project, vector=True)
+    assert top["image"] == "" and top["vector"]["shapes"]
+    assert area(top, "Si") == pytest.approx(1.6 * 1.6, rel=1e-3)
+    section = kernel.section(trenched, {}, project=project, vector=True)
+    assert section["image"] == "" and section["vector"]["shapes"]
+    plain = kernel.section(trenched, {}, project=project)
+    assert plain["image"] and "vector" not in plain

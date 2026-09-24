@@ -626,6 +626,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .scale-bar { position: absolute; right: 12px; bottom: 12px; height: 0; border-bottom: 3px solid #1c2733; box-shadow: 0 0 0 2px rgba(255,255,255,0.75); color: #1c2733; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; font-weight: 600; line-height: 14px; text-align: center; text-shadow: 0 0 3px #ffffff, 0 0 3px #ffffff; transform: translateY(-14px); pointer-events: none; }
 .draw-tools { margin-left: 8px; }
 .image-view img { display: block; width: 100%; height: 100%; border: 1px solid var(--line); background: var(--panel); image-rendering: pixelated; box-shadow: 0 8px 24px rgba(50, 68, 83, 0.1); }
+.image-view .vector-picture { display: block; width: 100%; height: 100%; border: 1px solid var(--line); box-sizing: border-box; box-shadow: 0 8px 24px rgba(50, 68, 83, 0.1); }
 .view-placeholder { display: grid; place-items: center; gap: 9px; height: 100%; padding: 24px; color: var(--muted); font-size: 12px; text-align: center; }
 .view-placeholder p { max-width: 380px; margin: 0; line-height: 1.6; }
 

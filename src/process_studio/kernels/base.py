@@ -149,8 +149,10 @@ class Kernel(Protocol):
         position: float | None = None,
         interpolation: int = 1,
         line: tuple[tuple[float, float], tuple[float, float]] | None = None,
+        vector: bool = False,
     ) -> dict[str, Any]:
-        """A vertical cut, as a PNG plus the frame it was drawn in.
+        """A vertical cut, as a PNG plus the frame it was drawn in -- or, with
+        ``vector``, as each material's outline (``vector``) and no PNG.
 
         ``line`` is a pair of (x, y) points in micrometres; when given, the
         cut runs from the first to the second and ``axis``/``position`` are
@@ -165,8 +167,10 @@ class Kernel(Protocol):
         project: ProjectDefinition,
         hidden: Sequence[str] = (),
         steps: bool = True,
+        vector: bool = False,
     ) -> dict[str, Any]:
-        """The view from above, as a PNG plus the frame it was drawn in.
+        """The view from above, as a PNG plus the frame it was drawn in (or,
+        with ``vector``, as outlines).
 
         Every point takes the colour of the topmost material there.
         ``hidden`` names materials to look through: they are neither drawn

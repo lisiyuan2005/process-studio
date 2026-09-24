@@ -65,6 +65,11 @@ export interface ViewRequest {
    * same silicon -- so this is on unless it is turned off.
    */
   steps?: boolean;
+  /**
+   * Section and top view: send each material's outline instead of a PNG,
+   * so the picture stays sharp however far it is magnified.
+   */
+  vector?: boolean;
 }
 
 

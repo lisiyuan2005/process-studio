@@ -36,7 +36,108 @@ import type {
   SurfacePayload,
   TopViewDocument,
   Triangulation,
+  VectorPicture,
+  VectorShape,
 } from "../types";
+
+function decodeInts(text: string): Int32Array {
+  const bytes = Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+  return new Int32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+}
+
+/** SVG path data for a shape's loops (closed) or lines (open). */
+function pathData(shape: VectorShape, closed: boolean): string {
+  const points = decodeFloats(shape.points);
+  const starts = decodeInts(shape.starts);
+  const count = points.length / 2;
+  const parts: string[] = [];
+  for (let i = 0; i < starts.length; i += 1) {
+    const from = starts[i];
+    const to = i + 1 < starts.length ? starts[i + 1] : count;
+    if (to - from < 2) continue;
+    let d = `M${points[2 * from].toFixed(4)} ${points[2 * from + 1].toFixed(4)}`;
+    for (let j = from + 1; j < to; j += 1) {
+      d += `L${points[2 * j].toFixed(4)} ${points[2 * j + 1].toFixed(4)}`;
+    }
+    parts.push(closed ? `${d}Z` : d);
+  }
+  return parts.join("");
+}
+
+const PICTURE_BACKGROUND = "#f7f9fc";
+
+/** The outlines as SVG markup, for drawing on screen and into a PNG. */
+function vectorMarkup(vector: VectorPicture): { fills: [string, string][]; lines: [string, string][] } {
+  return {
+    fills: vector.shapes.map((shape) => [shape.color, pathData(shape, true)]),
+    lines: vector.lines.map((shape) => [shape.color, pathData(shape, false)]),
+  };
+}
+
+/** A picture sent as outlines, drawn into a PNG (base64, no prefix). */
+export async function vectorToPng(vector: VectorPicture, scale = 2): Promise<string> {
+  const { fills, lines } = vectorMarkup(vector);
+  const width = Math.round(vector.width * scale);
+  const height = Math.round(vector.height * scale);
+  const body =
+    `<rect width="${vector.width}" height="${vector.height}" fill="${PICTURE_BACKGROUND}"/>` +
+    fills
+      .map(([color, d]) => `<path d="${d}" fill="${color}" fill-rule="evenodd" stroke="${color}" stroke-width="${0.6 / scale}" stroke-linejoin="round"/>`)
+      .join("") +
+    lines.map(([color, d]) => `<path d="${d}" fill="none" stroke="${color}" stroke-width="${1.5 / scale}"/>`).join("");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${vector.width} ${vector.height}" preserveAspectRatio="none">${body}</svg>`;
+  const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+  try {
+    const image = new Image();
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error("The picture could not be drawn."));
+      image.src = url;
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("No canvas to draw the picture in.");
+    context.drawImage(image, 0, 0, width, height);
+    return canvas.toDataURL("image/png").split(",", 2)[1];
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/** Outlines drawn at whatever size the frame has: sharp at any zoom. */
+function VectorImage({ vector, alt }: { vector: VectorPicture; alt: string }) {
+  const { fills, lines } = useMemo(() => vectorMarkup(vector), [vector]);
+  return (
+    <svg
+      className="vector-picture"
+      viewBox={`0 0 ${vector.width} ${vector.height}`}
+      preserveAspectRatio="none"
+      role="img"
+      aria-label={alt}
+    >
+      <rect width={vector.width} height={vector.height} fill={PICTURE_BACKGROUND} />
+      {fills.map(([color, d], index) => (
+        // A hairline in the fill's own colour closes the seams antialiasing
+        // leaves where two materials meet.
+        <path
+          key={`f${index}`}
+          d={d}
+          fill={color}
+          fillRule="evenodd"
+          stroke={color}
+          strokeWidth={0.6}
+          strokeLinejoin="round"
+          vectorEffect="non-scaling-stroke"
+        />
+      ))}
+      {lines.map(([color, d], index) => (
+        <path key={`l${index}`} d={d} fill="none" stroke={color} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+      ))}
+    </svg>
+  );
+}
 
 export type ViewMode = "surfaces" | "section" | "top";
 
@@ -638,6 +739,7 @@ function scaleBarLength(extentWidth: number) {
  */
 function PictureView({
   image,
+  vector,
   width,
   height,
   extent,
@@ -652,6 +754,8 @@ function PictureView({
   children,
 }: {
   image: string;
+  /** The picture as outlines; drawn instead of `image` when there is one. */
+  vector?: VectorPicture;
   width: number;
   height: number;
   extent: ImageExtent;
@@ -683,10 +787,12 @@ function PictureView({
   const spanH = extent.horizontalMax - extent.horizontalMin;
   const spanV = extent.verticalMax - extent.verticalMin;
 
-  // Zoom and pan are a transform on the fitted frame: the wheel scales it
+  // Zoom and pan resize and move the fitted frame: the wheel scales it
   // about the pointer, a drag moves it, and it never leaves a gap inside
-  // the area the unzoomed picture filled. Nothing is re-fetched; the
-  // picture's own pixels are magnified, so raise Sampling for finer ones.
+  // the area the unzoomed picture filled. Nothing is re-fetched. The frame
+  // is laid out at its zoomed size rather than scaled as a finished layer,
+  // so outlines are drawn again sharp at every magnification (a scaled
+  // layer is a bitmap stretched, and blurs).
   const [zoom, setZoom] = useState(memory.current);
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
@@ -803,10 +909,11 @@ function PictureView({
         style={
           size
             ? ({
-                ...size,
-                transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`,
+                width: size.width * zoom.scale,
+                height: size.height * zoom.scale,
+                transform: `translate(${zoom.x}px, ${zoom.y}px)`,
                 transformOrigin: "0 0",
-                "--inv-scale": String(1 / zoom.scale),
+                "--inv-scale": "1",
               } as React.CSSProperties)
             : undefined
         }
@@ -817,7 +924,11 @@ function PictureView({
         onPointerCancel={pointerUp}
         onMouseLeave={() => setHover(null)}
       >
-        <img src={`data:image/png;base64,${image}`} alt={alt} draggable={false} />
+        {vector ? (
+          <VectorImage vector={vector} alt={alt} />
+        ) : (
+          <img src={`data:image/png;base64,${image}`} alt={alt} draggable={false} />
+        )}
         {children}
         {ends && delta && (
           <>
@@ -1075,7 +1186,15 @@ export function Viewport({
       {
         label: "Save this picture as PNG…",
         icon: <Camera size={13} />,
-        action: () => picture && onSaveImage(mode === "section" ? "section" : "top", picture.image),
+        action: () => {
+          if (!picture) return;
+          const kind = mode === "section" ? "section" : "top";
+          if (picture.image || !picture.vector) {
+            onSaveImage(kind, picture.image);
+            return;
+          }
+          void vectorToPng(picture.vector).then((png) => onSaveImage(kind, png));
+        },
         disabled: !picture,
       },
     ];
@@ -1293,6 +1412,7 @@ export function Viewport({
           section ? (
             <PictureView
               image={section.image}
+              vector={section.vector}
               width={section.width}
               height={section.height}
               extent={section.extent}
@@ -1316,6 +1436,7 @@ export function Viewport({
         ) : topView ? (
           <PictureView
             image={topView.image}
+            vector={topView.vector}
             width={topView.width}
             height={topView.height}
             extent={topView.extent}

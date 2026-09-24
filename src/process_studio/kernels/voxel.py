@@ -67,7 +67,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
-import itertools
 import math
 import threading
 from pathlib import Path
@@ -81,6 +80,7 @@ from shapely.geometry import box
 from ..layout.quick_sketch import QuickSketch
 from ..models import MaterialDefinition, ProcessStep, ProcessType, ProjectDefinition, Recipe
 from ..worker.errors import Cancelled
+from . import voxel_cut
 
 #: Label of an empty cell.
 VOID = 0
@@ -168,6 +168,20 @@ def _brick_hash(blocks: np.ndarray) -> np.ndarray:
     return h
 
 
+def _pair_hash(blocks: np.ndarray, cuts: np.ndarray | None) -> np.ndarray:
+    """A hash of each brick's labels and cuts; a brick without cuts hashes
+    as its labels alone."""
+    h = _brick_hash(blocks)
+    if cuts is None or not cuts.any():
+        return h
+    n = cuts.shape[0]
+    extra = _brick_hash(np.ascontiguousarray(cuts, dtype=np.uint16).view(np.uint8).reshape(n, -1))
+    has = cuts.reshape(n, -1).any(axis=1)
+    with np.errstate(over="ignore"):
+        h = np.where(has, h ^ (extra * np.uint64(0xC2B2AE3D27D4EB4F)), h)
+    return h
+
+
 # -- the state -------------------------------------------------------------
 
 
@@ -187,6 +201,12 @@ class VoxelState:
     fine labels in ``bricks``; a brick is only ever kept if it really is
     mixed, so two slabs are the same exactly when their arrays are. With
     ``refine`` 1 there are no bricks and the grid is a plain one.
+
+    A fine cell may be *cut* (see :mod:`voxel_cut`): one straight line
+    between two of its eight anchors, its label on one side and another
+    material on the other. ``pool_cut`` holds each brick's cuts (0 where a
+    fine cell is not cut) beside ``pool``'s labels; a fine cell's label is
+    still the material at its centre.
 
     Bricks are stored once each: ``pool`` holds the distinct bricks and
     ``brick_ref`` which one each refined cell has. Thin slabs along a
@@ -208,6 +228,7 @@ class VoxelState:
         refine: int = 1,
         brick_keys: np.ndarray | None = None,
         bricks: np.ndarray | None = None,
+        cuts: np.ndarray | None = None,
     ) -> None:
         self.bounds = tuple(float(value) for value in bounds)
         self.nx = int(nx)
@@ -222,10 +243,11 @@ class VoxelState:
             np.zeros(0, dtype=np.int64) if brick_keys is None else np.asarray(brick_keys, dtype=np.int64)
         )
         self.pool = np.zeros((0, B, B), dtype=np.uint8)
+        self.pool_cut = np.zeros((0, B, B), dtype=np.uint16)
         self._pool_hash = np.zeros(0, dtype=np.uint64)
         self.brick_ref = np.zeros(0, dtype=np.int64)
         if bricks is not None and len(bricks):
-            self.brick_ref = self._intern(np.asarray(bricks, dtype=np.uint8))
+            self.brick_ref = self._intern(np.asarray(bricks, dtype=np.uint8), cuts)
         #: Where this state was stored, if it was.
         self.path: Path | None = None
         #: Display meshes by ``buried``, once built.
@@ -286,17 +308,18 @@ class VoxelState:
         small states: a stack of thin slabs is mostly shared bricks)."""
         return self.pool[self.brick_ref]
 
-    def _intern(self, blocks: np.ndarray) -> np.ndarray:
-        """Pool entries for ``blocks``, adding the ones not there yet."""
+    def _intern(self, blocks: np.ndarray, cuts: np.ndarray | None = None) -> np.ndarray:
+        """Pool entries for ``blocks`` (with their ``cuts``), adding the ones not there yet."""
         n = blocks.shape[0]
         if n == 0:
             return np.zeros(0, dtype=np.int64)
         blocks = np.ascontiguousarray(blocks, dtype=np.uint8)
-        hashes = _brick_hash(blocks)
+        cuts = np.zeros(blocks.shape, dtype=np.uint16) if cuts is None else np.ascontiguousarray(cuts, dtype=np.uint16)
+        hashes = _pair_hash(blocks, cuts)
         # among themselves: one entry per distinct brick
         unique_hash, first, inverse = _unique(hashes, return_index=True, return_inverse=True)
         inverse = inverse.reshape(-1)
-        same = (blocks == blocks[first[inverse]]).all(axis=(1, 2))
+        same = (blocks == blocks[first[inverse]]).all(axis=(1, 2)) & (cuts == cuts[first[inverse]]).all(axis=(1, 2))
         refs = np.empty(n, dtype=np.int64)
         # against the pool
         order = np.argsort(self._pool_hash, kind="stable")
@@ -308,22 +331,23 @@ class VoxelState:
         match[found] = order[at[found]]
         if found.any():
             ok = (self.pool[match[found]] == blocks[first[found]]).all(axis=(1, 2))
+            ok &= (self.pool_cut[match[found]] == cuts[first[found]]).all(axis=(1, 2))
             match[np.flatnonzero(found)[~ok]] = -1
         new = match < 0
         start = self.pool.shape[0]
         match[new] = start + np.arange(int(new.sum()))
         added = [blocks[first[new]]]
+        added_cut = [cuts[first[new]]]
         added_hash = [unique_hash[new]]
         refs[same] = match[inverse[same]]
         # a hash shared by different bricks (never seen, but cheap to allow)
-        odd = np.flatnonzero(~same)
-        if odd.size:
-            rest, back = np.unique(blocks[odd].reshape(odd.size, -1), axis=0, return_inverse=True)
-            base = start + int(new.sum())
-            refs[odd] = base + back.reshape(-1)
-            added.append(rest.reshape(-1, self.refine, self.refine))
-            added_hash.append(_brick_hash(added[-1]))
+        for i in np.flatnonzero(~same):
+            refs[i] = start + sum(len(a) for a in added)
+            added.append(blocks[i : i + 1])
+            added_cut.append(cuts[i : i + 1])
+            added_hash.append(_pair_hash(blocks[i : i + 1], cuts[i : i + 1]))
         self.pool = np.concatenate([self.pool] + added)
+        self.pool_cut = np.concatenate([self.pool_cut] + added_cut)
         self._pool_hash = np.concatenate([self._pool_hash] + added_hash)
         return refs
 
@@ -333,6 +357,7 @@ class VoxelState:
         if used.size == self.pool.shape[0]:
             return
         self.pool = np.ascontiguousarray(self.pool[used])
+        self.pool_cut = np.ascontiguousarray(self.pool_cut[used])
         self._pool_hash = self._pool_hash[used]
         self.brick_ref = back.reshape(-1).astype(np.int64)
 
@@ -350,21 +375,52 @@ class VoxelState:
             out[hit] = self.pool[self.brick_ref[at[hit]]]
         return out
 
-    def store(self, keys: np.ndarray, blocks: np.ndarray) -> None:
-        """Write fine labels for the cells ``keys``: a block of one label
-        becomes a plain cell, any other becomes (or stays) a brick."""
+    def cuts(self, keys: np.ndarray) -> np.ndarray:
+        """Cuts of the fine cells of cells ``keys`` (0 where not cut)."""
+        keys = np.asarray(keys, dtype=np.int64)
+        B = self.refine
+        out = np.zeros((keys.size, B, B), dtype=np.uint16)
+        if self.brick_keys.size and keys.size:
+            at = np.searchsorted(self.brick_keys, keys)
+            at = np.minimum(at, self.brick_keys.size - 1)
+            hit = self.brick_keys[at] == keys
+            out[hit] = self.pool_cut[self.brick_ref[at[hit]]]
+        return out
+
+    @property
+    def has_cuts(self) -> bool:
+        return bool(self.pool_cut.size) and bool(self.pool_cut.any())
+
+    def store(self, keys: np.ndarray, blocks: np.ndarray, cuts: np.ndarray | None = None) -> None:
+        """Write fine labels (and cuts) for the cells ``keys``: a block of
+        one label and no cut becomes a plain cell, any other becomes (or
+        stays) a brick.
+
+        Without ``cuts``, a fine cell keeps the cut it had where its label
+        is unchanged and loses it where the label changed: a process that
+        does not draw cuts leaves the ones it did not touch alone."""
         keys = np.asarray(keys, dtype=np.int64)
         if keys.size == 0:
             return
         blocks = np.asarray(blocks, dtype=np.uint8)
+        if cuts is None:
+            if self.has_cuts:
+                cuts = self.cuts(keys)
+                cuts[blocks != self.blocks(keys)] = 0
+            else:
+                cuts = np.zeros(blocks.shape, dtype=np.uint16)
+        cuts = np.asarray(cuts, dtype=np.uint16)
+        # a cut with the same material both sides is no cut
+        cuts = np.where(voxel_cut.other_of(cuts) == blocks, 0, cuts).astype(np.uint16)
+        cuts[voxel_cut.code_of(cuts) == 0] = 0
         first = blocks[:, :1, :1]
-        uniform = (blocks == first).all(axis=(1, 2))
+        uniform = (blocks == first).all(axis=(1, 2)) & ~cuts.any(axis=(1, 2))
         flat = self.labels.reshape(-1)
         flat[keys[uniform]] = blocks[uniform, 0, 0]
         flat[keys[~uniform]] = MIXED
         keep = ~np.isin(self.brick_keys, keys)
         new_keys = np.concatenate([self.brick_keys[keep], keys[~uniform]])
-        new_refs = np.concatenate([self.brick_ref[keep], self._intern(blocks[~uniform])])
+        new_refs = np.concatenate([self.brick_ref[keep], self._intern(blocks[~uniform], cuts[~uniform])])
         order = np.argsort(new_keys, kind="stable")
         self.brick_keys = new_keys[order]
         self.brick_ref = new_refs[order]
@@ -382,12 +438,47 @@ class VoxelState:
         return self.brick_keys[lo:hi] - k * self.plane, self.brick_ref[lo:hi]
 
     def sample(self, k: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray:
-        """The label at points ``(x, y)`` of slabs ``k`` (arrays, broadcast)."""
+        """The material at points ``(x, y)`` of slabs ``k`` (arrays,
+        broadcast), on the side of a cut the point is on (on the line: the
+        cell's own label)."""
         x_min, y_min, _, _ = self.bounds
         k, x, y = np.broadcast_arrays(np.asarray(k), np.asarray(x, float), np.asarray(y, float))
-        fx = np.clip(((x - x_min) / self.fine_x).astype(np.int64), 0, self.nx * self.refine - 1)
-        fy = np.clip(((y - y_min) / self.fine_y).astype(np.int64), 0, self.ny * self.refine - 1)
-        return self.sample_fine(k, fx, fy)
+        gx = (x - x_min) / self.fine_x
+        gy = (y - y_min) / self.fine_y
+        fx = np.clip(np.floor(gx).astype(np.int64), 0, self.nx * self.refine - 1)
+        fy = np.clip(np.floor(gy).astype(np.int64), 0, self.ny * self.refine - 1)
+        out = self.sample_fine(k, fx, fy)
+        if self.has_cuts:
+            shape = out.shape
+            out = out.reshape(-1).copy()
+            cut = self.sample_cut(k, fx, fy).reshape(-1)
+            has = cut > 0
+            if has.any():
+                u = (gx.reshape(-1) - fx.reshape(-1))[has]
+                v = (gy.reshape(-1) - fy.reshape(-1))[has]
+                right = ~voxel_cut.left_of(voxel_cut.code_of(cut[has]), u, v)
+                where = np.flatnonzero(has)[right]
+                out[where] = voxel_cut.other_of(cut[where])
+            out = out.reshape(shape)
+        return out
+
+    def sample_cut(self, k: np.ndarray, fx: np.ndarray, fy: np.ndarray) -> np.ndarray:
+        """The cut of fine cell ``(fx, fy)`` of slabs ``k`` (0 for none)."""
+        B = self.refine
+        k, fx, fy = np.broadcast_arrays(np.asarray(k), np.asarray(fx), np.asarray(fy))
+        shape = k.shape
+        k, fx, fy = k.reshape(-1), fx.reshape(-1), fy.reshape(-1)
+        out = np.zeros(k.size, dtype=np.uint16)
+        if not self.has_cuts:
+            return out.reshape(shape)
+        ix, bx = np.divmod(fx, B)
+        iy, by = np.divmod(fy, B)
+        mixed = self.labels[k, iy, ix] == MIXED
+        if mixed.any():
+            keys = k[mixed] * self.plane + iy[mixed] * self.nx + ix[mixed]
+            at = np.searchsorted(self.brick_keys, keys)
+            out[mixed] = self.pool_cut[self.brick_ref[at], by[mixed], bx[mixed]]
+        return out.reshape(shape)
 
     def sample_fine(self, k: np.ndarray, fx: np.ndarray, fy: np.ndarray) -> np.ndarray:
         """The label at fine cell ``(fx, fy)`` of slabs ``k``."""
@@ -407,16 +498,23 @@ class VoxelState:
 
     @classmethod
     def from_fine(
-        cls, bounds, fine: np.ndarray, refine: int, z, materials, z_offset: float = 0.0
+        cls, bounds, fine: np.ndarray, refine: int, z, materials, z_offset: float = 0.0, cuts: np.ndarray | None = None
     ) -> "VoxelState":
-        """A state holding the dense fine labels ``fine`` (slabs, ny*refine, nx*refine)."""
+        """A state holding the dense fine labels ``fine`` (slabs, ny*refine,
+        nx*refine), and their ``cuts`` if given."""
         fine = np.asarray(fine, dtype=np.uint8)
         n, fy, fx = fine.shape
         B = int(refine)
         ny, nx = fy // B, fx // B
-        cells = fine.reshape(n, ny, B, nx, B).transpose(0, 1, 3, 2, 4).reshape(-1, B, B)
+
+        def blocks(a):
+            return a.reshape(n, ny, B, nx, B).transpose(0, 1, 3, 2, 4).reshape(-1, B, B)
+
         state = cls(bounds, nx, ny, z, np.zeros((n, ny, nx), np.uint8), materials, z_offset, B)
-        state.store(np.arange(cells.shape[0], dtype=np.int64), cells)
+        state.store(
+            np.arange(n * ny * nx, dtype=np.int64), blocks(fine),
+            None if cuts is None else blocks(np.asarray(cuts, dtype=np.uint16)),
+        )
         return state
 
     def to_fine(self) -> np.ndarray:
@@ -426,16 +524,30 @@ class VoxelState:
         cells = self.blocks(keys).reshape(self.n, self.ny, self.nx, B, B)
         return cells.transpose(0, 1, 3, 2, 4).reshape(self.n, self.ny * B, self.nx * B)
 
+    def to_fine_cuts(self) -> np.ndarray:
+        """The dense fine cuts, laid out as :meth:`to_fine`; for tests."""
+        B = self.refine
+        keys = np.arange(self.n * self.plane, dtype=np.int64)
+        cells = self.cuts(keys).reshape(self.n, self.ny, self.nx, B, B)
+        return cells.transpose(0, 1, 3, 2, 4).reshape(self.n, self.ny * B, self.nx * B)
+
     def check(self) -> None:
         """That bricks and MIXED marks agree and no brick is uniform (for tests)."""
         marked = np.flatnonzero(self.labels.reshape(-1) == MIXED)
         assert np.array_equal(marked, self.brick_keys), "MIXED cells and bricks disagree"
         if self.brick_ref.size:
-            data = self.pool[_unique(self.brick_ref)]
+            used = _unique(self.brick_ref)
+            data = self.pool[used]
+            cut = self.pool_cut[used]
             first = data[:, :1, :1]
-            assert not (data == first).all(axis=(1, 2)).any(), "a brick is uniform"
+            assert not ((data == first).all(axis=(1, 2)) & ~cut.any(axis=(1, 2))).any(), "a brick is uniform"
             assert not (data == MIXED).any(), "a brick holds the MIXED mark"
-            assert np.unique(self.pool.reshape(len(self.pool), -1), axis=0).shape[0] == len(self.pool), "a brick is pooled twice"
+            both = np.concatenate([self.pool.reshape(len(self.pool), -1), self.pool_cut.reshape(len(self.pool), -1)], axis=1)
+            assert np.unique(both, axis=0).shape[0] == len(self.pool), "a brick is pooled twice"
+            code = voxel_cut.code_of(cut)
+            assert (code <= 32).all(), "a cut code is out of range"
+            assert not ((code > 0) & (voxel_cut.other_of(cut) == data)).any(), "a cut with one material both sides"
+            assert not ((code == 0) & (cut != 0)).any(), "a material across no cut"
 
     # materials
 
@@ -457,9 +569,13 @@ class VoxelState:
         seen: set[int] = {VOID, MIXED}
         for k in range(self.n):
             found = set(_labels_in(self.labels[k]).tolist())
-            _cells, data = self.slab_bricks(k)
-            if data.size:
-                found |= set(_labels_in(data).tolist())
+            _cells, refs = self.slab_refs(k)
+            if refs.size:
+                used = _unique(refs)
+                found |= set(_labels_in(self.pool[used]).tolist())
+                cut = self.pool_cut[used]
+                if cut.any():
+                    found |= set(_labels_in(voxel_cut.other_of(cut[cut > 0])).tolist())
             for label in sorted(found - seen):
                 seen.add(label)
                 order.append(self.materials[label - 1])
@@ -471,7 +587,12 @@ class VoxelState:
             return 0.0
         counts = (self.labels == label).sum(axis=(1, 2)).astype(np.float64)
         if self.brick_ref.size:
-            fine = (self.pool == label).sum(axis=(1, 2)) / float(self.refine**2)
+            # a cut cell: its label has the left part, the other material the rest
+            left = voxel_cut.LEFT_AREA[voxel_cut.code_of(self.pool_cut)]
+            share = np.where(self.pool == label, left, 0.0) + np.where(
+                (self.pool_cut > 0) & (voxel_cut.other_of(self.pool_cut) == label), 1.0 - left, 0.0
+            )
+            fine = share.sum(axis=(1, 2)) / float(self.refine**2)
             np.add.at(counts, self.brick_keys // self.plane, fine[self.brick_ref])
         return float(np.sum(counts * np.diff(self.z))) * self.cell_x * self.cell_y
 
@@ -484,6 +605,7 @@ class VoxelState:
         )
         out.brick_ref = self.brick_ref.copy()
         out.pool = self.pool  # never written in place
+        out.pool_cut = self.pool_cut
         out._pool_hash = self._pool_hash
         out._compact()
         return out
@@ -578,6 +700,7 @@ class VoxelState:
             brick_keys=self.brick_keys,
             brick_ref=self.brick_ref,
             pool=self.pool,
+            pool_cut=self.pool_cut,
         )
         Path(path).write_bytes(MAGIC + buffer.getvalue())
         self.path = Path(path)
@@ -605,7 +728,12 @@ class VoxelState:
             )
             if "pool" in stored.files:
                 state.pool = np.ascontiguousarray(stored["pool"], dtype=np.uint8)
-                state._pool_hash = _brick_hash(state.pool)
+                state.pool_cut = (
+                    np.ascontiguousarray(stored["pool_cut"], dtype=np.uint16)
+                    if "pool_cut" in stored.files
+                    else np.zeros(state.pool.shape, dtype=np.uint16)
+                )
+                state._pool_hash = _pair_hash(state.pool, state.pool_cut)
                 state.brick_ref = np.asarray(stored["brick_ref"], dtype=np.int64)
         state.path = Path(path)
         return state
@@ -960,6 +1088,28 @@ class Mask2:
         self.coarse = np.ascontiguousarray(coarse, dtype=np.uint8)
         self.cells = np.asarray(cells, dtype=np.int64)
         self.blocks = np.asarray(blocks, dtype=bool)
+        #: The outline it was drawn from, if any: asked at any point where
+        #: a boundary is fitted (see :func:`_refit`).
+        self.geometry = None
+
+    def at(self, state: "VoxelState", x: np.ndarray, y: np.ndarray) -> np.ndarray:
+        """Yes or no at points: from the outline where there is one, else
+        from the fine cell the point is in."""
+        x, y = np.broadcast_arrays(np.asarray(x, float), np.asarray(y, float))
+        if self.geometry is not None:
+            return shapely.intersects_xy(self.geometry, x.ravel(), y.ravel()).reshape(x.shape)
+        B = state.refine
+        x_min, y_min, _, _ = state.bounds
+        fx = np.clip(np.floor((x - x_min) / state.fine_x).astype(np.int64), 0, state.nx * B - 1)
+        fy = np.clip(np.floor((y - y_min) / state.fine_y).astype(np.int64), 0, state.ny * B - 1)
+        cell = (fy // B) * state.nx + fx // B
+        coarse = self.coarse.reshape(-1)[cell]
+        out = coarse == 1
+        part = coarse == 2
+        if part.any():
+            at = np.searchsorted(self.cells, cell[part])
+            out[part] = self.blocks[at, fy[part] % B, fx[part] % B]
+        return out
 
     @classmethod
     def uniform(cls, ny: int, nx: int, refine: int, value: bool = True) -> "Mask2":
@@ -1018,6 +1168,94 @@ def _as_mask(state: "VoxelState", opening) -> Mask2 | None:
     )
 
 
+# -- cut cells ---------------------------------------------------------------
+
+
+def _padded(state: VoxelState, k: int, cells: np.ndarray) -> np.ndarray:
+    """Fine labels of cells ``cells`` of slab ``k`` with a ring of their
+    neighbours' fine cells round them: (cells, B + 2, B + 2). Past the
+    window's edge the ring repeats the cell's own edge (the wafer goes on)."""
+    B, nx, ny, plane = state.refine, state.nx, state.ny, state.plane
+    iy, ix = np.divmod(np.asarray(cells, dtype=np.int64), nx)
+    out = np.empty((cells.size, B + 2, B + 2), dtype=np.uint8)
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            jy = np.clip(iy + dy, 0, ny - 1)
+            jx = np.clip(ix + dx, 0, nx - 1)
+            data = state.blocks(k * plane + jy * nx + jx)
+            # a neighbour past the edge: the cell's own edge row again
+            if dy == -1:
+                data = np.where((iy == 0)[:, None, None], data[:, :1, :].repeat(B, 1), data)
+            if dy == 1:
+                data = np.where((iy == ny - 1)[:, None, None], data[:, -1:, :].repeat(B, 1), data)
+            if dx == -1:
+                data = np.where((ix == 0)[:, None, None], data[:, :, :1].repeat(B, 2), data)
+            if dx == 1:
+                data = np.where((ix == nx - 1)[:, None, None], data[:, :, -1:].repeat(B, 2), data)
+            rows = slice(0, 1) if dy == -1 else (slice(B + 1, B + 2) if dy == 1 else slice(1, B + 1))
+            cols = slice(0, 1) if dx == -1 else (slice(B + 1, B + 2) if dx == 1 else slice(1, B + 1))
+            src_rows = slice(B - 1, B) if dy == -1 else (slice(0, 1) if dy == 1 else slice(0, B))
+            src_cols = slice(B - 1, B) if dx == -1 else (slice(0, 1) if dx == 1 else slice(0, B))
+            out[:, rows, cols] = data[:, src_rows, src_cols]
+    return out
+
+
+def _refit(state: VoxelState, k: int, cells: np.ndarray, decide) -> None:
+    """Draw the cuts along the boundaries in cells ``cells`` of slab ``k``.
+
+    ``decide(x, y)`` says which material the step just run leaves at any
+    point of the slab (for the fine cells' centres it is what was written).
+    Every fine cell with a neighbour (of eight) of another material is
+    fitted from what ``decide`` says at its anchors and, where the
+    boundary crosses half a side, at that half side's middle (see
+    :func:`voxel_cut.fit`); the cells in between are left whole.
+    """
+    cells = np.asarray(cells, dtype=np.int64)
+    if cells.size == 0:
+        return
+    B, nx = state.refine, state.nx
+    x_min, y_min, _, _ = state.bounds
+    fx, fy = state.fine_x, state.fine_y
+    keys = k * state.plane + cells
+    labels = state.blocks(keys)
+    cuts = np.zeros(labels.shape, dtype=np.uint16)
+    pad = _padded(state, k, cells)
+    centre = pad[:, 1:-1, 1:-1]
+    edge = np.zeros(labels.shape, dtype=bool)
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            if dy or dx:
+                edge |= pad[:, 1 + dy : B + 1 + dy, 1 + dx : B + 1 + dx] != centre
+    c, by, bx = np.nonzero(edge)
+    if c.size:
+        iy, ix = np.divmod(cells[c], nx)
+        x0 = x_min + (ix * B + bx) * fx
+        y0 = y_min + (iy * B + by) * fy
+        # A hair inside the cell: a point on a side belongs to both cells,
+        # and a field given cell by cell (a mask with no outline, the state
+        # itself) has its boundary exactly there -- read from inside, a
+        # cell sees its own material all round and is not cut.
+        inward = 0.5 + (voxel_cut.ANCHORS - 0.5) * (1.0 - 2e-3)
+        ax = x0[:, None] + inward[None, :, 0] * fx
+        ay = y0[:, None] + inward[None, :, 1] * fy
+        anchor = np.asarray(decide(ax.ravel(), ay.ravel()), dtype=np.uint8).reshape(-1, 8)
+        crossing = anchor != np.roll(anchor, -1, axis=1)
+        snap = np.broadcast_to(voxel_cut.TO_MIDDLE, anchor.shape).copy()
+        r, h = np.nonzero(crossing)
+        if r.size:
+            middle = 0.5 + (voxel_cut.half_middles() - 0.5) * (1.0 - 2e-3)
+            mx = x0[r] + middle[h, 0] * fx
+            my = y0[r] + middle[h, 1] * fy
+            got = np.asarray(decide(mx, my), dtype=np.uint8)
+            # the middle of the half side holds the far end's material: the
+            # crossing is in the near half, so it snaps to the near anchor
+            snap[r, h] = np.where(got == anchor[r, (h + 1) % 8], 0, 1)
+        label, cut = voxel_cut.fit(anchor, labels[c, by, bx], snap)
+        labels[c, by, bx] = label
+        cuts[c, by, bx] = cut
+    state.store(keys, labels, cuts)
+
+
 # -- processes -------------------------------------------------------------
 
 
@@ -1058,8 +1296,10 @@ def deposit(
     reach = max(t + 0.5 * state.fine, state.fine * 1.0001)
 
     # Everything is read from the state as it was, then written at once.
+    before = state.copy()
     covers: dict[tuple[int, int], Mask2] = {}
     near_of: dict[bytes, Mask2] = {}
+    solid_of: dict[tuple[int, int], tuple[bytes, Mask2]] = {}
     films: list[tuple[int, Mask2]] = []
     shadow = _Stack(state) if planar else None
     for k in range(n - 1, -1, -1):
@@ -1081,6 +1321,7 @@ def deposit(
             if digest not in near_of:
                 near_of[digest] = _near(state, solid, reach)
             covers[window] = near_of[digest]
+            solid_of[window] = (digest, solid)
         film = covers[window]
         void_here = Mask2.build(kind[k] == 0, *_fine_where(state, k, kind[k] == 2, lambda b: b == VOID))
         film = _and(state, film, void_here)
@@ -1088,9 +1329,9 @@ def deposit(
             film = _and(state, film, shadow.inverse())
         if opening is not None:
             film = _and(state, film, opening)
-        films.append((k, film))
+        films.append((k, film, window))
     keys_out, blocks_out = [], []
-    for k, film in films:
+    for k, film, _window_k in films:
         whole = film.coarse == 1
         state.labels[k][whole] = label
         if film.cells.size:
@@ -1101,7 +1342,179 @@ def deposit(
             blocks_out.append(blocks)
     if keys_out:
         state.store(np.concatenate(keys_out), np.concatenate(blocks_out))
+    # Boundaries: the film's edge at any point -- open space within reach
+    # of the solid's surface (the same surface lines, the same reach), not
+    # under solid (planar), inside the mask.
+    trees: dict[bytes, tuple[Any, np.ndarray] | None] = {}
+    x_min, y_min, _, _ = state.bounds
+    half_cell = 0.5 * math.hypot(state.cell_x, state.cell_y)
+    for k, _film, window in films:
+        _check(should_cancel, "a deposition")
+        region = _changed_cells(state, k, before, k)
+        if region.size == 0:
+            continue
+        digest, solid = solid_of[window]
+        if digest not in trees:
+            segments = _surface(before, solid)
+            trees[digest] = (shapely.STRtree(shapely.linestrings(segments.reshape(-1, 2, 2))), segments) if len(segments) else None
+        found = trees[digest]
+        # Per cell: the surface lines that can be the nearest to some point
+        # of it -- those within the nearest one's distance from its centre
+        # plus its diagonal -- or, where even the farthest point of the cell
+        # is within reach or the nearest is past it, the answer for all of it.
+        whole_in = np.zeros(region.size, dtype=bool)
+        whole_out = np.ones(region.size, dtype=bool)
+        if found is not None:
+            tree, segments = found
+            ry, rx = np.divmod(region, state.nx)
+            centres = shapely.points(x_min + (rx + 0.5) * state.cell_x, y_min + (ry + 0.5) * state.cell_y)
+            (first, line_hit), distance = tree.query_nearest(centres, return_distance=True, all_matches=False)
+            nearest = np.full(region.size, np.inf)
+            np.minimum.at(nearest, first, distance)
+            nearest_line = np.full(region.size, -1, dtype=np.int64)
+            nearest_line[first] = line_hit
+            whole_in = nearest + half_cell <= reach
+            whole_out = nearest - half_cell > reach
+        else:
+            segments = np.zeros((0, 4))
+            nearest_line = np.full(region.size, -1, dtype=np.int64)
+            nearest = np.full(region.size, np.inf)
+
+        def decide(x, y, k=k, region=region, segments=segments, found=found,
+                   whole_in=whole_in, whole_out=whole_out, nearest_line=nearest_line, nearest=nearest):
+            old = before.sample(k, x, y)
+            out = old.copy()
+            film = old == VOID
+            ask = np.flatnonzero(film)
+            if ask.size:
+                gx = np.clip(np.floor((x[ask] - x_min) / state.cell_x).astype(np.int64), 0, state.nx - 1)
+                gy = np.clip(np.floor((y[ask] - y_min) / state.cell_y).astype(np.int64), 0, state.ny - 1)
+                row = np.searchsorted(region, gy * state.nx + gx)
+                sure = whole_in[row]
+                none = whole_out[row]
+                film[ask[none]] = False
+                keep = ~sure & ~none
+                ask, row = ask[keep], row[keep]
+            if ask.size:
+                # most points are well inside the film: the line nearest to
+                # their bulk cell's centre is already within reach of them;
+                # and a point farther from its cell's centre than the centre
+                # is from reach cannot be within it
+                g = segments[np.maximum(nearest_line[row], 0)]
+                quick = (nearest_line[row] >= 0) & (_line_distance2(x[ask], y[ask], g) <= reach * reach * (1 + 1e-12))
+                cy_, cx_ = np.divmod(region[row], state.nx)
+                away = np.hypot(x[ask] - (x_min + (cx_ + 0.5) * state.cell_x), y[ask] - (y_min + (cy_ + 0.5) * state.cell_y))
+                far = ~quick & (nearest[row] - away > reach * (1 + 1e-9))
+                film[ask[far]] = False
+                keep = ~quick & ~far
+                ask, row = ask[keep], row[keep]
+            if ask.size:
+                film[ask] = _within_lines(
+                    x[ask], y[ask], found[0], segments, reach,
+                    x_min, y_min, state.fine_x, state.fine_y, state.nx * state.refine, state.refine,
+                )
+            if planar and k + 1 < before.n:
+                above = before.sample(np.arange(k + 1, before.n)[:, None], x[None, :], y[None, :])
+                film &= ~(above != VOID).any(axis=0)
+            if opening is not None:
+                film &= opening.at(state, x, y)
+            out[film] = label
+            return out
+
+        _refit(state, k, region, decide)
     state.consolidate()
+
+
+def _line_distance2(px, py, g):
+    """Squared distance from points to axis-aligned segments (x0, y0, x1, y1)."""
+    gx0, gx1 = np.minimum(g[:, 0], g[:, 2]), np.maximum(g[:, 0], g[:, 2])
+    gy0, gy1 = np.minimum(g[:, 1], g[:, 3]), np.maximum(g[:, 1], g[:, 3])
+    dx = np.maximum(np.maximum(gx0 - px, px - gx1), 0.0)
+    dy = np.maximum(np.maximum(gy0 - py, py - gy1), 0.0)
+    return dx * dx + dy * dy
+
+
+def _pairs(group, lo_of, many_of):
+    """(row, index) for ragged ranges: row i owns ``many_of[i]`` indices from ``lo_of[i]``."""
+    which = np.repeat(np.arange(group), many_of)
+    at = np.arange(which.size) - np.repeat(np.cumsum(many_of) - many_of, many_of) + np.repeat(lo_of, many_of)
+    return which, at
+
+
+def _narrow(parent_of, lo, many, seg_of, segments, cx, cy, half, budget=4_000_000):
+    """For groups (with centres ``cx``, ``cy`` and half-diagonal ``half``)
+    whose candidate lines are ``seg_of[lo : lo + many]``, keep the lines that
+    can be the nearest somewhere in the group: within the nearest one's
+    distance from the centre plus twice ``half``. Returns (group, line)
+    sorted by group."""
+    kept_g: list[np.ndarray] = []
+    kept_s: list[np.ndarray] = []
+    total = cx.size
+    start = 0
+    cum = np.concatenate([[0], np.cumsum(many)])
+    while start < total:
+        stop = int(np.searchsorted(cum, cum[start] + budget, side="right")) - 1
+        stop = max(stop, start + 1)
+        stop = min(stop, total)
+        which, at = _pairs(stop - start, lo[start:stop], many[start:stop])
+        seg = seg_of[at]
+        d2 = _line_distance2(cx[start + which], cy[start + which], segments[seg])
+        nearest = np.full(stop - start, np.inf)
+        np.minimum.at(nearest, which, d2)
+        limit = (np.sqrt(nearest) + 2.0 * half) ** 2
+        keep = d2 <= limit[which] * (1 + 1e-12)
+        kept_g.append(start + which[keep])
+        kept_s.append(seg[keep])
+        start = stop
+    g = np.concatenate(kept_g) if kept_g else np.zeros(0, np.int64)
+    sg = np.concatenate(kept_s) if kept_s else np.zeros(0, np.int64)
+    order = np.argsort(g, kind="stable")
+    return g[order], sg[order]
+
+
+def _within_lines(x, y, tree, segments, reach, x_min, y_min, fx, fy, fine_cols, refine):
+    """Whether points are within ``reach`` of any surface line (``segments``,
+    indexed by ``tree``).
+
+    Narrowed level by level, so a wall drawn in a great many short lines is
+    not measured line by line from every point: for each block of 4 x 4
+    fine cells the points are in, the lines within the nearest one's
+    distance from its centre plus its diagonal (the only ones that can be
+    nearest anywhere in it); from those, each fine cell's the same way;
+    then each point against its fine cell's."""
+    out = np.zeros(x.size, dtype=bool)
+    if x.size == 0:
+        return out
+    gx = np.floor((x - x_min) / fx).astype(np.int64)
+    gy = np.floor((y - y_min) / fy).astype(np.int64)
+    q = min(4, refine)
+    block_id = (gy // q) * (fine_cols // q + 1) + gx // q
+    blocks, b_first, b_back = _unique(block_id, return_index=True, return_inverse=True)
+    bcx = x_min + ((gx[b_first] // q) * q + 0.5 * q) * fx
+    bcy = y_min + ((gy[b_first] // q) * q + 0.5 * q) * fy
+    centres = shapely.points(bcx, bcy)
+    (first, _line), distance = tree.query_nearest(centres, return_distance=True, all_matches=False)
+    nearest = np.full(blocks.size, np.inf)
+    np.minimum.at(nearest, first, distance)
+    bg, bs = tree.query(centres, predicate="dwithin", distance=nearest + q * math.hypot(fx, fy) + 1e-12)
+    order = np.argsort(bg, kind="stable")
+    bg, bs = bg[order], bs[order]
+    # fine cells, from their block's lines
+    fine_id = gy * fine_cols + gx
+    cells, first_c, back = _unique(fine_id, return_index=True, return_inverse=True)
+    c_block = b_back[first_c]
+    ccx = x_min + (cells % fine_cols + 0.5) * fx
+    ccy = y_min + (cells // fine_cols + 0.5) * fy
+    lo = np.searchsorted(bg, c_block, side="left")
+    many = np.searchsorted(bg, c_block, side="right") - lo
+    kc, ks = _narrow(None, lo, many, bs, segments, ccx, ccy, 0.5 * math.hypot(fx, fy))
+    # points, from their fine cell's lines
+    lo2 = np.searchsorted(kc, back, side="left")
+    many2 = np.searchsorted(kc, back, side="right") - lo2
+    which, at = _pairs(x.size, lo2, many2)
+    d2 = _line_distance2(x[which], y[which], segments[ks[at]])
+    out[which[d2 <= reach * reach * (1 + 1e-12)]] = True
+    return out
 
 
 def _fine_where(state: VoxelState, k: int, cells_mask: np.ndarray, test) -> tuple[np.ndarray, np.ndarray]:
@@ -1412,6 +1825,7 @@ def etch_vertical(
         if label is not None:
             table[label] = max(float(rate), 0.0)
     B, plane, n = state.refine, state.plane, state.n
+    before = state.copy()
     inside = _as_mask(state, opening) or Mask2.uniform(state.ny, state.nx, B)
     fine_columns = (state.labels == MIXED).any(axis=0) | (inside.coarse == 2)
     plain = (inside.coarse == 1) & ~fine_columns
@@ -1448,7 +1862,58 @@ def etch_vertical(
                     blocks_out.append(blocks)
         if keys_out:
             state.store(np.concatenate(keys_out), np.concatenate(blocks_out))
+    # Boundaries: the columns at any point, walked as they were before.
+    edges = _boundary_cells(state, inside)
+    if edges.size:
+        slabs = np.arange(before.n)[:, None]
+
+        def left_at(k):
+            bottom = state.z[k]
+            source = int(np.searchsorted(before.z, 0.5 * (state.z[k] + state.z[k + 1]), side="right")) - 1
+
+            def decide(x, y):
+                columns = before.sample(slabs, x[None, :], y[None, :])
+                stop = _walk(columns, before.z, table, budget, inside.at(state, x, y))
+                out = columns[source].copy()
+                out[bottom >= stop - Z_EPS] = VOID
+                return out
+
+            return decide
+
+        for k in range(state.n):
+            _check(should_cancel, "a vertical etch")
+            j = int(np.searchsorted(before.z, 0.5 * (state.z[k] + state.z[k + 1]), side="right")) - 1
+            here = np.intersect1d(edges, _changed_cells(state, k, before, j))
+            _refit(state, k, here, left_at(k))
     state.consolidate()
+
+
+def _boundary_cells(state: VoxelState, mask: Mask2 | None) -> np.ndarray:
+    """Bulk cells where a boundary can be fitted: every refined cell of
+    any slab, the cells a mask's outline crosses, and -- one fine cell a
+    cell -- every cell with a neighbour of another label."""
+    ny, nx = state.ny, state.nx
+    near = (state.labels == MIXED).any(axis=0)
+    if mask is not None:
+        near |= mask.coarse == 2
+    if state.refine == 1:
+        for k in range(state.n):
+            grid = state.labels[k]
+            differs = np.zeros((ny, nx), dtype=bool)
+            differs[1:, :] |= grid[1:, :] != grid[:-1, :]
+            differs[:-1, :] |= grid[1:, :] != grid[:-1, :]
+            differs[:, 1:] |= grid[:, 1:] != grid[:, :-1]
+            differs[:, :-1] |= grid[:, 1:] != grid[:, :-1]
+            near |= differs
+        if mask is not None:
+            m = mask.coarse
+            differs = np.zeros((ny, nx), dtype=bool)
+            differs[1:, :] |= m[1:, :] != m[:-1, :]
+            differs[:-1, :] |= m[1:, :] != m[:-1, :]
+            differs[:, 1:] |= m[:, 1:] != m[:, :-1]
+            differs[:, :-1] |= m[:, 1:] != m[:, :-1]
+            near |= differs
+    return np.flatnonzero(near.reshape(-1))
 
 
 def etch_isotropic(
@@ -1542,15 +2007,83 @@ def etch_isotropic(
                 source = source[state.split(cuts)]
     # Each slab placed at its middle, from the slab the march had.
     middles = 0.5 * (state.z[:-1] + state.z[1:])
+    before = state.copy()
+    changed = np.zeros(state.n, dtype=bool)
     for target, (whole, keys, fine) in _placed(front, source, middles, L):
         _check(should_cancel, "an isotropic etch")
         state.labels[target][whole] = fill
+        changed[target] |= bool(whole.any()) or bool(keys.size)
         if keys.size:
             new_keys = target * state.plane + keys
             blocks = state.blocks(new_keys)
             blocks[fine] = fill
             state.store(new_keys, blocks)
+    # Boundaries: what the etchant left at any point of each slab.
+    if front.at is not None:
+        for target in np.flatnonzero(changed):
+            _check(should_cancel, "an isotropic etch")
+
+            def decide(x, y, target=int(target)):
+                old = before.sample(target, x, y)
+                out = old.copy()
+                said = front.at(middles[target], int(source[target]), x, y)
+                # where placing settled the whole fine cell, what it wrote there
+                settled = said < 0
+                if settled.any():
+                    written = state.sample_fine(
+                        target,
+                        np.floor((x[settled] - state.bounds[0]) / state.fine_x).astype(np.int64),
+                        np.floor((y[settled] - state.bounds[1]) / state.fine_y).astype(np.int64),
+                    )
+                    said[settled] = (written == fill).astype(np.int8)
+                gone = (table[old] > 0.0) & (said > 0)
+                out[gone] = fill
+                return out
+
+            _refit(state, int(target), _changed_cells(state, int(target), before, int(target)), decide)
     state.consolidate()
+
+
+def _changed_cells(state: VoxelState, k: int, before: VoxelState, j: int) -> np.ndarray:
+    """Cells of slab ``k`` a step changed from slab ``j`` of ``before``,
+    with the ring of cells round them, where a boundary can be fitted: the
+    only places a boundary can have moved."""
+    a, b = state.labels[k], before.labels[j]
+    diff = a != b
+    both = np.flatnonzero(((a == MIXED) & (b == MIXED)).reshape(-1))
+    if both.size:
+        for part in _chunks(both, state.refine * state.refine * 3):
+            ka, kb = k * state.plane + part, j * before.plane + part
+            differs = (state.blocks(ka) != before.blocks(kb)).any(axis=(1, 2))
+            differs |= (state.cuts(ka) != before.cuts(kb)).any(axis=(1, 2))
+            diff.reshape(-1)[part[differs]] = True
+    if not diff.any():
+        return np.zeros(0, dtype=np.int64)
+    ring = diff.copy()
+    ring[1:, :] |= diff[:-1, :]
+    ring[:-1, :] |= diff[1:, :]
+    ring[:, 1:] |= ring[:, :-1].copy()
+    ring[:, :-1] |= ring[:, 1:].copy()
+    wanted = np.zeros(a.size, dtype=bool)
+    wanted[_edge_cells(state, k)] = True
+    return np.flatnonzero(ring.reshape(-1) & wanted)
+
+
+def _edge_cells(state: VoxelState, k: int) -> np.ndarray:
+    """Cells of slab ``k`` a boundary can be fitted in: its refined cells,
+    and -- one fine cell a cell -- every cell beside another label."""
+    grid = state.labels[k]
+    near = grid == MIXED
+    if state.refine == 1:
+        differs = np.zeros(grid.shape, dtype=bool)
+        step = grid[1:, :] != grid[:-1, :]
+        differs[1:, :] |= step
+        differs[:-1, :] |= step
+        step = grid[:, 1:] != grid[:, :-1]
+        differs[:, 1:] |= step
+        differs[:, :-1] |= step
+        near |= differs
+    return np.flatnonzero(near.reshape(-1))
 
 
 def _placed(front, source, heights, L):
@@ -1689,13 +2222,20 @@ def flip(state: VoxelState, axis: str) -> None:
         k, rest = np.divmod(state.brick_keys, state.plane)
         iy, ix = np.divmod(rest, state.nx)
         k = state.n - 1 - k
+        # a turn over is a mirror: a cut's line is mirrored with its cell
+        code = voxel_cut.code_of(state.pool_cut)
         if axis == "y":
             ix = state.nx - 1 - ix
             state.pool = np.ascontiguousarray(state.pool[:, :, ::-1])
+            code = voxel_cut.MIRROR_X[code][:, :, ::-1]
+            other = voxel_cut.other_of(state.pool_cut)[:, :, ::-1]
         else:
             iy = state.ny - 1 - iy
             state.pool = np.ascontiguousarray(state.pool[:, ::-1, :])
-        state._pool_hash = _brick_hash(state.pool)
+            code = voxel_cut.MIRROR_Y[code][:, ::-1, :]
+            other = voxel_cut.other_of(state.pool_cut)[:, ::-1, :]
+        state.pool_cut = np.ascontiguousarray(voxel_cut.pack(code, other))
+        state._pool_hash = _pair_hash(state.pool, state.pool_cut)
         keys = k * state.plane + iy * state.nx + ix
         order = np.argsort(keys, kind="stable")
         state.brick_keys = keys[order]
@@ -1719,7 +2259,9 @@ def rasterize(state: VoxelState, geometry) -> Mask2:
     coarse = shapely.intersects_xy(prepared, grid_x.ravel(), grid_y.ravel()).reshape(state.ny, state.nx)
     B = state.refine
     if B == 1:
-        return Mask2.build(coarse, np.zeros(0, np.int64), np.zeros((0, 1, 1), bool))
+        out = Mask2.build(coarse, np.zeros(0, np.int64), np.zeros((0, 1, 1), bool))
+        out.geometry = prepared
+        return out
     # The bulk cells the outline passes through: points along it a quarter
     # of a cell apart, with their neighbours for the corners a line clips.
     outline = shapely.segmentize(shapely.boundary(prepared), 0.25 * state.cell)
@@ -1749,7 +2291,9 @@ def rasterize(state: VoxelState, geometry) -> Mask2:
         fx, fy = np.broadcast_arrays(fx, fy)
         inside = shapely.intersects_xy(prepared, fx.ravel(), fy.ravel())
         blocks[part_start : part_start + part.size] = inside.reshape(part.size, B, B)
-    return Mask2.build(coarse, cells, blocks)
+    out = Mask2.build(coarse, cells, blocks)
+    out.geometry = prepared
+    return out
 
 
 def _row_order(rows):
@@ -1858,6 +2402,21 @@ def _slab_fine(state: VoxelState, k: int) -> np.ndarray:
     return out
 
 
+def _frame(extent: tuple[float, float, float, float]) -> tuple[int, int]:
+    """A picture's size for outlines: the true shape, BASE_PIXELS on its longer side."""
+    h0, h1, v0, v1 = extent
+    span = max(h1 - h0, v1 - v0, 1e-12)
+    return max(2, round(BASE_PIXELS * (h1 - h0) / span)), max(2, round(BASE_PIXELS * (v1 - v0) / span))
+
+
+def _darker_hex(rgb):
+    def darker(color: str) -> str:
+        r, g, b = rgb(color)
+        return "#%02x%02x%02x" % (int(r * STEP_LINE_SHADE), int(g * STEP_LINE_SHADE), int(b * STEP_LINE_SHADE))
+
+    return darker
+
+
 def top_view(
     state: VoxelState,
     colors: Mapping[str, str],
@@ -1865,7 +2424,21 @@ def top_view(
     *,
     hidden: Sequence[str] = (),
     steps: bool = True,
+    vector: bool = False,
 ) -> dict[str, Any]:
+    if vector:
+        x_min, y_min, x_max, y_max = state.bounds
+        extent = (x_min, x_max, y_min, y_max)
+        width, height = _frame(extent)
+        hidden_ids = {state.known_id(name) for name in hidden} - {None}
+        return {
+            "image": "",
+            "vector": _top_vector(state, colors, extent, width, height, hidden_ids, steps, _darker_hex(rgb)),
+            "exact": False,
+            "width": width,
+            "height": height,
+            "extent": {"horizontalMin": x_min, "horizontalMax": x_max, "verticalMin": y_min, "verticalMax": y_max},
+        }
     state = shown(state)
     hidden_ids = {state.known_id(name) for name in hidden} - {None}
     visible = np.ones(256, dtype=bool)
@@ -1969,6 +2542,7 @@ def section(
     position: float | None = None,
     line: tuple[tuple[float, float], tuple[float, float]] | None = None,
     interpolation: int = 1,
+    vector: bool = False,
 ) -> dict[str, Any]:
     x_min, y_min, x_max, y_max = state.bounds
     top = max(z_max, state.top + state.z_offset)
@@ -1978,6 +2552,27 @@ def section(
         length = float(math.hypot(bx - ax, by - ay))
         if length <= 0.0:
             raise VoxelError("a section line needs two distinct points")
+        if vector:
+            # a quarter of a fine cell apart: the runs' ends are that close
+            samples = max(2, min(200_000, int(math.ceil(length / (0.25 * state.fine)))))
+            extent = (0.0, length, state.z_offset, top)
+            width, height = _frame(extent)
+            return {
+                "image": "",
+                "vector": _section_vector(state, colors, extent, width, height, line=line, samples=samples),
+                "axis": "line",
+                "position": 0.0,
+                "index": 0,
+                "interpolation": interpolation,
+                "sampledSpacingUm": length / samples,
+                "exact": False,
+                "width": width,
+                "height": height,
+                "horizontalAxis": "s",
+                "extent": {"horizontalMin": 0.0, "horizontalMax": length, "verticalMin": state.z_offset, "verticalMax": top},
+                "positions": [],
+                "line": {"start": [float(ax), float(ay)], "end": [float(bx), float(by)]},
+            }
         samples = max(2, min(4 * SHOWN_CELLS, int(math.ceil(length / (0.5 * state.fine)))))
         t = (np.arange(samples) + 0.5) / samples
         px, py = ax + t * (bx - ax), ay + t * (by - ay)
@@ -2013,6 +2608,25 @@ def section(
     default = 0.5 * (coordinates[0] + coordinates[-1])
     index = int(np.argmin(np.abs(coordinates - (default if position is None else position))))
     cut = float(coordinates[index])
+    if vector:
+        horizontal = (x_min, x_max) if axis == "y" else (y_min, y_max)
+        extent = (horizontal[0], horizontal[1], state.z_offset, top)
+        width, height = _frame(extent)
+        return {
+            "image": "",
+            "vector": _section_vector(state, colors, extent, width, height, axis=axis, cut=cut),
+            "axis": axis,
+            "position": cut,
+            "index": index,
+            "interpolation": interpolation,
+            "sampledSpacingUm": state.fine,
+            "exact": False,
+            "width": width,
+            "height": height,
+            "horizontalAxis": "x" if axis == "y" else "y",
+            "extent": {"horizontalMin": horizontal[0], "horizontalMax": horizontal[1], "verticalMin": state.z_offset, "verticalMax": top},
+            "positions": [float(value) for value in coordinates],
+        }
     shown_state = shown(state)
     B = shown_state.refine
     if axis == "y":
@@ -2047,6 +2661,222 @@ def section(
         },
         "positions": [float(value) for value in coordinates],
     }
+
+
+def _row_runs(labels: np.ndarray, cuts: np.ndarray, v: float, origin: float, step: float):
+    """Runs along a row of fine cells (slabs, cells), read at ``v`` (0..1)
+    across them: where the row crosses a cell's cut the cell is split at the
+    crossing. Returns, per slab, run boundaries (from ``origin``, fine cells
+    ``step`` wide) and materials."""
+    n, count = labels.shape
+    code = voxel_cut.code_of(cuts)
+    other = voxel_cut.other_of(cuts).astype(np.int64)
+    lab = labels.astype(np.int64)
+    a, b = voxel_cut.START[code], voxel_cut.END[code]
+    ax, ay = voxel_cut.ANCHORS[a, 0], voxel_cut.ANCHORS[a, 1]
+    bx, by = voxel_cut.ANCHORS[b, 0], voxel_cut.ANCHORS[b, 1]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = (v - ay) / (by - ay)
+        u = ax + t * (bx - ax)
+    split = (code > 0) & (by != ay) & (t >= 0) & (t <= 1) & (u > 1e-9) & (u < 1 - 1e-9)
+    u = np.where(split, u, 1.0)
+    first = np.where(voxel_cut.left_of(code, np.where(split, 0.5 * u, 0.5), v), lab, other)
+    second = np.where(voxel_cut.left_of(code, np.where(split, 0.5 * (1 + u), 0.5), v), lab, other)
+    col = np.arange(count)[None, :]
+    starts = np.stack([np.broadcast_to(col, (n, count)).astype(np.float64), col + u], -1).reshape(n, -1)
+    mats = np.stack([first, second], -1).reshape(n, -1)
+    lengths = np.stack([u, 1.0 - u], -1).reshape(n, -1)
+    s_list, m_list = [], []
+    for k in range(n):
+        keep = lengths[k] > 1e-12
+        st, mt = starts[k][keep], mats[k][keep]
+        fresh = np.concatenate([[True], mt[1:] != mt[:-1]])
+        s_list.append(origin + np.concatenate([st[fresh], [count]]) * step)
+        m_list.append(mt[fresh])
+    return s_list, m_list
+
+
+def _section_vector(state: VoxelState, colors, extent, width, height, *, axis=None, cut=None, line=None, samples=None):
+    """A section as outlines (see :mod:`voxel_vector`)."""
+    from . import voxel_vector
+
+    x_min, y_min, x_max, y_max = state.bounds
+    slabs = np.arange(state.n)[:, None]
+    B = state.refine
+    if line is None:
+        if axis == "y":
+            g = (cut - y_min) / state.fine_y
+            row = int(np.clip(np.floor(g), 0, state.ny * B - 1))
+            v = float(np.clip(g - row, 0.0, 1.0))
+            cols = np.arange(state.nx * B)[None, :]
+            labels = state.sample_fine(slabs, cols, row)
+            cuts = state.sample_cut(slabs, cols, row)
+            s_list, m_list = _row_runs(labels, cuts, v, x_min, state.fine_x)
+            s_min, s_max = x_min, x_max
+        else:
+            g = (cut - x_min) / state.fine_x
+            col = int(np.clip(np.floor(g), 0, state.nx * B - 1))
+            u = float(np.clip(g - col, 0.0, 1.0))
+            rows = np.arange(state.ny * B)[None, :]
+            labels = state.sample_fine(slabs, col, rows)
+            cuts = state.sample_cut(slabs, col, rows)
+            # a column read as a row: swap x and y, which mirrors the cut
+            code = voxel_cut.code_of(cuts)
+            swapped = voxel_cut.pack(voxel_cut.SWAP_XY[code], voxel_cut.other_of(cuts))
+            s_list, m_list = _row_runs(labels, swapped, u, y_min, state.fine_y)
+            s_min, s_max = y_min, y_max
+    else:
+        (ax, ay), (bx, by) = line
+        t = (np.arange(samples) + 0.5) / samples
+        labels = state.sample(slabs, (ax + t * (bx - ax))[None, :], (ay + t * (by - ay))[None, :]).astype(np.int64)
+        length = float(math.hypot(bx - ax, by - ay))
+        s_list, m_list = [], []
+        for k in range(state.n):
+            fresh = np.concatenate([[True], labels[k][1:] != labels[k][:-1]])
+            s_list.append(np.concatenate([np.flatnonzero(fresh), [samples]]) * (length / samples))
+            m_list.append(labels[k][fresh])
+        s_min, s_max = 0.0, length
+    z = state.z + state.z_offset
+    found = voxel_vector.runs_loops(s_list, m_list, z, s_min, s_max)
+    fills = [
+        (state.materials[m - 1], *found[m])
+        for m in sorted(found)
+        if 0 < m <= len(state.materials)
+    ]
+    return voxel_vector.payload(fills, [], colors, extent, width, height)
+
+
+def _top_field(state: VoxelState, hidden_ids: set[int]):
+    """What is seen from above, as a flat two-level map: the topmost
+    material of every bulk column and its height, and fine cell by fine
+    cell in the columns that meet a refined cell first -- where the topmost
+    thing is a cut, the line, the material and height on its left, and on
+    its right whatever lies under an open side (the same material at
+    another height is kept: that is a step to draw).
+
+    Returns (coarse, coarse height, cells, labels, codes, others, left
+    heights, right heights)."""
+    n, ny, nx, B = state.n, state.ny, state.nx, state.refine
+    visible = np.ones(256, dtype=bool)
+    visible[VOID] = False
+    for label in hidden_ids:
+        visible[label] = False
+    coarse = np.zeros((ny, nx), dtype=np.int64)
+    height = np.full((ny, nx), -np.inf)
+    start = np.full((ny, nx), -1, dtype=np.int64)
+    found = np.zeros((ny, nx), dtype=bool)
+    for k in range(n - 1, -1, -1):
+        grid = state.labels[k]
+        refined = (grid == MIXED) & ~found
+        start[refined] = k
+        found |= refined
+        seen = visible[grid] & (grid != MIXED) & ~found
+        coarse[seen] = grid[seen]
+        height[seen] = state.z[k + 1]
+        found |= seen
+        if found.all():
+            break
+    cells = np.flatnonzero((start >= 0).reshape(-1))
+    coarse.reshape(-1)[cells] = MIXED
+    m = cells.size
+    lab = np.zeros((m, B, B), dtype=np.int64)
+    code = np.zeros((m, B, B), dtype=np.int64)
+    other = np.zeros((m, B, B), dtype=np.int64)
+    h_left = np.full((m, B, B), -np.inf)
+    h_right = np.full((m, B, B), -np.inf)
+    if m == 0:
+        return coarse, height, cells, lab, code, other, h_left, h_right
+    first = start.reshape(-1)[cells]
+    done = np.zeros((m, B, B), dtype=bool)
+    pending: list[tuple[np.ndarray, int]] = []  # fine cells whose right side is open, and the slab
+    for k in range(int(first.max()), -1, -1):
+        active = np.flatnonzero((first >= k) & ~done.all(axis=(1, 2)))
+        if active.size == 0:
+            break
+        keys = k * state.plane + cells[active]
+        L = state.blocks(keys).astype(np.int64)
+        C = state.cuts(keys)
+        K = voxel_cut.code_of(C)
+        O = voxel_cut.other_of(C).astype(np.int64)
+        todo = ~done[active]
+        vis_l = visible[L] & todo
+        vis_o = visible[O] & (K > 0) & todo
+        whole = vis_l & (K == 0)
+        both = vis_l & vis_o
+        only_l = vis_l & ~vis_o & (K > 0)
+        only_o = vis_o & ~vis_l
+        settle = whole | both | only_l | only_o
+        a, r, c = np.nonzero(settle)
+        rows = active[a]
+        flip = only_o[a, r, c]
+        here = K[a, r, c]
+        # only the far side seen: it becomes the left one, the line turns round
+        turned = voxel_cut.CODE_OF[voxel_cut.END[here], voxel_cut.START[here]]
+        lab[rows, r, c] = np.where(flip, O[a, r, c], L[a, r, c])
+        other[rows, r, c] = np.where(flip, L[a, r, c], O[a, r, c])
+        code[rows, r, c] = np.where(flip, turned, here)
+        top = state.z[k + 1]
+        h_left[rows, r, c] = top
+        h_right[rows, r, c] = np.where(both[a, r, c], top, -np.inf)
+        done[rows, r, c] = True
+        half = np.flatnonzero((only_l | only_o)[a, r, c])
+        if half.size:
+            pending.append(((rows[half] * B + r[half]) * B + c[half], k))
+    # an open right side: what is under it, at a point well inside it
+    x_min, y_min, _, _ = state.bounds
+    for flat, k in pending:
+        row, rem = np.divmod(flat, B * B)
+        r, c = np.divmod(rem, B)
+        k_code = code.reshape(-1)[flat]
+        centroid = np.array([voxel_cut.polygon(int(cc), False).mean(axis=0) for cc in k_code]).reshape(-1, 2)
+        iy, ix = np.divmod(cells[row], nx)
+        px = x_min + (ix * B + c + centroid[:, 0]) * state.fine_x
+        py = y_min + (iy * B + r + centroid[:, 1]) * state.fine_y
+        under = np.zeros(flat.size, dtype=np.int64)
+        under_h = np.full(flat.size, -np.inf)
+        missing = np.ones(flat.size, dtype=bool)
+        for j in range(k - 1, -1, -1):
+            if not missing.any():
+                break
+            got = state.sample(j, px, py).astype(np.int64)
+            hit = missing & visible[got]
+            under[hit] = got[hit]
+            under_h[hit] = state.z[j + 1]
+            missing &= ~hit
+        other.reshape(-1)[flat] = under
+        h_right.reshape(-1)[flat] = under_h
+    # no cut left where nothing differs across it
+    none = (code > 0) & (other == lab) & (np.abs(h_left - h_right) <= Z_EPS)
+    code[none] = 0
+    return coarse, height, cells, lab, code, other, h_left, h_right
+
+
+def _top_vector(state: VoxelState, colors, extent, width, height, hidden_ids, steps: bool, darker):
+    """The view from above as outlines, with the lines where a material
+    meets itself at another height."""
+    from . import voxel_vector
+
+    coarse, top_h, cells, lab, code, other, h_left, h_right = _top_field(state, hidden_ids)
+    x_min, y_min, _, _ = state.bounds
+    # the fills see a cut only where the material changes across it
+    fill_code = np.where(other != lab, code, 0)
+    cut = voxel_cut.pack(fill_code, other)
+    found = voxel_vector.field_loops(
+        coarse, cells, lab.astype(np.uint8), cut, x_min, y_min, 0.5 * state.fine_x, 0.5 * state.fine_y
+    )
+    fills = [(state.materials[m - 1], *found[m]) for m in sorted(found) if 0 < m <= len(state.materials)]
+    strokes = []
+    if steps:
+        mat, x0, y0, x1, y1 = voxel_vector.step_edges(coarse, top_h, cells, lab, code, other, h_left, h_right)
+        for m in np.unique(mat):
+            pick = mat == m
+            count = int(pick.sum())
+            points = np.stack([
+                np.stack([x_min + x0[pick] * 0.5 * state.fine_x, y_min + y0[pick] * 0.5 * state.fine_y], 1),
+                np.stack([x_min + x1[pick] * 0.5 * state.fine_x, y_min + y1[pick] * 0.5 * state.fine_y], 1),
+            ], 1).reshape(-1, 2)
+            strokes.append((state.materials[int(m) - 1], points, np.arange(count) * 2))
+    return voxel_vector.payload(fills, strokes, colors, extent, width, height, darker)
 
 
 # -- the 3D view -----------------------------------------------------------
@@ -2092,7 +2922,7 @@ def _rectangles(keys: np.ndarray) -> tuple[np.ndarray, ...]:
 
 
 def build_meshes(state: VoxelState, *, buried: bool) -> dict[str, tuple[np.ndarray, ...]]:
-    """Closed box meshes for every material, faces joined into rectangles.
+    """Closed meshes for every material, faces joined into rectangles.
 
     Each material's triangles face outward; a face against another
     material carries that material's place in the mesh order, and is left
@@ -2104,16 +2934,18 @@ def build_meshes(state: VoxelState, *, buried: bool) -> dict[str, tuple[np.ndarr
     different lines, which shows as pixel cracks. So every corner that
     lies on another drawn face's edge -- of any material -- is put into
     that edge, and a face with such points is fanned from its centre.
-    Corners are on the lattice of cell boundaries, so this is exact
-    integer work.
 
-    On two levels the lattice is the fine one: faces between bulk cells
-    are found and joined on the bulk grid, and faces with a refined cell
-    on either side fine square by fine square, joined into rectangles the
-    same way.
+    Everything is on an integer lattice of :data:`voxel_cut.LATTICE`
+    points per fine cell and one point per slab boundary, so this is exact
+    integer work: faces between bulk cells are found and joined on the
+    bulk grid, faces with a refined cell on either side half a fine side
+    at a time (a cut meets a side at its middle), and a cut cell adds its
+    slanted wall and the parts its cuts split its floor and ceiling into
+    -- including the point where a cut below crosses a cut above.
     """
     state = shown(state)
     B = state.refine
+    M = voxel_cut.LATTICE
     order = state.present()
     place = np.full(_OUTSIDE + 1, -1, dtype=np.int64)
     for index, name in enumerate(order):
@@ -2121,15 +2953,26 @@ def build_meshes(state: VoxelState, *, buried: bool) -> dict[str, tuple[np.ndarr
     n = state.n
     owners: list[np.ndarray] = []
     others: list[np.ndarray] = []
-    lattice: list[np.ndarray] = []  # (Q, 4, 3) corners as (i, j, b), counter-clockwise from outside
+    shapes: list[np.ndarray] = []  # (P, W, 3) lattice points, counter-clockwise from outside
+    sizes: list[np.ndarray] = []
 
-    def add(owner, neighbour, corners, scale=B):
+    def add_polygons(owner, neighbour, points, size):
         keep = (neighbour == VOID) | (neighbour == _OUTSIDE) | buried
-        corners = corners[keep].astype(np.int64)
-        corners[:, :, :2] *= scale  # onto the fine lattice
+        keep &= (owner != VOID) & (owner != _OUTSIDE)
+        if not keep.any():
+            return
         owners.append(owner[keep].astype(np.int64))
         others.append(neighbour[keep].astype(np.int64))
-        lattice.append(corners)
+        points = points[keep].astype(np.int64)
+        padded = np.zeros((points.shape[0], _WIDEST, 3), dtype=np.int64)
+        padded[:, : points.shape[1]] = points
+        shapes.append(padded)
+        sizes.append(np.broadcast_to(np.asarray(size, dtype=np.int64), keep.shape)[keep].copy())
+
+    def add(owner, neighbour, corners, scale):
+        corners = corners.astype(np.int64).copy()
+        corners[:, :, :2] *= scale  # onto the lattice
+        add_polygons(owner, neighbour, corners, 4)
 
     def faces_between(owner, neighbour, tag=None):
         # Keys only where a face is: most of the grid has none, and whole-
@@ -2152,6 +2995,7 @@ def build_meshes(state: VoxelState, *, buried: bool) -> dict[str, tuple[np.ndarr
         return np.stack([np.stack(corner, -1) for corner in corners], axis=1)
 
     labels = state.labels.astype(np.int16)
+    coarse = B * M
     # Horizontal faces, at every slab boundary.
     for b in range(n + 1):
         below = labels[b - 1] if b > 0 else np.full((state.ny, state.nx), _OUTSIDE, dtype=np.int16)
@@ -2166,7 +3010,7 @@ def build_meshes(state: VoxelState, *, buried: bool) -> dict[str, tuple[np.ndarr
                 corners = quad((c0, r0, bb), (c1, r0, bb), (c1, r1, bb), (c0, r1, bb))
             else:
                 corners = quad((c0, r0, bb), (c0, r1, bb), (c1, r1, bb), (c1, r0, bb))
-            add(own, nb, corners)
+            add(own, nb, corners, coarse)
     if n:
         # Walls facing x, between column i-1 and i, joined along y and up
         # through the slabs. The wall line is folded into the key so runs
@@ -2187,7 +3031,7 @@ def build_meshes(state: VoxelState, *, buried: bool) -> dict[str, tuple[np.ndarr
                     corners = quad((line, c0, s0), (line, c1, s0), (line, c1, s1), (line, c0, s1))
                 else:
                     corners = quad((line, c0, s0), (line, c0, s1), (line, c1, s1), (line, c1, s0))
-                add(own, nb, corners)
+                add(own, nb, corners, coarse)
         # Walls facing y, between row j-1 and j.
         edge = np.full((n, 1, state.nx), _OUTSIDE, dtype=np.int16)
         low = np.concatenate([edge, labels], axis=1).transpose(1, 0, 2)
@@ -2205,32 +3049,33 @@ def build_meshes(state: VoxelState, *, buried: bool) -> dict[str, tuple[np.ndarr
                     corners = quad((c0, line, s0), (c0, line, s1), (c1, line, s1), (c1, line, s0))
                 else:
                     corners = quad((c0, line, s0), (c1, line, s0), (c1, line, s1), (c0, line, s1))
-                add(own, nb, corners)
+                add(own, nb, corners, coarse)
     if state.brick_keys.size:
-        for own, nb, corners in _fine_faces(state):
-            add(own, nb, corners, scale=1)
+        for own, nb, points, size in _fine_faces(state):
+            add_polygons(own, nb, points, size)
     if not owners:
         return {}
     owner = np.concatenate(owners)
     neighbour = np.concatenate(others)
-    corners = np.concatenate(lattice)
+    points = np.concatenate(shapes)
+    size = np.concatenate(sizes)
     x_min, y_min, _, _ = state.bounds
 
-    def place_of(points):
+    def place_of(lattice):
         return np.stack(
             [
-                x_min + points[:, 0] * state.fine_x,
-                y_min + points[:, 1] * state.fine_y,
-                state.z[points[:, 2]],
+                x_min + lattice[:, 0] * (state.fine_x / M),
+                y_min + lattice[:, 1] * (state.fine_y / M),
+                state.z[lattice[:, 2]],
             ],
             axis=1,
         )
 
-    coordinates, triangles, of_quad = _conforming(corners, place_of)
+    coordinates, triangles, of_face = _conforming(points, size, place_of)
     coordinates = coordinates.astype(np.float32)
     meshes: dict[str, tuple[np.ndarray, ...]] = {}
-    tri_owner = owner[of_quad]
-    tri_other = neighbour[of_quad]
+    tri_owner = owner[of_face]
+    tri_other = neighbour[of_face]
     for name in order:
         label = state.known_id(name)
         chosen = tri_owner == label
@@ -2246,103 +3091,15 @@ def build_meshes(state: VoxelState, *, buried: bool) -> dict[str, tuple[np.ndarr
     return meshes
 
 
-def _fine_faces(state: VoxelState):
-    """Faces with a refined cell on either side, as rectangles on the fine
-    lattice: (owner, neighbour, corners) per orientation and sense, the
-    corners counter-clockwise seen from outside the owner."""
-    B, n, nx, ny, plane = state.refine, state.n, state.nx, state.ny, state.plane
-    labels = state.labels
-    # Unit squares: (owner, neighbour, orientation, sense, plane, u, v).
-    # Orientation 0: x = plane, u along y, v the slab; 1: y = plane, u
-    # along x, v the slab; 2: z = slab boundary plane, u along x, v along y.
-    units: list[np.ndarray] = []
+#: The most corners a face has: a cut wall with the crossings of the cuts
+#: below and above put into its bottom and top edges.
+_WIDEST = 6
 
-    def blocks(k, cells, fill):
-        if 0 <= k < n:
-            return state.blocks(k * plane + cells).astype(np.int16)
-        return np.full((cells.size, B, B), fill, dtype=np.int16)
 
-    def emit(a, b, orient, line, u, v):
-        # a sits on the negative side of the face, b on the positive one
-        for owner, other, sense in ((a, b, 1), (b, a, 0)):
-            face = (owner != other) & (owner != VOID) & (owner != _OUTSIDE)
-            if face.any():
-                count = int(face.sum())
-                units.append(np.stack([
-                    owner[face], other[face], np.full(count, orient), np.full(count, sense),
-                    np.broadcast_to(line, face.shape)[face], np.broadcast_to(u, face.shape)[face],
-                    np.broadcast_to(v, face.shape)[face],
-                ], 1).astype(np.int64))
-
-    fine = np.arange(B)
-    for b in range(n + 1):
-        below = labels[b - 1] if b > 0 else None
-        above = labels[b] if b < n else None
-        hit = np.zeros((ny, nx), dtype=bool)
-        if below is not None:
-            hit |= below == MIXED
-        if above is not None:
-            hit |= above == MIXED
-        cells = np.flatnonzero(hit)
-        if cells.size == 0:
-            continue
-        iy, ix = np.divmod(cells, nx)
-        u = ix[:, None, None] * B + fine[None, None, :]
-        v = iy[:, None, None] * B + fine[None, :, None]
-        emit(blocks(b - 1, cells, _OUTSIDE), blocks(b, cells, VOID), 2, np.int64(b), u, v)
-    for k in range(n):
-        grid = labels[k]
-        mixed = grid == MIXED
-        if not mixed.any():
-            continue
-        for axis in (0, 1):  # walls facing x, then y
-            # pairs of cells side by side along the axis, either refined;
-            # the window edge is a neighbour outside
-            if axis == 0:
-                pad = np.pad(mixed, ((0, 0), (1, 1)))
-                pair = pad[:, :-1] | pad[:, 1:]  # (ny, nx + 1): wall line i between i-1 and i
-            else:
-                pad = np.pad(mixed, ((1, 1), (0, 0)))
-                pair = pad[:-1, :] | pad[1:, :]
-            r, c = np.nonzero(pair)
-            if axis == 0:
-                low_ok, high_ok = c > 0, c < nx
-                low_cell = r * nx + np.clip(c - 1, 0, nx - 1)
-                high_cell = r * nx + np.clip(c, 0, nx - 1)
-            else:
-                low_ok, high_ok = r > 0, r < ny
-                low_cell = np.clip(r - 1, 0, ny - 1) * nx + c
-                high_cell = np.clip(r, 0, ny - 1) * nx + c
-            low = blocks(k, low_cell, _OUTSIDE)
-            high = blocks(k, high_cell, _OUTSIDE)
-            low[~low_ok] = _OUTSIDE
-            high[~high_ok] = _OUTSIDE
-            if axis == 0:
-                a, bb = low[:, :, -1], high[:, :, 0]  # (m, B) along y
-                line = (c * B)[:, None]
-                u = r[:, None] * B + fine[None, :]
-            else:
-                a, bb = low[:, -1, :], high[:, 0, :]  # (m, B) along x
-                line = (r * B)[:, None]
-                u = c[:, None] * B + fine[None, :]
-            emit(a, bb, axis, line, u, np.int64(k))
-            # inside refined cells
-            cells = np.flatnonzero(mixed.reshape(-1))
-            iy, ix = np.divmod(cells, nx)
-            data = blocks(k, cells, VOID)
-            if axis == 0:
-                a, bb = data[:, :, :-1], data[:, :, 1:]  # (m, B, B-1): row, wall j+1
-                line = ix[:, None, None] * B + fine[None, None, 1:]
-                u = iy[:, None, None] * B + fine[None, :, None]
-            else:
-                a, bb = data[:, :-1, :], data[:, 1:, :]  # (m, B-1, B)
-                line = iy[:, None, None] * B + fine[None, 1:, None]
-                u = ix[:, None, None] * B + fine[None, None, :]
-            emit(a, bb, axis, line, u, np.int64(k))
-    if not units:
-        return []
-    table = np.concatenate(units)
-    # Join along u (same everything else and v), then along v.
+def _join_units(table: np.ndarray) -> tuple[np.ndarray, ...]:
+    """Unit faces (owner, other, orient, sense, line, u, v) joined into
+    rectangles: along u, then along v. Returns (owner, other, orient,
+    sense, line, u0, u1, v0, v1), ends exclusive."""
     order = _row_order(table[:, [0, 1, 2, 3, 4, 6, 5]])
     rec = table[order]
     start = np.ones(rec.shape[0], dtype=bool)
@@ -2358,58 +3115,284 @@ def _fine_faces(state: VoxelState):
     begin = np.flatnonzero(start)
     end = np.concatenate([begin[1:], [runs.shape[0]]]) - 1
     own, nb, orient, sense, line = (runs[begin, i] for i in range(5))
-    u0, u1, v0, v1 = runs[begin, 5], runs[begin, 6], runs[begin, 7], runs[end, 7] + 1
+    return own, nb, orient, sense, line, runs[begin, 5], runs[begin, 6], runs[begin, 7], runs[end, 7] + 1
 
-    def quad(*corners):
-        return np.stack([np.stack(corner, -1) for corner in corners], axis=1)
 
-    out = []
-    for o, sn in itertools.product((0, 1, 2), (1, 0)):
-        pick = (orient == o) & (sense == sn)
-        if not pick.any():
+def _fine_faces(state: VoxelState):
+    """Faces with a refined cell on either side, on the lattice: (owner,
+    neighbour, points (P, W, 3), corner count) per group, the points
+    counter-clockwise seen from outside the owner.
+
+    Floors and ceilings between fine cells that are not cut, and walls
+    between fine cells half a side at a time, are unit faces joined into
+    rectangles; a floor or ceiling a cut crosses is split into the parts
+    the cuts below and above make, and a cut cell has a wall along its
+    cut."""
+    B, n, nx, ny, plane = state.refine, state.n, state.nx, state.ny, state.plane
+    M = voxel_cut.LATTICE
+    H = M // 2
+    labels = state.labels
+    code_of, other_of = voxel_cut.code_of, voxel_cut.other_of
+    left_on = voxel_cut.EDGE_LEFT
+    floors: list[np.ndarray] = []  # unit faces, a fine cell each
+    sides: list[np.ndarray] = []  # unit faces, half a fine side each
+    out: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
+
+    def blocks(k, cells, fill):
+        if 0 <= k < n:
+            keys = k * plane + cells
+            return state.blocks(keys).astype(np.int16), state.cuts(keys)
+        return np.full((cells.size, B, B), fill, dtype=np.int16), np.zeros((cells.size, B, B), dtype=np.uint16)
+
+    def emit(into, a, b, orient, line, u, v, where=None):
+        # a sits on the negative side of the face, b on the positive one
+        for owner, other, sense in ((a, b, 1), (b, a, 0)):
+            face = (owner != other) & (owner != VOID) & (owner != _OUTSIDE)
+            if where is not None:
+                face &= where
+            if face.any():
+                count = int(face.sum())
+                into.append(np.stack([
+                    owner[face], other[face], np.full(count, orient), np.full(count, sense),
+                    np.broadcast_to(line, face.shape)[face], np.broadcast_to(u, face.shape)[face],
+                    np.broadcast_to(v, face.shape)[face],
+                ], 1).astype(np.int64))
+
+    def material(lab, cut, side, half):
+        """The material of each fine cell along half ``half`` of its side ``side``."""
+        code = code_of(cut)
+        return np.where(left_on[code, side, half], lab, other_of(cut).astype(np.int16))
+
+    fine = np.arange(B)
+    # Floors and ceilings.
+    for b in range(n + 1):
+        hit = np.zeros((ny, nx), dtype=bool)
+        if b > 0:
+            hit |= labels[b - 1] == MIXED
+        if b < n:
+            hit |= labels[b] == MIXED
+        cells = np.flatnonzero(hit)
+        if cells.size == 0:
             continue
-        L, a0, a1, b0, b1 = line[pick], u0[pick], u1[pick], v0[pick], v1[pick]
-        if o == 2:  # u = x, v = y, at slab boundary L
-            corners = (quad((a0, b0, L), (a1, b0, L), (a1, b1, L), (a0, b1, L)) if sn
-                       else quad((a0, b0, L), (a0, b1, L), (a1, b1, L), (a1, b0, L)))
-        elif o == 0:  # x = L, u = y, v = slab
-            corners = (quad((L, a0, b0), (L, a1, b0), (L, a1, b1), (L, a0, b1)) if sn
-                       else quad((L, a0, b0), (L, a0, b1), (L, a1, b1), (L, a1, b0)))
-        else:  # y = L, u = x, v = slab
-            corners = (quad((a0, L, b0), (a0, L, b1), (a1, L, b1), (a1, L, b0)) if sn
-                       else quad((a0, L, b0), (a1, L, b0), (a1, L, b1), (a0, L, b1)))
-        out.append((own[pick], nb[pick], corners))
+        iy, ix = np.divmod(cells, nx)
+        lb, cb = blocks(b - 1, cells, _OUTSIDE)
+        la, ca = blocks(b, cells, VOID)
+        u = ix[:, None, None] * B + fine[None, None, :]
+        v = iy[:, None, None] * B + fine[None, :, None]
+        plain = (cb == 0) & (ca == 0)
+        emit(floors, lb, la, 2, np.int64(b), u, v, plain)
+        c, ry, rx = np.nonzero(~plain)
+        if c.size == 0:
+            continue
+        code_b, code_a = code_of(cb[c, ry, rx]), code_of(ca[c, ry, rx])
+        low, high = lb[c, ry, rx], la[c, ry, rx]
+        low_other = other_of(cb[c, ry, rx]).astype(np.int16)
+        high_other = other_of(ca[c, ry, rx]).astype(np.int16)
+        ox = (ix[c] * B + rx) * M
+        oy = (iy[c] * B + ry) * M
+        pair = code_b * 33 + code_a
+        for key in _unique(pair):
+            sel = np.flatnonzero(pair == key)
+            for poly, left_b, left_a in voxel_cut.regions(int(key) // 33, int(key) % 33):
+                mb = low[sel] if left_b else low_other[sel]
+                ma = high[sel] if left_a else high_other[sel]
+                face = mb != ma
+                if not face.any():
+                    continue
+                pick = sel[face]
+                pts = np.empty((pick.size, len(poly), 3), dtype=np.int64)
+                pts[:, :, 0] = ox[pick][:, None] + poly[None, :, 0]
+                pts[:, :, 1] = oy[pick][:, None] + poly[None, :, 1]
+                pts[:, :, 2] = b
+                # up: the material below owns it; down: the one above, reversed
+                out.append((mb[face], ma[face], pts, np.full(pick.size, len(poly))))
+                out.append((ma[face], mb[face], pts[:, ::-1], np.full(pick.size, len(poly))))
+    halves = np.arange(2 * B)
+    for k in range(n):
+        grid = labels[k]
+        mixed = grid == MIXED
+        if not mixed.any():
+            continue
+        for axis in (0, 1):  # walls facing x, then y
+            # pairs of cells side by side along the axis, either refined;
+            # the window edge is a neighbour outside
+            if axis == 0:
+                pad = np.pad(mixed, ((0, 0), (1, 1)))
+                pair_ = pad[:, :-1] | pad[:, 1:]  # (ny, nx + 1): wall line i between i-1 and i
+            else:
+                pad = np.pad(mixed, ((1, 1), (0, 0)))
+                pair_ = pad[:-1, :] | pad[1:, :]
+            r, cc = np.nonzero(pair_)
+            if axis == 0:
+                low_ok, high_ok = cc > 0, cc < nx
+                low_cell = r * nx + np.clip(cc - 1, 0, nx - 1)
+                high_cell = r * nx + np.clip(cc, 0, nx - 1)
+            else:
+                low_ok, high_ok = r > 0, r < ny
+                low_cell = np.clip(r - 1, 0, ny - 1) * nx + cc
+                high_cell = np.clip(r, 0, ny - 1) * nx + cc
+            low_l, low_c = blocks(k, low_cell, _OUTSIDE)
+            high_l, high_c = blocks(k, high_cell, _OUTSIDE)
+            low_l[~low_ok] = _OUTSIDE
+            high_l[~high_ok] = _OUTSIDE
+            low_c[~low_ok] = 0
+            high_c[~high_ok] = 0
+            if axis == 0:
+                # the low cell's right side, the high cell's left side, along y
+                a = np.stack([material(low_l[:, :, -1], low_c[:, :, -1], 1, h) for h in (0, 1)], -1).reshape(-1, 2 * B)
+                bb = np.stack([material(high_l[:, :, 0], high_c[:, :, 0], 3, h) for h in (0, 1)], -1).reshape(-1, 2 * B)
+                line = (cc * B)[:, None] * M
+                u = r[:, None] * 2 * B + halves[None, :]
+            else:
+                a = np.stack([material(low_l[:, -1, :], low_c[:, -1, :], 0, h) for h in (0, 1)], -1).reshape(-1, 2 * B)
+                bb = np.stack([material(high_l[:, 0, :], high_c[:, 0, :], 2, h) for h in (0, 1)], -1).reshape(-1, 2 * B)
+                line = (r * B)[:, None] * M
+                u = cc[:, None] * 2 * B + halves[None, :]
+            emit(sides, a, bb, axis, line, u, np.int64(k))
+            # inside refined cells
+            cells = np.flatnonzero(mixed.reshape(-1))
+            iy, ix = np.divmod(cells, nx)
+            data, cut = blocks(k, cells, VOID)
+            if axis == 0:
+                a = np.stack([material(data[:, :, :-1], cut[:, :, :-1], 1, h) for h in (0, 1)], -1)  # (m, B, B-1, 2)
+                bb = np.stack([material(data[:, :, 1:], cut[:, :, 1:], 3, h) for h in (0, 1)], -1)
+                a = a.transpose(0, 2, 1, 3).reshape(cells.size, B - 1, 2 * B)
+                bb = bb.transpose(0, 2, 1, 3).reshape(cells.size, B - 1, 2 * B)
+                line = ((ix[:, None, None] * B + fine[None, 1:, None]) * M)
+                u = iy[:, None, None] * 2 * B + halves[None, None, :]
+            else:
+                a = np.stack([material(data[:, :-1, :], cut[:, :-1, :], 0, h) for h in (0, 1)], -1)  # (m, B-1, B, 2)
+                bb = np.stack([material(data[:, 1:, :], cut[:, 1:, :], 2, h) for h in (0, 1)], -1)
+                a = a.reshape(cells.size, B - 1, 2 * B)
+                bb = bb.reshape(cells.size, B - 1, 2 * B)
+                line = ((iy[:, None, None] * B + fine[None, 1:, None]) * M)
+                u = ix[:, None, None] * 2 * B + halves[None, None, :]
+            emit(sides, a, bb, axis, line, u, np.int64(k))
+        # the walls along the cuts
+        cells = np.flatnonzero(mixed.reshape(-1))
+        iy, ix = np.divmod(cells, nx)
+        data, cut = blocks(k, cells, VOID)
+        c, ry, rx = np.nonzero(cut > 0)
+        if c.size:
+            code = code_of(cut[c, ry, rx])
+            mine, theirs = data[c, ry, rx], other_of(cut[c, ry, rx]).astype(np.int16)
+            _unused, below = blocks(k - 1, cells, VOID)
+            _unused, above = blocks(k + 1, cells, VOID)
+            code_below = code_of(below[c, ry, rx])
+            code_above = code_of(above[c, ry, rx])
+            ox = (ix[c] * B + rx) * M
+            oy = (iy[c] * B + ry) * M
+            start, end = voxel_cut.START[code], voxel_cut.END[code]
+            ax_ = ox + (voxel_cut.ANCHORS[start, 0] * M).astype(np.int64)
+            ay_ = oy + (voxel_cut.ANCHORS[start, 1] * M).astype(np.int64)
+            bx_ = ox + (voxel_cut.ANCHORS[end, 0] * M).astype(np.int64)
+            by_ = oy + (voxel_cut.ANCHORS[end, 1] * M).astype(np.int64)
+            cross_b = _crossings(code, code_below)
+            cross_t = _crossings(code, code_above)
+            count = code.size
+            # the label's face looks across to the right: A0, (Xb), B0, B1, (Xt), A1
+            pts = np.zeros((count, _WIDEST, 3), dtype=np.int64)
+            size = np.zeros(count, dtype=np.int64)
+
+            def put(where, x, y, z):
+                pts[np.arange(count)[where], size[where]] = np.stack([x[where], y[where], np.full(int(where.sum()), z)], 1)
+                size[where] += 1
+
+            every = np.ones(count, dtype=bool)
+            put(every, ax_, ay_, k)
+            hb = cross_b[:, 0] >= 0
+            put(hb, ox + cross_b[:, 0], oy + cross_b[:, 1], k)
+            put(every, bx_, by_, k)
+            put(every, bx_, by_, k + 1)
+            ht = cross_t[:, 0] >= 0
+            put(ht, ox + cross_t[:, 0], oy + cross_t[:, 1], k + 1)
+            put(every, ax_, ay_, k + 1)
+            out.append((mine, theirs, pts, size.copy()))
+            # the other material's face looks back: the same corners reversed
+            idx = size[:, None] - 1 - np.arange(_WIDEST)[None, :]
+            idx = np.where(idx >= 0, idx, 0)
+            reverse = np.take_along_axis(pts, idx[:, :, None].repeat(3, axis=2), axis=1)
+            out.append((theirs, mine, reverse, size.copy()))
+    # Unit faces, joined.
+    if floors:
+        own, nb, orient, sense, line, u0, u1, v0, v1 = _join_units(np.concatenate(floors))
+        L = line
+        a0, a1, b0, b1 = u0 * M, u1 * M, v0 * M, v1 * M
+        up = sense == 1
+        corners = np.where(
+            up[:, None, None],
+            np.stack([np.stack([a0, b0, L], -1), np.stack([a1, b0, L], -1), np.stack([a1, b1, L], -1), np.stack([a0, b1, L], -1)], 1),
+            np.stack([np.stack([a0, b0, L], -1), np.stack([a0, b1, L], -1), np.stack([a1, b1, L], -1), np.stack([a1, b0, L], -1)], 1),
+        )
+        out.append((own, nb, corners, np.full(own.size, 4)))
+    if sides:
+        own, nb, orient, sense, line, u0, u1, v0, v1 = _join_units(np.concatenate(sides))
+        L, a0, a1, b0, b1 = line, u0 * H, u1 * H, v0, v1
+        for o in (0, 1):
+            for sn in (1, 0):
+                pick = (orient == o) & (sense == sn)
+                if not pick.any():
+                    continue
+                Lp, p0, p1, q0, q1 = L[pick], a0[pick], a1[pick], b0[pick], b1[pick]
+                if o == 0:  # x = L, u = y, v = slab
+                    corners = (np.stack([np.stack([Lp, p0, q0], -1), np.stack([Lp, p1, q0], -1), np.stack([Lp, p1, q1], -1), np.stack([Lp, p0, q1], -1)], 1) if sn
+                               else np.stack([np.stack([Lp, p0, q0], -1), np.stack([Lp, p0, q1], -1), np.stack([Lp, p1, q1], -1), np.stack([Lp, p1, q0], -1)], 1))
+                else:  # y = L, u = x, v = slab
+                    corners = (np.stack([np.stack([p0, Lp, q0], -1), np.stack([p0, Lp, q1], -1), np.stack([p1, Lp, q1], -1), np.stack([p1, Lp, q0], -1)], 1) if sn
+                               else np.stack([np.stack([p0, Lp, q0], -1), np.stack([p1, Lp, q0], -1), np.stack([p1, Lp, q1], -1), np.stack([p0, Lp, q1], -1)], 1))
+                out.append((own[pick], nb[pick], corners, np.full(int(pick.sum()), 4)))
     return out
 
 
-def _conforming(corners: np.ndarray, place_of) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Triangles for quads given by lattice corners, with every corner that
-    lies inside another quad's edge added to that edge.
+def _crossings(code: np.ndarray, other: np.ndarray) -> np.ndarray:
+    """Where cut ``other`` crosses cut ``code`` strictly inside it, on the
+    lattice within the cell: (count, 2), -1 where it does not."""
+    out = np.full((code.size, 2), -1, dtype=np.int64)
+    pair = code.astype(np.int64) * 33 + other.astype(np.int64)
+    for key in _unique(pair):
+        point = voxel_cut.crossing(int(key) // 33, int(key) % 33)
+        if point is not None:
+            out[pair == key] = point
+    return out
+
+
+def _conforming(points: np.ndarray, size: np.ndarray, place_of) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Triangles for faces given by lattice points ((F, W, 3), the first
+    ``size`` of each), with every face corner that lies inside another
+    face's edge along an axis added to that edge.
 
     ``place_of`` turns lattice points into coordinates. Returns the vertex
-    coordinates, the triangles (indices into them) and the quad each
-    triangle came from.
-    """
-    count = corners.shape[0]
-    points, point_of = _unique_rows(corners.reshape(-1, 3))
-    point_of = point_of.reshape(count, 4)
-    # Every edge is parallel to one axis; along it only that coordinate
-    # moves. Points are looked up by (axis, the other two coordinates,
-    # position along the axis), sorted once per axis.
-    scale = int(points.max()) + 2 if points.size else 2
-    extras_at: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []  # (quad, edge, point) inserted
-    for axis in range(3):
-        other = [a for a in range(3) if a != axis]
-        line_key = points[:, other[0]] * scale + points[:, other[1]]
-        sort_key = line_key * scale + points[:, axis]
-        order = np.argsort(sort_key, kind="stable")
-        sorted_key = sort_key[order]
-        for e in range(4):
-            a = corners[:, e]
-            b = corners[:, (e + 1) % 4]
-            along = a[:, axis] != b[:, axis]
+    coordinates, the triangles (indices into them) and the face each
+    triangle came from. A face with no points added is fanned from its
+    first corner (faces are convex); one with points added, from its
+    centre."""
+    count = points.shape[0]
+    width = points.shape[1]
+    valid = np.arange(width)[None, :] < size[:, None]
+    flat = points[valid]
+    unique_points, which = _unique_rows(flat)
+    point_of = np.full((count, width), -1, dtype=np.int64)
+    point_of[valid] = which
+    # Every face edge that runs along an axis: only that coordinate moves.
+    scale = int(unique_points.max()) + 2 if unique_points.size else 2
+    extras: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []  # (face, slot, point)
+    nxt = (np.arange(width)[None, :] + 1) % np.maximum(size[:, None], 1)
+    for e in range(width):
+        has = size > e
+        f = np.flatnonzero(has)
+        if f.size == 0:
+            continue
+        a = points[f, e]
+        b = points[f, nxt[f, e]]
+        for axis in range(3):
+            other = [x for x in range(3) if x != axis]
+            along = (a[:, axis] != b[:, axis]) & (a[:, other[0]] == b[:, other[0]]) & (a[:, other[1]] == b[:, other[1]])
             if not along.any():
                 continue
+            line_key = unique_points[:, other[0]] * scale + unique_points[:, other[1]]
+            sort_key = line_key * scale + unique_points[:, axis]
+            order = np.argsort(sort_key, kind="stable")
+            sorted_key = sort_key[order]
             q = np.flatnonzero(along)
             lo_pos = np.minimum(a[q, axis], b[q, axis])
             hi_pos = np.maximum(a[q, axis], b[q, axis])
@@ -2417,50 +3400,58 @@ def _conforming(corners: np.ndarray, place_of) -> tuple[np.ndarray, np.ndarray, 
             lo = np.searchsorted(sorted_key, key * scale + lo_pos, side="right")
             hi = np.searchsorted(sorted_key, key * scale + hi_pos, side="left")
             many = hi - lo
-            has = many > 0
-            if not has.any():
+            more = many > 0
+            if not more.any():
                 continue
-            q, lo, many = q[has], lo[has], many[has]
-            forward = (b[q, axis] > a[q, axis])
-            # Ragged ranges, flattened: quad, rank along the edge, point.
+            q, lo, many = q[more], lo[more], many[more]
+            forward = b[q, axis] > a[q, axis]
             repeat = np.repeat(np.arange(q.size), many)
             offset = np.arange(repeat.size) - np.repeat(np.cumsum(many) - many, many)
             rank = np.where(forward[repeat], offset, many[repeat] - 1 - offset)
             inserted = order[lo[repeat] + offset]
-            extras_at.append((q[repeat], np.full(repeat.size, e) * 1_000_000 + 1 + rank, inserted))
-    base = np.arange(count)
-    if not extras_at:
-        triangles = np.concatenate([point_of[:, [0, 1, 2]], point_of[:, [0, 2, 3]]])
-        return place_of(points), triangles, np.concatenate([base, base])
-    quad_of = np.concatenate([e[0] for e in extras_at])
-    slot = np.concatenate([e[1] for e in extras_at])
-    point = np.concatenate([e[2] for e in extras_at])
-    split = np.zeros(count, dtype=bool)
-    split[quad_of] = True
-    plain = np.flatnonzero(~split)
-    triangles = [point_of[plain][:, [0, 1, 2]], point_of[plain][:, [0, 2, 3]]]
-    owners = [plain, plain]
-    # The split quads: corners and inserted points in order round the
-    # quad, fanned from a new vertex at the centre -- the midpoint of two
-    # opposite corners, in real coordinates, since slabs are not evenly
-    # spaced in z.
-    fanned = np.flatnonzero(split)
-    loop_quad = np.concatenate([np.repeat(fanned, 4), quad_of])
-    loop_slot = np.concatenate([np.tile(np.arange(4) * 1_000_000, fanned.size), slot])
-    loop_point = np.concatenate([point_of[fanned].ravel(), point])
-    order = np.lexsort((loop_slot, loop_quad))
-    loop_quad, loop_point = loop_quad[order], loop_point[order]
-    first = np.flatnonzero(np.concatenate([[True], loop_quad[1:] != loop_quad[:-1]]))
-    last = np.concatenate([first[1:], [loop_quad.size]]) - 1
-    following = np.arange(loop_quad.size) + 1
+            extras.append((f[q[repeat]], e * 1_000_000 + 1 + rank, inserted))
+    located = place_of(unique_points)
+    fanned_mask = np.zeros(count, dtype=bool)
+    if extras:
+        face_of = np.concatenate([x[0] for x in extras])
+        fanned_mask[face_of] = True
+    triangles: list[np.ndarray] = []
+    owners: list[np.ndarray] = []
+    # plain faces: a fan from the first corner
+    plain = np.flatnonzero(~fanned_mask)
+    for m in range(3, width + 1):
+        pick = plain[size[plain] == m]
+        if pick.size == 0:
+            continue
+        for i in range(1, m - 1):
+            triangles.append(np.stack([point_of[pick, 0], point_of[pick, i], point_of[pick, i + 1]], 1))
+            owners.append(pick)
+    if not extras:
+        return located, np.concatenate(triangles), np.concatenate(owners)
+    # faces with points put in: their corners and the added points in order
+    # round the face, fanned from a new vertex at the centre of the corners
+    fanned = np.flatnonzero(fanned_mask)
+    corner_face = np.repeat(fanned, size[fanned])
+    corner_slot = (np.arange(corner_face.size) - np.repeat(np.cumsum(size[fanned]) - size[fanned], size[fanned])) * 1_000_000
+    corner_point = point_of[fanned][np.arange(width)[None, :] < size[fanned][:, None]]
+    loop_face = np.concatenate([corner_face, np.concatenate([x[0] for x in extras])])
+    loop_slot = np.concatenate([corner_slot, np.concatenate([x[1] for x in extras])])
+    loop_point = np.concatenate([corner_point, np.concatenate([x[2] for x in extras])])
+    order = np.lexsort((loop_slot, loop_face))
+    loop_face, loop_point = loop_face[order], loop_point[order]
+    first = np.flatnonzero(np.concatenate([[True], loop_face[1:] != loop_face[:-1]]))
+    last = np.concatenate([first[1:], [loop_face.size]]) - 1
+    following = np.arange(loop_face.size) + 1
     following[last] = first
-    located = place_of(points)
-    centres = 0.5 * (place_of(corners[fanned][:, 0]) + place_of(corners[fanned][:, 2]))
+    corner_xyz = located[corner_point]
+    centre_sum = np.zeros((count, 3))
+    np.add.at(centre_sum, corner_face, corner_xyz)
+    centres = centre_sum[fanned] / size[fanned][:, None]
     lookup = np.full(count, -1, dtype=np.int64)
     lookup[fanned] = located.shape[0] + np.arange(fanned.size)
     all_points = np.concatenate([located, centres])
-    triangles.append(np.stack([lookup[loop_quad], loop_point, loop_point[following]], axis=1))
-    owners.append(loop_quad)
+    triangles.append(np.stack([lookup[loop_face], loop_point, loop_point[following]], axis=1))
+    owners.append(loop_face)
     return all_points, np.concatenate(triangles), np.concatenate(owners)
 
 
@@ -2529,7 +3520,7 @@ def surfaces(
 def state_bytes(state: VoxelState) -> int:
     total = 64 * 1024
     for part in [state] + list(state.shown.values()):
-        total += part.labels.nbytes + part.pool.nbytes + part.brick_ref.nbytes + part.brick_keys.nbytes
+        total += part.labels.nbytes + part.pool.nbytes + part.pool_cut.nbytes + part.brick_ref.nbytes + part.brick_keys.nbytes
     for meshes in state.meshes.values():
         for arrays in meshes.values():
             total += sum(array.nbytes for array in arrays)

@@ -868,6 +868,7 @@ def dispatch(
             ),
             interpolation=_checked_interpolation(parameters.get("interpolation", 1)),
             line=_section_line(parameters.get("line")),
+            vector=parameters.get("vector") is True,
         )
     if method == "get_top_view":
         state, repository, project, kernel = _view_state(parameters)
@@ -877,6 +878,7 @@ def dispatch(
             project=project,
             hidden=_hidden_materials(parameters),
             steps=parameters.get("steps", True) is not False,
+            vector=parameters.get("vector") is True,
         )
     if method == "export_mesh":
         state, repository, project, kernel = _view_state(parameters)

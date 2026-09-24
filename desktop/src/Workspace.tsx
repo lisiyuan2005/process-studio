@@ -1179,7 +1179,7 @@ export function Workspace({
           setViewLoading(true);
           return remember(
             key,
-            await bridge.getSection(root, { ...request, axis: sectionAxis, position, line }),
+            await bridge.getSection(root, { ...request, axis: sectionAxis, position, line, vector: true }),
           );
         })());
         if (token !== viewToken.current) return;
@@ -1203,6 +1203,7 @@ export function Workspace({
           ...request,
           hidden: hiddenMaterials,
           steps: topSteps,
+          vector: true,
         });
         if (token !== viewToken.current) return;
         setTopView(remember(key, next));
