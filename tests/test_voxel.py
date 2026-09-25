@@ -1065,6 +1065,47 @@ def test_a_state_drawn_on_a_finer_or_coarser_grid_keeps_its_shape():
     assert coarser.volume("SiO2") == pytest.approx(state.volume("SiO2"), rel=5e-3)
 
 
+def test_the_polygon_view_holds_the_state_as_polygon_slabs_that_follow_the_circle():
+    from process_studio.kernels import voxel_polygons
+    from process_studio.kernels.slab import display_meshes
+
+    R = 0.3
+    state = _round_hole(B=8, R=R)
+    slabs = voxel_polygons.polygon_state(state)
+    assert voxel_polygons.polygon_state(state) is slabs  # built once
+    slabs.device._state.validate()
+    k = state.n - 1
+    top = slabs.device._state.slabs[k]
+    oxide = next(geom for material, geom in top.regions.items() if material.name == "SiO2")
+    # the hole's rim is the cut lines' polygon, not a staircase of cells
+    rim = [ring for poly in oxide.geoms for ring in poly.interiors]
+    assert len(rim) == 1
+    xy = np.asarray(rim[0].coords)
+    assert np.abs(np.hypot(xy[:, 0] - 0.5, xy[:, 1] - 0.5) - R).max() < 0.4 * state.fine
+    meshes = display_meshes(slabs, buried=True)
+    for name, (vertices, faces, _interface, _neighbour) in meshes.items():
+        a, b, c = (vertices[faces[:, i]].astype(np.float64) for i in range(3))
+        signed = np.einsum("ij,ij->i", a, np.cross(b, c)).sum() / 6.0
+        assert signed == pytest.approx(state.volume(name), rel=2e-3), name
+        assert _unmatched_edges(vertices, faces) == 0, name
+    # far fewer triangles than a face per fine cell side
+    cells = voxel.build_meshes(state, buried=True)
+    assert sum(len(m[1]) for m in meshes.values()) < 0.5 * sum(len(m[1]) for m in cells.values())
+
+
+def test_a_map_with_no_refined_cell_is_outlined_on_its_own_grid():
+    from process_studio.kernels import voxel_vector
+
+    # refined four times, but no brick yet: the outline is still the window
+    labels = np.ones((8, 8), np.uint8)
+    found = voxel_vector.field_loops(
+        labels, np.zeros(0, np.int64), np.zeros((0, 4, 4), np.uint8), np.zeros((0, 4, 4), np.uint16),
+        0.0, 0.0, 0.5 / 32, 0.5 / 32,
+    )
+    points, _starts = found[1]
+    assert points.min(axis=0).tolist() == [0.0, 0.0] and points.max(axis=0).tolist() == [1.0, 1.0]
+
+
 def _outline_area(picture, name):
     vec = picture["vector"]
     extent = picture["extent"]

@@ -13,6 +13,7 @@ import type {
   SectionLine,
   SurfaceDocument,
   Triangulation,
+  VoxelMesh,
   UpdateInfo,
   TopViewDocument,
   WindowBounds,
@@ -46,6 +47,8 @@ export interface ViewRequest {
   interpolation?: number;
   /** 3D view only: which triangulator builds the mesh. */
   triangulation?: Triangulation;
+  /** 3D view of a voxel state only: cells or polygons. */
+  mesh?: VoxelMesh;
   /**
    * 3D view only: also build the faces that lie against another material.
    * They are invisible while both materials are shown and are most of a

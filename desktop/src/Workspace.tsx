@@ -82,6 +82,7 @@ import type {
   LibraryKind,
   ProcessType,
   Triangulation,
+  VoxelMesh,
   ParameterValue,
   QuickSketch,
   SectionAxis,
@@ -124,6 +125,8 @@ import { tabName, type TabHandle } from "./domain/tabs";
 type SaveState = "saved" | "saving" | "unsaved" | "error";
 
 const AUTOSAVE_DELAY_MS = 600;
+// where this viewer keeps how the voxel model's 3D view is drawn
+const VOXEL_MESH_KEY = "process-studio.voxel-mesh";
 
 function errorMessage(reason: unknown) {
   return reason instanceof Error ? reason.message : String(reason);
@@ -250,6 +253,22 @@ export function Workspace({
   // Which triangulator builds the 3D mesh. Ear clipping is the default;
   // the other is there to compare against, and costs a rebuild.
   const [triangulation, setTriangulation] = useState<Triangulation>("ears");
+  // How the voxel model's 3D view is drawn; this viewer's choice, kept.
+  const [voxelMesh, setVoxelMeshState] = useState<VoxelMesh>(() => {
+    try {
+      return window.localStorage.getItem(VOXEL_MESH_KEY) === "polygons" ? "polygons" : "cells";
+    } catch {
+      return "cells";
+    }
+  });
+  const setVoxelMesh = (value: VoxelMesh) => {
+    setVoxelMeshState(value);
+    try {
+      window.localStorage.setItem(VOXEL_MESH_KEY, value);
+    } catch {
+      // a preference that cannot be kept is still used for this session
+    }
+  };
   // Build the faces that lie against another material. They are invisible
   // while both materials are shown -- two copies of one face fighting for
   // the same pixels -- and are most of a stack's mesh, so they are left
@@ -1154,7 +1173,8 @@ export function Workspace({
         // Hiding a material is asking to see the cavity it leaves, which is
         // made of the faces around it: they have to be fetched then.
         const buried = alwaysBuried || hiddenMaterials.length > 0;
-        const key = `surfaces:${target}:${interpolation}:${triangulation}:${buried}`;
+        const mesh = document?.project.fidelity === "voxel" ? voxelMesh : undefined;
+        const key = `surfaces:${target}:${interpolation}:${triangulation}:${buried}:${mesh ?? ""}`;
         const hit = cached<SurfaceDocument>(key);
         if (hit) {
           setSurfaces(hit);
@@ -1162,7 +1182,7 @@ export function Workspace({
           return;
         }
         setViewLoading(true);
-        const next = await bridge.getSurfaces(root, { ...request, triangulation, buried });
+        const next = await bridge.getSurfaces(root, { ...request, triangulation, buried, mesh });
         if (token !== viewToken.current) return;
         setSurfaces(remember(key, next));
       } else if (mode === "section") {
@@ -1229,6 +1249,8 @@ export function Workspace({
     interpolation,
     topSteps,
     triangulation,
+    voxelMesh,
+    document?.project.fidelity,
     alwaysBuried,
     hiddenMaterials,
     sectionAxis,
@@ -1695,6 +1717,22 @@ export function Workspace({
                 action: () => setTriangulation("delaunay"),
                 checked: triangulation === "delaunay",
               },
+              ...(fidelity === "voxel"
+                ? [
+                    {
+                      label: "Cells (a face per fine cell, fast)",
+                      heading: "Voxel 3D view",
+                      separated: true,
+                      action: () => setVoxelMesh("cells"),
+                      checked: voxelMesh === "cells",
+                    },
+                    {
+                      label: "Polygons (full resolution, fewer triangles)",
+                      action: () => setVoxelMesh("polygons"),
+                      checked: voxelMesh === "polygons",
+                    },
+                  ]
+                : []),
               {
                 label: "Build the faces between materials",
                 heading: "Buried faces",

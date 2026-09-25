@@ -1148,7 +1148,7 @@ class SlabKernel:
             return state.present()
         return state.priority
 
-    def warm_views(self, state: SlabState, buried: bool = False) -> None:
+    def warm_views(self, state: SlabState, buried: bool = False, mesh: str | None = None) -> None:
         """Build a display mesh now, so the 3D view does not have to.
 
         The free surface is what the view opens with and is warmed first
@@ -1158,8 +1158,12 @@ class SlabKernel:
         material, the mesh for it is usually already there.
         """
         if isinstance(state, _voxel().VoxelState):
-            _voxel().meshes_for(state, buried)
-            return
+            if mesh != "polygons":
+                _voxel().meshes_for(state, buried)
+                return
+            from . import voxel_polygons
+
+            state = voxel_polygons.polygon_state(state)
         display_meshes(state, buried=buried)
 
     def state_bytes(self, state: SlabState) -> int:
@@ -1190,11 +1194,17 @@ class SlabKernel:
         materials: Sequence[str] | None = None,
         triangulation: str | None = None,
         buried: bool = False,
+        mesh: str | None = None,
     ) -> dict[str, Any]:
         if isinstance(state, _voxel().VoxelState):
-            return _voxel().surfaces(
-                state, z_max=float(project.grid["z_max"]), materials=materials, buried=buried
-            )
+            if mesh != "polygons":
+                return _voxel().surfaces(
+                    state, z_max=float(project.grid["z_max"]), materials=materials, buried=buried
+                )
+            # drawn as polygon slabs: the slab kernel's own 3D view of them
+            from . import voxel_polygons
+
+            state = voxel_polygons.polygon_state(state)
         device = state.device
         engine = triangulation or DEFAULT_ENGINE
         meshes = display_meshes(state, engine, buried)

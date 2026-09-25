@@ -254,6 +254,9 @@ class VoxelState:
         self.meshes: dict[bool, dict[str, tuple[np.ndarray, ...]]] = {}
         #: Copies with coarser bricks for pictures, by refinement.
         self.shown: dict[int, "VoxelState"] = {}
+        #: The state as polygon slabs, for the polygon 3D view (see
+        #: voxel_polygons), once something has asked for it.
+        self.polygons: Any = None
         self.mesh_lock = threading.RLock()
 
     # geometry of the grid
@@ -2794,18 +2797,18 @@ def section(
             "extent": {"horizontalMin": horizontal[0], "horizontalMax": horizontal[1], "verticalMin": state.z_offset, "verticalMax": top},
             "positions": [float(value) for value in coordinates],
         }
-    shown_state = shown(state)
-    B = shown_state.refine
+    # the state itself, cut lines and all, read at points no further apart
+    # than a fine cell (or than four shown cells, which a picture does not
+    # get past anyway)
+    horizontal = (x_min, x_max) if axis == "y" else (y_min, y_max)
+    span = horizontal[1] - horizontal[0]
+    count = int(min(4 * SHOWN_CELLS, max(state.nx, state.ny) * state.refine))
+    spacing = span / count
+    along = horizontal[0] + (np.arange(count) + 0.5) * spacing
     if axis == "y":
-        row = int(np.clip((cut - y_min) / shown_state.fine_y, 0, state.ny * B - 1))
-        columns = shown_state.sample_fine(slabs, np.arange(state.nx * B)[None, :], row)
-        horizontal = (x_min, x_max)
-        spacing = shown_state.fine_x
+        columns = state.sample(slabs, along[None, :], np.full((1, count), cut))
     else:
-        col = int(np.clip((cut - x_min) / shown_state.fine_x, 0, state.nx * B - 1))
-        columns = shown_state.sample_fine(slabs, col, np.arange(state.ny * B)[None, :])
-        horizontal = (y_min, y_max)
-        spacing = shown_state.fine_y
+        columns = state.sample(slabs, np.full((1, count), cut), along[None, :])
     image, pixels_per_um = _section_image(
         state, columns, horizontal[1] - horizontal[0], colors, rgb, top
     )
@@ -3694,6 +3697,10 @@ def state_bytes(state: VoxelState) -> int:
     for meshes in state.meshes.values():
         for arrays in meshes.values():
             total += sum(array.nbytes for array in arrays)
+    if state.polygons is not None:
+        from .slab import SlabKernel
+
+        total += SlabKernel().state_bytes(state.polygons)
     return total
 
 

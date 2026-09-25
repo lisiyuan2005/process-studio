@@ -59,11 +59,14 @@ def _ordered_loops(start: np.ndarray, end: np.ndarray) -> tuple[np.ndarray, np.n
 
 
 def loops(
-    sx: np.ndarray, sy: np.ndarray, ex: np.ndarray, ey: np.ndarray, *, scale: float = 1e9
+    sx: np.ndarray, sy: np.ndarray, ex: np.ndarray, ey: np.ndarray, *, scale: float = 1e9,
+    keep_straight: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Closed loops from directed edges (start and end points). Vertices are
     matched after rounding to 1/``scale``; points where a loop goes on
-    straight are dropped. Returns points (N, 2) and loop starts (L,)."""
+    straight are dropped unless ``keep_straight`` (a neighbour may turn
+    there: two materials' loops then share every point of their edge).
+    Returns points (N, 2) and loop starts (L,)."""
     if sx.size == 0:
         return np.zeros((0, 2)), np.zeros(0, np.int64)
     qs = np.round(np.stack([sx, sy], 1) * scale).astype(np.int64)
@@ -87,6 +90,8 @@ def loops(
     cross = (px - ax) * (by - ay) - (py - ay) * (bx - ax)
     span = np.abs(bx - ax) + np.abs(by - ay) + 1e-300
     keep = np.abs(cross) > 1e-12 * span * span
+    if keep_straight:
+        keep = np.ones_like(keep)
     points = np.stack([px[keep], py[keep]], 1)
     kept_loop = loop_of[keep]
     starts = np.flatnonzero(np.concatenate([[True], kept_loop[1:] != kept_loop[:-1]])) if kept_loop.size else np.zeros(0, np.int64)
@@ -197,6 +202,30 @@ def _runs(a, b, line, u, length):
     return a[begin], b[begin], line[begin], u[begin], u[end] + length
 
 
+def _place(out, a, b, line, u, inverse, line_origin, u_origin, emit) -> None:
+    """Edges found once per distinct brick (``a`` and ``b`` either side,
+    (U, lines, units), brick-local ``line`` and ``u``), placed at every
+    brick that holds it (``inverse``, and each brick's origin)."""
+    diff = a != b
+    per = diff.reshape(diff.shape[0], -1).sum(axis=1)
+    if not per.any():
+        return
+    ub, where = np.nonzero(diff.reshape(diff.shape[0], -1))
+    a_f = a.reshape(a.shape[0], -1)[ub, where]
+    b_f = b.reshape(b.shape[0], -1)[ub, where]
+    l_f = np.broadcast_to(line, a.shape).reshape(a.shape[0], -1)[ub, where]
+    u_f = np.broadcast_to(u, a.shape).reshape(a.shape[0], -1)[ub, where]
+    start = np.concatenate([[0], np.cumsum(per)[:-1]])
+    count = per[inverse]
+    brick = np.repeat(np.arange(inverse.size), count)
+    offset = np.arange(brick.size) - np.repeat(np.cumsum(count) - count, count)
+    pick = start[inverse][brick] + offset
+    A, Bm, LN, U0, U1 = _runs(
+        a_f[pick], b_f[pick], l_f[pick] + line_origin[brick], u_f[pick] + u_origin[brick], 1
+    )
+    emit(out, A, Bm, LN, U0, U1)
+
+
 def field_edges(coarse: np.ndarray, cells: np.ndarray, lab: np.ndarray, cut: np.ndarray) -> list:
     """Boundary edges of a flat two-level map, on the half-fine lattice
     (two units a fine cell): ``coarse`` (ny, nx) labels, MIXED where
@@ -207,7 +236,9 @@ def field_edges(coarse: np.ndarray, cells: np.ndarray, lab: np.ndarray, cut: np.
     from .voxel import MIXED
 
     ny, nx = coarse.shape
-    B = lab.shape[1] if lab.ndim == 3 and lab.shape[0] else 1
+    # the fine cells per cell side, from the blocks' shape even when there
+    # are none of them: a map with no refined cell is still on its grid
+    B = lab.shape[1] if lab.ndim == 3 else 1
     out: list = []
     c16 = coarse.astype(np.int64)
     span = 2 * B
@@ -227,7 +258,6 @@ def field_edges(coarse: np.ndarray, cells: np.ndarray, lab: np.ndarray, cut: np.
     if cells.size:
         code = voxel_cut.code_of(cut)
         other = voxel_cut.other_of(cut).astype(np.int64)
-        lab64 = lab.astype(np.int64)
         side_left = voxel_cut.EDGE_LEFT
 
         def halves(sel_lab, sel_code, sel_other, side):
@@ -235,18 +265,27 @@ def field_edges(coarse: np.ndarray, cells: np.ndarray, lab: np.ndarray, cut: np.
             h = [np.where(side_left[sel_code, side, k], sel_lab, sel_other) for k in (0, 1)]
             return np.stack(h, -1).reshape(sel_lab.shape[0], -1)
 
-        def brick_or_plain(flat_cells):
-            """Fine labels and cuts of any cells: a brick, or a plain label repeated."""
+        flat_coarse = c16.reshape(-1)
+
+        def side_of(flat_cells, axis, index):
+            """One row (axis 1) or column (axis 2) of fine labels, cuts and
+            materials across them, of any cells: a brick's, or a plain
+            label repeated -- without drawing out whole blocks."""
             m = flat_cells.size
-            L = np.empty((m, B, B), dtype=np.int64)
-            C = np.zeros((m, B, B), dtype=np.int64)
-            O = np.zeros((m, B, B), dtype=np.int64)
-            L[...] = c16.reshape(-1)[flat_cells][:, None, None]
+            L = np.repeat(flat_coarse[flat_cells][:, None], B, 1)
+            C = np.zeros((m, B), dtype=np.int64)
+            O = np.zeros((m, B), dtype=np.int64)
             at = np.minimum(np.searchsorted(cells, flat_cells), cells.size - 1)
-            hit = cells[at] == flat_cells
-            L[hit] = lab64[at[hit]]
-            C[hit] = code[at[hit]]
-            O[hit] = other[at[hit]]
+            hit = np.flatnonzero(cells[at] == flat_cells)
+            src = at[hit]
+            if axis == 1:
+                L[hit] = lab[src, index, :]
+                C[hit] = code[src, index, :]
+                O[hit] = other[src, index, :]
+            else:
+                L[hit] = lab[src, :, index]
+                C[hit] = code[src, :, index]
+                O[hit] = other[src, :, index]
             return L, C, O
 
         mixed = coarse == MIXED
@@ -255,10 +294,10 @@ def field_edges(coarse: np.ndarray, cells: np.ndarray, lab: np.ndarray, cut: np.
         pad = np.pad(mixed, ((0, 0), (1, 1)))
         j, i = np.nonzero(pad[:, :-1] | pad[:, 1:])  # line i between cells i-1 and i
         lok, rok = i > 0, i < nx
-        Ll, Cl, Ol = brick_or_plain(j * nx + np.clip(i - 1, 0, nx - 1))
-        Lr, Cr, Or = brick_or_plain(j * nx + np.clip(i, 0, nx - 1))
-        a = halves(Ll[:, :, -1], Cl[:, :, -1], Ol[:, :, -1], 1)
-        b = halves(Lr[:, :, 0], Cr[:, :, 0], Or[:, :, 0], 3)
+        Ll, Cl, Ol = side_of(j * nx + np.clip(i - 1, 0, nx - 1), 2, -1)
+        Lr, Cr, Or = side_of(j * nx + np.clip(i, 0, nx - 1), 2, 0)
+        a = halves(Ll, Cl, Ol, 1)
+        b = halves(Lr, Cr, Or, 3)
         a[~lok] = _OUT
         b[~rok] = _OUT
         uu = j[:, None] * units + np.arange(units)[None, :]
@@ -269,10 +308,10 @@ def field_edges(coarse: np.ndarray, cells: np.ndarray, lab: np.ndarray, cut: np.
         pad = np.pad(mixed, ((1, 1), (0, 0)))
         j, i = np.nonzero(pad[:-1, :] | pad[1:, :])  # line j between rows j-1 and j
         lok, hok = j > 0, j < ny
-        Ll, Cl, Ol = brick_or_plain(np.clip(j - 1, 0, ny - 1) * nx + i)
-        Lh, Ch, Oh = brick_or_plain(np.clip(j, 0, ny - 1) * nx + i)
-        a = halves(Ll[:, -1, :], Cl[:, -1, :], Ol[:, -1, :], 0)
-        b = halves(Lh[:, 0, :], Ch[:, 0, :], Oh[:, 0, :], 2)
+        Ll, Cl, Ol = side_of(np.clip(j - 1, 0, ny - 1) * nx + i, 1, -1)
+        Lh, Ch, Oh = side_of(np.clip(j, 0, ny - 1) * nx + i, 1, 0)
+        a = halves(Ll, Cl, Ol, 0)
+        b = halves(Lh, Ch, Oh, 2)
         a[~lok] = _OUT
         b[~hok] = _OUT
         uu = i[:, None] * units + np.arange(units)[None, :]
@@ -280,28 +319,30 @@ def field_edges(coarse: np.ndarray, cells: np.ndarray, lab: np.ndarray, cut: np.
         diff = a != b
         A, Bm, LN, U0, U1 = _runs(a[diff], b[diff], line[diff], uu[diff], 1)
         _emit_horizontal(out, A, Bm, LN, U0, U1)
-        # inside the refined cells
+        # inside the refined cells: each different brick once, then placed
+        # at every cell that holds it
         cy, cx = np.divmod(cells, nx)
         if B > 1:
-            a = np.stack([np.where(side_left[code[:, :, :-1], 1, k], lab64[:, :, :-1], other[:, :, :-1]) for k in (0, 1)], -1)
-            b = np.stack([np.where(side_left[code[:, :, 1:], 3, k], lab64[:, :, 1:], other[:, :, 1:]) for k in (0, 1)], -1)
-            # (m, B rows, B-1 lines, 2 halves) -> along each line, 2B halves
-            a = a.transpose(0, 2, 1, 3).reshape(cells.size, B - 1, units)
-            b = b.transpose(0, 2, 1, 3).reshape(cells.size, B - 1, units)
-            line = np.broadcast_to(((cx[:, None] * B + np.arange(1, B)[None, :]) * 2)[:, :, None], a.shape)
-            uu = np.broadcast_to((cy[:, None, None] * units + np.arange(units)[None, None, :]), a.shape)
-            diff = a != b
-            A, Bm, LN, U0, U1 = _runs(a[diff], b[diff], line[diff], uu[diff], 1)
-            _emit_vertical(out, A, Bm, LN, U0, U1)
-            a = np.stack([np.where(side_left[code[:, :-1, :], 0, k], lab64[:, :-1, :], other[:, :-1, :]) for k in (0, 1)], -1)
-            b = np.stack([np.where(side_left[code[:, 1:, :], 2, k], lab64[:, 1:, :], other[:, 1:, :]) for k in (0, 1)], -1)
-            a = a.reshape(cells.size, B - 1, units)
-            b = b.reshape(cells.size, B - 1, units)
-            line = np.broadcast_to(((cy[:, None] * B + np.arange(1, B)[None, :]) * 2)[:, :, None], a.shape)
-            uu = np.broadcast_to((cx[:, None, None] * units + np.arange(units)[None, None, :]), a.shape)
-            diff = a != b
-            A, Bm, LN, U0, U1 = _runs(a[diff], b[diff], line[diff], uu[diff], 1)
-            _emit_horizontal(out, A, Bm, LN, U0, U1)
+            from .voxel import _pair_hash, _unique
+
+            _u, first, inverse = _unique(_pair_hash(lab, cut), return_index=True, return_inverse=True)
+            inverse = inverse.reshape(-1)
+            ul, uc, uo = lab[first].astype(np.int64), code[first], other[first]
+            U = first.size
+            # vertical lines: between fine columns r and r + 1 of a brick
+            a = np.stack([np.where(side_left[uc[:, :, :-1], 1, k], ul[:, :, :-1], uo[:, :, :-1]) for k in (0, 1)], -1)
+            b = np.stack([np.where(side_left[uc[:, :, 1:], 3, k], ul[:, :, 1:], uo[:, :, 1:]) for k in (0, 1)], -1)
+            a = a.transpose(0, 2, 1, 3).reshape(U, B - 1, units)
+            b = b.transpose(0, 2, 1, 3).reshape(U, B - 1, units)
+            self_line = np.broadcast_to((np.arange(1, B) * 2)[None, :, None], a.shape)
+            self_u = np.broadcast_to(np.arange(units)[None, None, :], a.shape)
+            _place(out, a, b, self_line, self_u, inverse, cx * B * 2, cy * units, _emit_vertical)
+            # horizontal lines: between fine rows r and r + 1
+            a = np.stack([np.where(side_left[uc[:, :-1, :], 0, k], ul[:, :-1, :], uo[:, :-1, :]) for k in (0, 1)], -1)
+            b = np.stack([np.where(side_left[uc[:, 1:, :], 2, k], ul[:, 1:, :], uo[:, 1:, :]) for k in (0, 1)], -1)
+            a = a.reshape(U, B - 1, units)
+            b = b.reshape(U, B - 1, units)
+            _place(out, a, b, self_line, self_u, inverse, cy * B * 2, cx * units, _emit_horizontal)
         # along the cuts: the label on the left of start -> end
         c, ry, rx = np.nonzero(code > 0)
         if c.size:
@@ -313,7 +354,7 @@ def field_edges(coarse: np.ndarray, cells: np.ndarray, lab: np.ndarray, cut: np.
             sy_ = oy + (voxel_cut.ANCHORS[s, 1] * 2).astype(np.int64)
             ex_ = ox + (voxel_cut.ANCHORS[e, 0] * 2).astype(np.int64)
             ey_ = oy + (voxel_cut.ANCHORS[e, 1] * 2).astype(np.int64)
-            mine, theirs = lab64[c, ry, rx], other[c, ry, rx]
+            mine, theirs = lab[c, ry, rx].astype(np.int64), other[c, ry, rx]
             keep = mine > 0
             out.append((mine[keep], sx_[keep], sy_[keep], ex_[keep], ey_[keep]))
             keep = theirs > 0
@@ -324,7 +365,9 @@ def field_edges(coarse: np.ndarray, cells: np.ndarray, lab: np.ndarray, cut: np.
     return [np.concatenate([part[i] for part in out]).astype(np.int64) for i in range(5)]
 
 
-def field_loops(coarse, cells, lab, cut, x0: float, y0: float, half_x: float, half_y: float):
+def field_loops(
+    coarse, cells, lab, cut, x0: float, y0: float, half_x: float, half_y: float, *, keep_straight: bool = False,
+):
     """Each material's loops of a flat two-level map, in world coordinates
     (``x0``, ``y0`` the map's corner, ``half_*`` half a fine cell):
     {material label: (points, starts)}."""
@@ -333,7 +376,8 @@ def field_loops(coarse, cells, lab, cut, x0: float, y0: float, half_x: float, ha
     for m in np.unique(mat):
         pick = mat == m
         points, starts = loops(sx[pick].astype(np.float64), sy[pick].astype(np.float64),
-                               ex[pick].astype(np.float64), ey[pick].astype(np.float64), scale=1.0)
+                               ex[pick].astype(np.float64), ey[pick].astype(np.float64), scale=1.0,
+                               keep_straight=keep_straight)
         points[:, 0] = x0 + points[:, 0] * half_x
         points[:, 1] = y0 + points[:, 1] * half_y
         out[int(m)] = (points, starts)
@@ -416,7 +460,9 @@ def step_edges(coarse, top_h, cells, lab, code, other, h_left, h_right):
     from .voxel import MIXED, Z_EPS
 
     ny, nx = coarse.shape
-    B = lab.shape[1] if lab.ndim == 3 and lab.shape[0] else 1
+    # the fine cells per cell side, from the blocks' shape even when there
+    # are none of them: a map with no refined cell is still on its grid
+    B = lab.shape[1] if lab.ndim == 3 else 1
     span = 2 * B
     out: list = []
     c64 = coarse.astype(np.int64)

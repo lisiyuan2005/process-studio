@@ -112,7 +112,7 @@ class Kernel(Protocol):
     def state_bytes(self, state: Any) -> int:
         """Roughly what the state costs to keep in memory, for the cache budget."""
 
-    def warm_views(self, state: Any, buried: bool = False) -> None:
+    def warm_views(self, state: Any, buried: bool = False, mesh: str | None = None) -> None:
         """Prepare whatever the views of this state need that is slow to make.
 
         Called in the background once a run has stored the state, so the
@@ -136,6 +136,9 @@ class Kernel(Protocol):
         triangulation: str | None = None,
         #: Include the faces that lie against another material.
         buried: bool = False,
+        #: How a kernel with more than one way to draw its state draws it:
+        #: the voxel model's "cells" (the default) or "polygons".
+        mesh: str | None = None,
     ) -> dict[str, Any]:
         """Triangles for the 3D view, one entry per material."""
 
