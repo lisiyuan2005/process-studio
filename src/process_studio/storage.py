@@ -337,15 +337,12 @@ class ProjectRepository:
             connection.execute(f"DELETE FROM {table} WHERE {column}=?", (value,))
 
     def own_materials(self) -> list[MaterialDefinition]:
-        """This workspace's own copy: what it was last showing.
+        """This workspace's own copy of the library.
 
-        The copy is what a zipped workspace travels with, and it is also
-        the answer to "did this window know about that material?". A save
-        that leaves a name out means the user deleted it *here*; a name
-        that was never in this copy is one another window added while this
-        one was open, and leaving it out of a stale document is not a
-        deletion. So the copy catches up on open and on the saves this
-        workspace makes, and not otherwise.
+        The copy is what a zipped workspace travels with, and where the
+        library gets back anything it lost without the user deleting it
+        (see :meth:`_learn_from_this_workspace`). It catches up on open and
+        on the saves this workspace makes.
         """
         with self.connect() as connection:
             rows = connection.execute("SELECT payload_json FROM materials ORDER BY name")
@@ -376,13 +373,18 @@ class ProjectRepository:
     def _learn_from_this_workspace(self) -> list[str]:
         """Hand the library whatever this workspace arrived with.
 
-        Only a workspace that came from elsewhere has anything to teach: a
-        copy taken from this same library is a mirror of it, and reading a
-        stale mirror back in would hand back every material and recipe the
-        user has since deleted.
+        A workspace from elsewhere teaches the library every name it does
+        not have. A copy of this same library is a mirror of it, so from it
+        comes back only what the library is missing and the user did not
+        delete: a deletion is recorded, and anything else that took an
+        entry out of the library is not the user's wish.
         """
         if self._setting("library") == self.library.identity:
-            return []
+            # A copy of this same library has nothing new -- except what the
+            # library lost without the user deleting it, which comes back.
+            return self.library.adopt(
+                self.own_materials(), self.own_tools(), self.own_recipes(), skip_deleted=True
+            )
         taken = self.library.adopt(self.own_materials(), self.own_tools(), self.own_recipes())
         self._remember("library", self.library.identity)
         return taken
@@ -406,9 +408,8 @@ class ProjectRepository:
         A workspace that is zipped and sent has to carry the names its steps
         use; the library on the other machine is somebody else's. This is
         called when a window is handed the document -- opening the
-        workspace -- because the copy is also the record of what that
-        window was shown, which is what tells a deletion apart from a
-        material another window has added since.
+        workspace -- after the library has taken back from the copy what it
+        had lost.
         """
         materials = self.library.load_materials()
         tools = self.library.load_tools()

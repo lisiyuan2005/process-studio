@@ -312,9 +312,11 @@ def test_recipe_and_material_deletions_reach_the_database(workspace):
     document["recipes"] = [
         recipe for recipe in document["recipes"] if recipe["id"] != "recipe-boe"
     ]
+    sin = next(material for material in document["materials"] if material["name"] == "SiN")
     document["materials"] = [
         material for material in document["materials"] if material["name"] != "SiN"
     ]
+    document["deleted"] = {"recipes": ["recipe-boe"], "materials": [sin["id"]]}
     saved = call("save_document", root=str(workspace), document=document)
     assert all(recipe["id"] != "recipe-boe" for recipe in saved["recipes"])
     assert all(material["name"] != "SiN" for material in saved["materials"])
@@ -787,6 +789,7 @@ def test_a_library_recipe_can_be_deleted_without_changing_existing_steps(workspa
     document["recipes"] = [
         recipe for recipe in document["recipes"] if recipe["id"] != "recipe-si-trench"
     ]
+    document["deleted"] = {"recipes": ["recipe-si-trench"]}
     saved = call("save_document", root=str(workspace), document=document)
     saved_etch = saved["branches"][0]["steps"][1]
     assert all(recipe["id"] != "recipe-si-trench" for recipe in saved["recipes"])
@@ -940,9 +943,13 @@ def test_recipes_have_groups_and_tools_have_a_library(workspace, tmp_path):
     tools = {tool["name"]: tool for tool in saved["tools"]}
     assert tools["Sputter-2"]["group"] == "Deposition/PVD" and tools["Sputter-2"]["id"]
     assert tools["ALD-1"]["id"] == ald["id"] and "ALD" not in tools
-    # Dropping a tool from the document removes it.
+    # A tool the document names as deleted is removed; one it merely leaves out is not.
+    ash = next(tool for tool in saved["tools"] if tool["name"] == "Ash")
     saved["tools"] = [tool for tool in saved["tools"] if tool["name"] != "Ash"]
+    assert "Ash" in {tool["name"] for tool in call("save_document", root=str(workspace), document=saved)["tools"]}
+    saved["deleted"] = {"tools": [ash["id"]]}
     assert "Ash" not in {tool["name"] for tool in call("save_document", root=str(workspace), document=saved)["tools"]}
+    del saved["deleted"]
     # Two tools cannot share a name.
     saved["tools"].append({"name": "ICP-RIE", "group": ""})
     with pytest.raises(InvalidRequest):

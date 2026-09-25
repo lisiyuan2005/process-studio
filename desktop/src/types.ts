@@ -202,6 +202,12 @@ export interface WorkspaceDocument {
   sketches: QuickSketch[];
   /** Step status per branch id, as computed from stored snapshot digests. */
   stepStatuses: Record<string, Record<string, StepStatus>>;
+  /**
+   * Library entries the user deleted since the last save, by id. The
+   * library is shared by every project, so only these are deleted there:
+   * an entry a document merely lacks is left alone.
+   */
+  deleted?: Partial<Record<LibraryKind, string[]>>;
 }
 
 export type LibraryKind = "materials" | "tools" | "recipes";

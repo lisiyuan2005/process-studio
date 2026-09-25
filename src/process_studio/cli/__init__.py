@@ -749,7 +749,9 @@ def cmd_materials_rm(session: Session, args: argparse.Namespace) -> int:
         for name in args.name:
             if step.get("outputMaterial") == name or name in step.get("materialResponses", {}):
                 raise InvalidRequest(f"{name} is used by step {step['name']!r}; change that step first.")
+    gone = [m["id"] for m in document["materials"] if m["name"] in set(args.name)]
     document["materials"] = [m for m in document["materials"] if m["name"] not in set(args.name)]
+    document["deleted"] = {"materials": gone}
     saved = session.save(document)
     session.note(f"Removed {', '.join(args.name)}")
     session.emit(saved["materials"], lambda: [m["name"] for m in saved["materials"]])
@@ -829,6 +831,7 @@ def cmd_tools_rm(session: Session, args: argparse.Namespace) -> int:
     if missing:
         raise InvalidRequest(f"no tool named {', '.join(missing)}")
     document["tools"] = [tool for tool in tools if tool["name"].lower() not in names]
+    document["deleted"] = {"tools": [tool["id"] for tool in tools if tool["name"].lower() in names]}
     saved = session.save(document)
     session.note(f"Removed {', '.join(args.name)}; steps that named the tool keep the name as text.")
     session.emit(saved.get("tools", []), lambda: [t["name"] for t in saved.get("tools", [])] or ["(no tools)"])

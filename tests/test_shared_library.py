@@ -1,6 +1,7 @@
 """The materials, tools and recipes belong to the user, not to a project."""
 
 import io
+import sqlite3
 
 import pytest
 
@@ -128,13 +129,90 @@ def test_a_window_that_never_saw_a_material_does_not_delete_it(tmp_path) -> None
 def test_deleting_a_material_in_a_window_that_had_it_does_delete_it(tmp_path) -> None:
     call("create_workspace", root=str(tmp_path / "one"), name="First")
     document = call("open_workspace", root=str(tmp_path / "one"))
+    tin = next(m for m in document["materials"] if m["name"] == "TiN")
     document["materials"] = [m for m in document["materials"] if m["name"] != "TiN"]
+    document["deleted"] = {"materials": [tin["id"]]}
 
     call("save_document", root=str(tmp_path / "one"), document=document)
 
     assert "TiN" not in {
         material.name for material in open_repository(tmp_path / "one").load_materials()
     }
+
+
+def test_a_document_that_merely_lacks_an_entry_deletes_nothing(tmp_path) -> None:
+    """A window that is behind, a second copy of the application, a front
+    end that did not show something: none of them is the user deleting it."""
+    call("create_workspace", root=str(tmp_path / "one"), name="First")
+    document = call("open_workspace", root=str(tmp_path / "one"))
+    document["materials"] = document["materials"][:1]
+    document["recipes"] = []
+    document["tools"] = []
+
+    call("save_document", root=str(tmp_path / "one"), document=document)
+
+    repository = open_repository(tmp_path / "one")
+    assert len(repository.load_materials()) > 1
+    assert repository.load_recipes() and repository.load_tools()
+
+
+def test_what_the_library_lost_comes_back_from_a_project_but_a_deletion_does_not(tmp_path) -> None:
+    call("create_workspace", root=str(tmp_path / "one"), name="First")
+    document = call("open_workspace", root=str(tmp_path / "one"))
+    document["materials"].append(dict(document["materials"][0], id="mine", name="MyOxide"))
+    document["recipes"].append(dict(document["recipes"][0], id="my-recipe", name="My recipe"))
+    call("save_document", root=str(tmp_path / "one"), document=document)
+    library = open_repository(tmp_path / "one").library
+
+    # lost without anybody deleting it: back as soon as a project that has it opens
+    with library.connect() as connection:
+        connection.execute("DELETE FROM materials WHERE name='MyOxide'")
+        connection.execute("DELETE FROM recipes WHERE name='My recipe'")
+    reopened = call("open_workspace", root=str(tmp_path / "one"))
+    assert "MyOxide" in {m["name"] for m in reopened["materials"]}
+    assert "My recipe" in {r["name"] for r in reopened["recipes"]}
+
+    # deleted by the user in another project: stays deleted
+    call("create_workspace", root=str(tmp_path / "two"), name="Second")
+    other = call("open_workspace", root=str(tmp_path / "two"))
+    oxide = next(m for m in other["materials"] if m["name"] == "MyOxide")
+    other["materials"] = [m for m in other["materials"] if m["name"] != "MyOxide"]
+    other["deleted"] = {"materials": [oxide["id"]]}
+    call("save_document", root=str(tmp_path / "two"), document=other)
+    again = call("open_workspace", root=str(tmp_path / "one"))
+    assert "MyOxide" not in {m["name"] for m in again["materials"]}
+
+    # and a new one under that name is an ordinary material again
+    again["materials"].append(dict(again["materials"][0], id="mine-2", name="MyOxide"))
+    call("save_document", root=str(tmp_path / "one"), document=again)
+    assert "MyOxide" in {m.name for m in open_repository(tmp_path / "two").load_materials()}
+
+
+def test_the_library_is_copied_aside_and_before_a_deletion(tmp_path) -> None:
+    library = SharedLibrary(tmp_path / "library.sqlite3")
+    assert not (tmp_path / "library-backups").exists()  # nothing to copy yet
+    library.save_material(MaterialDefinition("Si", id="material-si"))
+    library.save_material(MaterialDefinition("Ge", id="material-ge"))
+    assert SharedLibrary(tmp_path / "library.sqlite3").backup() is not None
+    copies = sorted((tmp_path / "library-backups").glob("library-*.sqlite3"))
+    assert copies
+    # an hour-old copy is not repeated on every start
+    SharedLibrary(tmp_path / "library.sqlite3")
+    assert len(sorted((tmp_path / "library-backups").glob("library-*.sqlite3"))) == len(copies)
+
+    def names(copy):
+        with sqlite3.connect(copy) as connection:
+            return {row[0] for row in connection.execute("SELECT name FROM materials")}
+
+    library.remove_material("material-ge")
+    assert "Ge" in names(copies[-1])
+    # with no recent copy, a deletion makes one first
+    for copy in (tmp_path / "library-backups").glob("*"):
+        copy.unlink()
+    library.save_material(MaterialDefinition("Ge", id="material-ge"))
+    library.remove_material("material-ge")
+    assert "Ge" in names(sorted((tmp_path / "library-backups").glob("library-*.sqlite3"))[-1])
+    assert "Ge" not in {material.name for material in library.load_materials()}
 
 
 def test_a_library_that_cannot_be_written_falls_back_into_the_workspace(

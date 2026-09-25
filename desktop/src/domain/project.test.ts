@@ -22,6 +22,7 @@ import {
   moveStep,
   nextSectionLineName,
   removeSectionLine,
+  removeMaterial,
   removeTool,
   toolUsage,
   upsertSectionLine,
@@ -52,6 +53,22 @@ function cleanDocument(): WorkspaceDocument {
     Object.fromEntries(branch.steps.map((step) => [step.id, "clean" as const])),
   );
 }
+
+describe("library deletions", () => {
+  it("are named, so a save deletes only what the user deleted", () => {
+    const document = demoDocument();
+    expect(document.deleted).toBeUndefined();
+    const material = document.materials[0];
+    const recipe = document.recipes[0];
+    let next = removeMaterial(document, material.id);
+    next = removeRecipe(next, recipe.id);
+    next = removeMaterial(next, material.id);
+    expect(next.materials.some((item) => item.id === material.id)).toBe(false);
+    expect(next.deleted).toEqual({ materials: [material.id], recipes: [recipe.id] });
+    // the document it came from is untouched
+    expect(document.deleted).toBeUndefined();
+  });
+});
 
 describe("workspace document", () => {
   it("accepts the shape the worker returns", () => {

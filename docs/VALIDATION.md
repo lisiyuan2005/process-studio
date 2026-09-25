@@ -17,7 +17,7 @@ Python 侧按文件覆盖：
 - **工具自己的 recipe**（`tests/test_cli.py`、`tests/test_worker_protocol.py`）：装在机器上的配方列表随 Excel 往返，改别的字段不动它，步骤用 experiment 的 `tool_recipe` 记录用的哪条。
 - **两套参数**（`tests/test_worker_protocol.py`、`tests/test_cli.py`）：experiment 的值随文档、流程文件和 Excel 往返，**写它不会让已经 clean 的步骤变 stale**，导出表格能按 simulation 或 experiment 出两份。
 - **版图与库**（`tests/test_layout_inputs.py`、`tests/test_libraries.py`）：Quick Sketch 四种图形、布尔运算、阵列、JSON round-trip、GDS layer/datatype 栅格化、简化 Excel Recipe 往返。
-- **持久化**（`tests/test_storage.py`、`tests/test_shared_library.py`，15 项）：工程/分支/共享快照、级联失效、无引用文件删除、工作目录搬走之后结果仍然找得到；共享库（材料/工具/Recipe 在用户目录里一份）的身份戳、删除不复活、多窗口不互相覆盖。
+- **持久化**（`tests/test_storage.py`、`tests/test_shared_library.py`，15 项）：工程/分支/共享快照、级联失效、无引用文件删除、工作目录搬走之后结果仍然找得到；共享库（材料/工具/Recipe 在用户目录里一份）的身份戳、删除不复活、多窗口不互相覆盖、文档里少了不算删除、库丢的东西从工程副本补回、自动备份。
 - **更新**（`tests/test_update.py`，13 项）：平台对应的资产名、版本号数值比较、把最新 release 和当前构建对照（版本号可以往下走，见下）、解压到应用旁边、失败留下的目录下次清掉、只信系统信任库并在取不到时回退到打包的 CA。
 - **打包**（`tests/test_packaging.py`，2 项）：把 `scipy` / `skimage` / `skfmm` 的 import 变成失败（它们是 level set 的求解与建面，已经随它一起不装了），再从零重新 import worker 启动时会加载的每个模块并发一次 `describe`；另一项在**新进程**里用一个会 ImportError 的假 scipy 真写一次 mesh 文件——trimesh 是在 import 时决定 scipy 在不在的，在已经 import 过它的进程里屏蔽不算数。谁不小心让打包版依赖上它们，这里就会红，而不是等到真机上炸。
 

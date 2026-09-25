@@ -21,11 +21,16 @@ import json
 import os
 import sqlite3
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
 
 from .models import MaterialDefinition, MaterialResponse, ProcessType, Recipe, ToolDefinition
+
+
+#: How many copies of the library ``library-backups`` keeps.
+BACKUPS_KEPT = 30
 
 
 def library_path() -> Path:
@@ -79,11 +84,18 @@ class SharedLibrary:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS deleted (
+                    kind TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    PRIMARY KEY (kind, name)
+                );
                 """
             )
             connection.execute(
                 "INSERT OR IGNORE INTO meta(key, value) VALUES ('id', ?)", (uuid4().hex,)
             )
+        # a copy of the library as it was found, now and then
+        self.backup(unless_newer_than=3600)
 
     @property
     def identity(self) -> str:
@@ -104,6 +116,63 @@ class SharedLibrary:
         connection = sqlite3.connect(self.path)
         connection.row_factory = sqlite3.Row
         return connection
+
+    # -- what the user deleted, and copies to go back to ----------------------
+
+    def _forget(self, connection: sqlite3.Connection, kind: str, row_id: str) -> None:
+        """Delete a row and record its name as deleted by the user.
+
+        A project's copy of the library is how anything the library loses
+        some other way comes back (see :meth:`adopt`); a name recorded here
+        is one that should not.
+        """
+        row = connection.execute(f"SELECT name FROM {kind} WHERE id=?", (row_id,)).fetchone()
+        connection.execute(f"DELETE FROM {kind} WHERE id=?", (row_id,))
+        if row is not None:
+            connection.execute(
+                "INSERT OR IGNORE INTO deleted(kind, name) VALUES (?, ?)", (kind, row[0])
+            )
+
+    def deleted_names(self, kind: str) -> set[str]:
+        with self.connect() as connection:
+            return {row[0] for row in connection.execute("SELECT name FROM deleted WHERE kind=?", (kind,))}
+
+    def backup(self, unless_newer_than: float = 0.0, keep: int = BACKUPS_KEPT) -> Path | None:
+        """Copy the library into ``library-backups`` beside it, keeping the
+        newest ``keep``; returns the copy. Nothing is copied from an empty
+        library, or when the newest copy is younger than
+        ``unless_newer_than`` seconds (the command line starts a process per
+        command, and a script of them must not push out every older copy)."""
+        if not self.path.is_file() or self.is_empty():
+            return None
+        folder = self.path.parent / "library-backups"
+        try:
+            copies = sorted(folder.glob(f"{self.path.stem}-*.sqlite3")) if folder.is_dir() else []
+            if copies and time.time() - copies[-1].stat().st_mtime < unless_newer_than:
+                return None
+            folder.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{time.time_ns() % 1_000_000_000:09d}"
+            target = folder / f"{self.path.stem}-{stamp}.sqlite3"
+            source = sqlite3.connect(self.path)
+            try:
+                copy = sqlite3.connect(target)
+                try:
+                    source.backup(copy)
+                finally:
+                    copy.close()
+            finally:
+                source.close()
+            for old in sorted(folder.glob(f"{self.path.stem}-*.sqlite3"))[:-keep]:
+                old.unlink(missing_ok=True)
+            return target
+        except (OSError, sqlite3.Error):
+            # a copy that cannot be made is no reason to stop working
+            return None
+
+    def _before_deleting(self) -> None:
+        """A copy before the first deletion in a while: a deletion is the one
+        thing a save does that cannot be taken back."""
+        self.backup(unless_newer_than=600)
 
     def is_empty(self) -> bool:
         with self.connect() as connection:
@@ -135,6 +204,7 @@ class SharedLibrary:
                 payload_json=excluded.payload_json""",
                 (material.id, material.name, json.dumps(asdict(material))),
             )
+            connection.execute("DELETE FROM deleted WHERE kind='materials' AND name=?", (material.name,))
 
     def load_materials(self) -> list[MaterialDefinition]:
         with self.connect() as connection:
@@ -142,8 +212,9 @@ class SharedLibrary:
             return [MaterialDefinition(**json.loads(row[0])) for row in rows]
 
     def remove_material(self, material_id: str) -> None:
+        self._before_deleting()
         with self.connect() as connection:
-            connection.execute("DELETE FROM materials WHERE id=?", (material_id,))
+            self._forget(connection, "materials", material_id)
 
     # -- tools -------------------------------------------------------------
 
@@ -161,6 +232,7 @@ class SharedLibrary:
                 payload_json=excluded.payload_json""",
                 (tool.id, tool.name, json.dumps(asdict(tool))),
             )
+            connection.execute("DELETE FROM deleted WHERE kind='tools' AND name=?", (tool.name,))
 
     def load_tools(self) -> list[ToolDefinition]:
         with self.connect() as connection:
@@ -168,8 +240,9 @@ class SharedLibrary:
             return [ToolDefinition(**json.loads(row[0])) for row in rows]
 
     def remove_tool(self, tool_id: str) -> None:
+        self._before_deleting()
         with self.connect() as connection:
-            connection.execute("DELETE FROM tools WHERE id=?", (tool_id,))
+            self._forget(connection, "tools", tool_id)
 
     # -- recipes -----------------------------------------------------------
 
@@ -186,6 +259,7 @@ class SharedLibrary:
                 payload_json=excluded.payload_json""",
                 (recipe.id, recipe.name, json.dumps(payload)),
             )
+            connection.execute("DELETE FROM deleted WHERE kind='recipes' AND name=?", (recipe.name,))
 
     def load_recipes(self) -> list[Recipe]:
         with self.connect() as connection:
@@ -193,8 +267,9 @@ class SharedLibrary:
             return [recipe_from_payload(json.loads(row[0])) for row in rows]
 
     def remove_recipe(self, recipe_id: str) -> None:
+        self._before_deleting()
         with self.connect() as connection:
-            connection.execute("DELETE FROM recipes WHERE id=?", (recipe_id,))
+            self._forget(connection, "recipes", recipe_id)
 
     # -- taking in what a project brought ----------------------------------
 
@@ -203,15 +278,21 @@ class SharedLibrary:
         materials: list[MaterialDefinition],
         tools: list[ToolDefinition],
         recipes: list[Recipe],
+        *,
+        skip_deleted: bool = False,
     ) -> list[str]:
         """Take in whatever the library does not have, by name.
 
         What is here already wins: opening a workspace from somebody else
-        must not restyle your materials or rewrite your recipes. Returns
-        what was taken in, for the log.
+        must not restyle your materials or rewrite your recipes. With
+        ``skip_deleted``, a name the user deleted stays deleted: that is how
+        a copy of this same library hands back only what the library lost
+        without anybody deleting it. Returns what was taken in, for the log.
         """
         taken: list[str] = []
         have = {item.name for item in self.load_materials()}
+        if skip_deleted:
+            have |= self.deleted_names("materials")
         for material in materials:
             if material.name in have:
                 continue
@@ -219,6 +300,8 @@ class SharedLibrary:
             have.add(material.name)
             taken.append(f"material {material.name}")
         have = {item.name for item in self.load_tools()}
+        if skip_deleted:
+            have |= self.deleted_names("tools")
         for tool in tools:
             if tool.name in have:
                 continue
@@ -226,6 +309,8 @@ class SharedLibrary:
             have.add(tool.name)
             taken.append(f"tool {tool.name}")
         have = {item.name for item in self.load_recipes()}
+        if skip_deleted:
+            have |= self.deleted_names("recipes")
         for recipe in recipes:
             if recipe.name in have:
                 continue

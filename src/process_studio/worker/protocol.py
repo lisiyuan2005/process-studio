@@ -195,6 +195,21 @@ def _describe() -> dict[str, Any]:
     }
 
 
+def _deleted_ids(document: Mapping[str, Any]) -> dict[str, list[str]]:
+    """The library entries a document says the user deleted, by kind:
+    ``{"deleted": {"materials": [id, ...], "tools": [...], "recipes": [...]}}``."""
+    raw = document.get("deleted") or {}
+    if not isinstance(raw, Mapping):
+        raise InvalidRequest("deleted must be an object of id lists.")
+    out: dict[str, list[str]] = {}
+    for kind in ("materials", "tools", "recipes"):
+        ids = raw.get(kind) or []
+        if not isinstance(ids, list) or not all(isinstance(item, str) for item in ids):
+            raise InvalidRequest(f"deleted.{kind} must be a list of ids.")
+        out[kind] = ids
+    return out
+
+
 def _open(parameters: Mapping[str, Any]) -> dict[str, Any]:
     root = _root(parameters)
     repository = open_repository(root)
@@ -330,42 +345,36 @@ def _persist_document(parameters: Mapping[str, Any]) -> dict[str, Any]:
     repository.save_project(project)
 
     # Materials, tools and recipes are the shared library's, so what is saved
-    # here is saved for every project. What the document leaves out is
-    # measured against this workspace's own copy rather than the library:
-    # a name this window never had is one another window has just added,
-    # and a stale document not mentioning it is not a deletion.
+    # here is saved for every project. Only what the document names as
+    # deleted is deleted: a list that merely lacks an entry -- a window that
+    # is behind, another copy of the application still running, anything --
+    # is no reason to take it out of every project. Deletions go first, so a
+    # material deleted and another added under its name do not clash.
+    deleted = _deleted_ids(document)
+    for recipe_id in deleted["recipes"]:
+        repository.remove_recipe(recipe_id)
+    for material_id in deleted["materials"]:
+        repository.remove_material(material_id)
+    for tool_id in deleted["tools"]:
+        repository.remove_tool(tool_id)
+
     recipes = document.get("recipes")
     if isinstance(recipes, list):
-        incoming = [recipe_from_json(recipe) for recipe in recipes]
-        keep = {recipe.id for recipe in incoming}
-        for recipe in incoming:
+        for recipe in [recipe_from_json(recipe) for recipe in recipes]:
             repository.save_recipe(recipe)
-        for stored in repository.own_recipes():
-            if stored.id not in keep:
-                repository.remove_recipe(stored.id)
 
     materials = document.get("materials")
     if isinstance(materials, list):
-        incoming_materials = [material_from_json(material) for material in materials]
-        keep_names = {material.name for material in incoming_materials}
-        for material in incoming_materials:
+        for material in [material_from_json(material) for material in materials]:
             repository.save_material(material)
-        for stored_material in repository.own_materials():
-            if stored_material.name not in keep_names:
-                repository.remove_material(stored_material.id)
 
     tools = document.get("tools")
     if isinstance(tools, list):
-        incoming_tools = [tool_from_json(tool) for tool in tools]
-        keep_tool_ids = {tool.id for tool in incoming_tools}
-        for tool in incoming_tools:
+        for tool in [tool_from_json(tool) for tool in tools]:
             try:
                 repository.save_tool(tool)
             except ValueError as error:
                 raise InvalidRequest(str(error)) from error
-        for stored_tool in repository.own_tools():
-            if stored_tool.id not in keep_tool_ids:
-                repository.remove_tool(stored_tool.id)
 
     branches = document.get("branches")
     if isinstance(branches, list):

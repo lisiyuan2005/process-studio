@@ -2,6 +2,7 @@ import type {
   SectionLine,
   ToolDefinition,
   FlowBranch,
+  LibraryKind,
   MaterialDefinition,
   ParameterValue,
   ProcessType,
@@ -397,10 +398,18 @@ export function upsertMaterial(
   };
 }
 
+/** Note a library entry as deleted, for the next save to delete it everywhere. */
+function markDeleted(document: WorkspaceDocument, kind: LibraryKind, id: string): WorkspaceDocument["deleted"] {
+  const deleted = document.deleted ?? {};
+  const ids = deleted[kind] ?? [];
+  return ids.includes(id) ? deleted : { ...deleted, [kind]: [...ids, id] };
+}
+
 export function removeMaterial(document: WorkspaceDocument, materialId: string): WorkspaceDocument {
   return {
     ...document,
     materials: document.materials.filter((item) => item.id !== materialId),
+    deleted: markDeleted(document, "materials", materialId),
   };
 }
 
@@ -413,7 +422,11 @@ export function upsertRecipe(document: WorkspaceDocument, recipe: Recipe): Works
 }
 
 export function removeRecipe(document: WorkspaceDocument, recipeId: string): WorkspaceDocument {
-  return { ...document, recipes: document.recipes.filter((item) => item.id !== recipeId) };
+  return {
+    ...document,
+    recipes: document.recipes.filter((item) => item.id !== recipeId),
+    deleted: markDeleted(document, "recipes", recipeId),
+  };
 }
 
 export function setStepStatuses(
@@ -501,7 +514,11 @@ export function upsertTool(document: WorkspaceDocument, tool: ToolDefinition): W
 }
 
 export function removeTool(document: WorkspaceDocument, toolId: string): WorkspaceDocument {
-  return { ...document, tools: document.tools.filter((item) => item.id !== toolId) };
+  return {
+    ...document,
+    tools: document.tools.filter((item) => item.id !== toolId),
+    deleted: markDeleted(document, "tools", toolId),
+  };
 }
 
 /** How many steps and recipes name each tool, for the editor's list. */
