@@ -65,6 +65,7 @@ Semantics follow the simplified (square) film model of the polygon slabs:
 from __future__ import annotations
 
 import base64
+import functools
 import hashlib
 import io
 import math
@@ -959,19 +960,120 @@ def components(mask: np.ndarray, *, connect_layers: bool = True, check: Callable
     return parent[run3]
 
 
+def _distinct_fine(fine: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The distinct grids of a stack of fine grids: (table, inverse), with
+    ``table[inverse] == fine``."""
+    n = fine.shape[0]
+    packed = np.packbits(fine.reshape(n, -1), axis=1)
+    _, first, inverse = _unique(_brick_hash(packed), return_index=True, return_inverse=True)
+    if not np.array_equal(packed[first][inverse], packed):  # a hash collision: no sharing
+        return fine, np.arange(n)
+    return fine[first], inverse
+
+
+def _spread(starts: np.ndarray, rows: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """For groups laid end to end (group ``r`` at ``starts[r]:starts[r + 1]``),
+    every place of the groups of ``rows``: (which of ``rows``, place)."""
+    lo = starts[rows]
+    count = starts[rows + 1] - lo
+    which = np.repeat(np.arange(rows.size), count)
+    place = np.arange(which.size) - np.repeat(np.cumsum(count) - count, count) + lo[which]
+    return which, place
+
+
+def _distinct_per_row(table: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The distinct non-negative values of each row of ``table`` (rows,
+    width), grouped by row: (starts, values)."""
+    rows, width = table.shape
+    flat = table.reshape(-1).astype(np.int64)
+    keep = flat >= 0
+    span = int(flat.max(initial=0)) + 1
+    both = _unique(np.repeat(np.arange(rows, dtype=np.int64), width)[keep] * span + flat[keep])
+    return np.searchsorted(both // span, np.arange(rows + 1)), both % span
+
+
+def _pairs_per_row(a: np.ndarray, b: np.ndarray, span: int, chunk: int = 4096):
+    """The distinct pairs of non-negative values at the same place of a row
+    of ``a`` and of ``b`` (rows, width), grouped by row: (starts, a, b)."""
+    rows = a.shape[0]
+    found = [np.zeros(0, np.int64)]
+    for lo in range(0, rows, chunk):
+        x, y = a[lo : lo + chunk].astype(np.int64), b[lo : lo + chunk].astype(np.int64)
+        keep = (x >= 0) & (y >= 0)
+        row = np.broadcast_to(np.arange(lo, lo + x.shape[0], dtype=np.int64)[:, None], x.shape)
+        found.append(_unique((row[keep] * span + x[keep]) * span + y[keep]))
+    both = np.concatenate(found)
+    row, rest = np.divmod(both, span * span)
+    return np.searchsorted(row, np.arange(rows + 1)), rest // span, rest % span
+
+
+class FinePieces:
+    """The pieces the fine cells of the refined cells are in, as
+    :func:`components2` finds them: numbered per distinct fine grid (from
+    0, -1 outside the set) plus an offset per refined cell -- a cell's
+    pieces are ``offset .. offset + count - 1`` -- rather than a full
+    array of ids."""
+
+    def __init__(self, local: np.ndarray, per_grid: np.ndarray, inverse: np.ndarray, offset: np.ndarray, parent: np.ndarray):
+        self.local = local
+        self.per_grid = per_grid
+        self.inverse = inverse
+        self.offset = offset
+        self.parent = parent
+
+    def at(self, rows: np.ndarray, where: np.ndarray) -> np.ndarray:
+        """The pieces of the fine cells in the set at ``where`` (bool,
+        one fine grid per refined cell of ``rows``)."""
+        lab = self.local[self.inverse[rows]]
+        chosen = where & (lab >= 0)
+        which = np.nonzero(chosen)[0]
+        return self.parent[self.offset[rows][which] + lab[chosen]]
+
+    def member(self, pieces: np.ndarray) -> np.ndarray:
+        """Fine cells whose piece is one of ``pieces``. A refined cell
+        with all of its pieces chosen is its grid's set, with none of
+        them nothing; only a cell with some is looked at cell by cell."""
+        hit = np.zeros(self.parent.size, dtype=bool)
+        pieces = np.asarray(pieces, dtype=np.int64)
+        hit[pieces[(pieces > 0) & (pieces < hit.size)]] = True
+        hit = hit[self.parent]
+        per_grid = self.per_grid[self.inverse]
+        out = np.zeros((self.inverse.size, *self.local.shape[1:]), dtype=bool)
+        if self.inverse.size == 0:
+            return out
+        first = self.offset
+        # hits per refined cell over its run of pieces
+        cumulative = np.concatenate([[0], np.cumsum(hit)])
+        chosen = cumulative[first + per_grid] - cumulative[first]
+        every = (chosen == per_grid) & (per_grid > 0)
+        out[every] = self.local[self.inverse[every]] >= 0
+        some = np.flatnonzero((chosen > 0) & ~every)
+        for lo in range(0, some.size, 4096):
+            rows = some[lo : lo + 4096]
+            lab = self.local[self.inverse[rows]].astype(np.int64)
+            inside = lab >= 0
+            out[rows] = inside & hit[np.where(inside, first[rows, None, None] + lab, 0)]
+        return out
+
+
 def components2(
     plain: np.ndarray, keys: np.ndarray, fine: np.ndarray, nx: int, ny: int,
     check: Callable[[], None] | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, FinePieces]:
     """The 6-connected pieces of a set given at the grid's two levels.
 
     ``plain`` marks whole bulk cells of a stack (slabs, ny, nx); ``keys``
-    (slab * ny * nx + cell) are the refined cells and ``fine`` their fine
-    cells in the set. Returns a piece id for every plain cell and every
-    fine cell (0 outside the set); a piece may run through both levels.
-    Fine cells of a refined cell join each other inside it, the plain
-    cell or refined cell's fine cells beside them, and those above and
-    below. ``check`` is called between passes.
+    (slab * ny * nx + cell, sorted) are the refined cells and ``fine``
+    their fine cells in the set. Returns a piece id for every plain cell
+    (0 outside the set) and the fine cells' pieces (:class:`FinePieces`);
+    a piece may run through both levels. Fine cells of a refined cell join
+    each other inside it, the plain cell or refined cell's fine cells
+    beside them, and those above and below.
+
+    The pieces inside a refined cell depend on its fine grid alone, and
+    which of them meet a neighbour's on the two grids alone, so each is
+    worked out once per distinct grid, or pair of grids: the same wall
+    repeats in slab after slab. ``check`` is called between passes.
     """
     check = check or (lambda: None)
     plane = ny * nx
@@ -979,12 +1081,28 @@ def components2(
     coarse_id = components(plain, check=check)
     base = int(coarse_id.max()) if coarse_id.size else 0
     if keys.size == 0:
-        return coarse_id, np.zeros(fine.shape, dtype=np.int64)
-    fine_id = components(fine, connect_layers=False, check=check)
-    fine_id[fine_id > 0] += base
-    count = int(fine_id.max()) if fine_id.size else base
-    count = max(count, base)
-    B = fine.shape[1]
+        none = np.zeros((0, *fine.shape[1:]), dtype=np.int32)
+        return coarse_id, FinePieces(none, np.zeros(0, np.int64), np.zeros(0, np.int64), np.zeros(0, np.int64), np.arange(base + 1))
+    check()
+    table, inverse = _distinct_fine(fine)
+    M = table.shape[0]
+    # each distinct grid's own pieces, numbered from 0 in each
+    raw = components(table, connect_layers=False, check=check)
+    inside = raw > 0
+    grid_of = np.nonzero(inside)[0]
+    span = int(raw.max(initial=0)) + 1
+    tagged = grid_of * span + raw[inside]
+    pieces = _unique(tagged)
+    per_grid = np.bincount(pieces // span, minlength=M)
+    first = np.cumsum(per_grid) - per_grid
+    local = np.full(raw.shape, -1, dtype=np.int32)
+    local[inside] = np.searchsorted(pieces, tagged) - first[grid_of]
+    del raw, inside, grid_of, tagged
+    # ids: the plain pieces are 1..base, then each refined cell's own
+    held = per_grid[inverse]
+    offset = base + 1 + np.cumsum(held) - held
+    count = base + int(held.sum())
+    wide = int(per_grid.max(initial=0)) + 1
     k, rest = np.divmod(keys, plane)
     iy, ix = np.divmod(rest, nx)
     flat_plain = plain.reshape(-1)
@@ -996,43 +1114,41 @@ def components2(
         at = np.minimum(np.searchsorted(keys, at_keys), keys.size - 1)
         return at, keys[at] == at_keys
 
-    def per_brick(bricks, ids):
-        """One (id) per piece per brick: the distinct ids of each brick's cells."""
-        rows = np.repeat(bricks, ids.shape[1])
-        values = ids.reshape(-1)
-        keep = values > 0
-        combined = _unique(rows[keep] * (count + 1) + values[keep])
-        return combined // (count + 1), combined % (count + 1)
+    def to_plain(cells, others, starts, values):
+        which, place = _spread(starts, inverse[cells])
+        heads.append(offset[cells[which]] + values[place])
+        tails.append(flat_coarse[others[which]])
 
-    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+    def to_refined(cells, theirs, mine_of, theirs_of):
+        """Pieces facing each other, found once per pair of grids."""
+        _, first_of, pair_of = _unique(inverse[cells] * M + inverse[theirs], return_index=True, return_inverse=True)
+        starts, a, b = _pairs_per_row(mine_of(inverse[cells[first_of]]), theirs_of(inverse[theirs[first_of]]), wide)
+        which, place = _spread(starts, pair_of)
+        heads.append(offset[cells[which]] + a[place])
+        tails.append(offset[theirs[which]] + b[place])
+
+    sides = (  # the fine cells along the side towards (dx, dy), and the neighbour's facing them
+        (1, 0, local[:, :, -1], local[:, :, 0]),
+        (-1, 0, local[:, :, 0], None),
+        (0, 1, local[:, -1, :], local[:, 0, :]),
+        (0, -1, local[:, 0, :], None),
+    )
+    for dx, dy, mine, facing in sides:
         check()
         ok = (ix + dx >= 0) & (ix + dx < nx) & (iy + dy >= 0) & (iy + dy < ny)
         idx = np.flatnonzero(ok)
         other = k[idx] * plane + (iy[idx] + dy) * nx + ix[idx] + dx
-        if dx == 1:
-            mine, side = fine_id[idx, :, -1], 0
-        elif dx == -1:
-            mine, side = fine_id[idx, :, 0], -1
-        elif dy == 1:
-            mine, side = fine_id[idx, -1, :], 0
-        else:
-            mine, side = fine_id[idx, 0, :], -1
-        # A plain neighbour in the set.
         member = flat_plain[other]
         if member.any():
-            bricks, ids = per_brick(np.arange(int(member.sum())), mine[member])
-            heads.append(ids)
-            tails.append(flat_coarse[other[member]][bricks])
-        # A refined neighbour: fine cells face to face (each pair of bricks once).
-        if dx == 1 or dy == 1:
+            to_plain(idx[member], other[member], *_distinct_per_row(mine))
+        if facing is not None:
             at, hit = refined(other)
             if hit.any():
-                theirs = fine_id[at[hit]]
-                theirs = theirs[:, :, side] if dx else theirs[:, side, :]
-                both = (mine[hit] > 0) & (theirs > 0)
-                pairs = _unique(mine[hit][both] * (count + 1) + theirs[both])
-                heads.append(pairs // (count + 1))
-                tails.append(pairs % (count + 1))
+                to_refined(idx[hit], at[hit], lambda g, m=mine: m[g], lambda g, f=facing: f[g])
+    # every fine cell spans its slab: all of a grid's pieces meet the cell above and below
+    every_starts = np.concatenate([[0], np.cumsum(per_grid)])
+    every = np.arange(every_starts[-1]) - np.repeat(every_starts[:-1], per_grid)
+    flat_local = local.reshape(M, -1)
     for dk in (1, -1):
         check()
         ok = (k + dk >= 0) & (k + dk < layers)
@@ -1040,22 +1156,18 @@ def components2(
         other = (k[idx] + dk) * plane + rest[idx]
         member = flat_plain[other]
         if member.any():
-            chosen = idx[member]
-            bricks, ids = per_brick(np.arange(chosen.size), fine_id[chosen].reshape(chosen.size, -1))
-            heads.append(ids)
-            tails.append(flat_coarse[other[member]][bricks])
+            to_plain(idx[member], other[member], every_starts, every)
         if dk == 1:
             at, hit = refined(other)
             if hit.any():
-                mine = fine_id[idx[hit]]
-                theirs = fine_id[at[hit]]
-                both = (mine > 0) & (theirs > 0)
-                pairs = _unique(mine[both] * (count + 1) + theirs[both])
-                heads.append(pairs // (count + 1))
-                tails.append(pairs % (count + 1))
+                to_refined(idx[hit], at[hit], lambda g: flat_local[g], lambda g: flat_local[g])
     check()
-    parent = _union_find(count, np.concatenate(heads) if heads else np.zeros(0), np.concatenate(tails) if tails else np.zeros(0))
-    return parent[coarse_id], parent[fine_id]
+    parent = _union_find(
+        count,
+        np.concatenate(heads) if heads else np.zeros(0, np.int64),
+        np.concatenate(tails) if tails else np.zeros(0, np.int64),
+    )
+    return parent[coarse_id], FinePieces(local, per_grid, inverse, offset, parent)
 
 
 def _neighbours(mask: np.ndarray) -> np.ndarray:
@@ -1492,12 +1604,14 @@ def _pairs(group, lo_of, many_of):
     return which, at
 
 
-def _narrow(parent_of, lo, many, seg_of, segments, cx, cy, half, budget=4_000_000):
+def _narrow(parent_of, lo, many, seg_of, segments, cx, cy, half, budget=4_000_000, reach=np.inf):
     """For groups (with centres ``cx``, ``cy`` and half-diagonal ``half``)
     whose candidate lines are ``seg_of[lo : lo + many]``, keep the lines that
     can be the nearest somewhere in the group: within the nearest one's
-    distance from the centre plus twice ``half``. Returns (group, line)
-    sorted by group, and each group's nearest distance from its centre."""
+    distance from the centre plus twice ``half`` -- and, when only lines
+    within ``reach`` of a point matter, within ``reach`` plus ``half``.
+    Returns (group, line) sorted by group, and each group's nearest
+    distance from its centre among its candidates."""
     kept_g: list[np.ndarray] = []
     nearest_all = np.full(cx.size, np.inf)
     kept_s: list[np.ndarray] = []
@@ -1514,7 +1628,7 @@ def _narrow(parent_of, lo, many, seg_of, segments, cx, cy, half, budget=4_000_00
         nearest = np.full(stop - start, np.inf)
         np.minimum.at(nearest, which, d2)
         nearest_all[start:stop] = np.sqrt(nearest)
-        limit = (np.sqrt(nearest) + 2.0 * half) ** 2
+        limit = np.minimum(np.sqrt(nearest) + 2.0 * half, reach + half) ** 2
         keep = d2 <= limit[which] * (1 + 1e-12)
         kept_g.append(start + which[keep])
         kept_s.append(seg[keep])
@@ -1528,6 +1642,11 @@ def _narrow(parent_of, lo, many, seg_of, segments, cx, cy, half, budget=4_000_00
 def _within_lines(x, y, tree, segments, reach, x_min, y_min, fx, fy, fine_cols, refine):
     """Whether points are within ``reach`` of any surface line (``segments``,
     indexed by ``tree``).
+
+    Lines farther than ``reach`` from every point of a block are dropped
+    at once: a line within reach of a point is kept at every level, so a
+    fine cell's nearest distance is overstated only where it is beyond
+    reach anyway.
 
     Narrowed level by level, so a wall drawn in a great many short lines is
     not measured line by line from every point: for each block of 4 x 4
@@ -1549,7 +1668,9 @@ def _within_lines(x, y, tree, segments, reach, x_min, y_min, fx, fy, fine_cols, 
     (first, _line), distance = tree.query_nearest(centres, return_distance=True, all_matches=False)
     nearest = np.full(blocks.size, np.inf)
     np.minimum.at(nearest, first, distance)
-    bg, bs = tree.query(centres, predicate="dwithin", distance=nearest + q * math.hypot(fx, fy) + 1e-12)
+    # only lines within reach of some point of the block matter
+    reach_block = reach + 0.5 * q * math.hypot(fx, fy)
+    bg, bs = tree.query(centres, predicate="dwithin", distance=np.minimum(nearest + q * math.hypot(fx, fy), reach_block) + 1e-12)
     order = np.argsort(bg, kind="stable")
     bg, bs = bg[order], bs[order]
     # fine cells, from their block's lines
@@ -1560,7 +1681,7 @@ def _within_lines(x, y, tree, segments, reach, x_min, y_min, fx, fy, fine_cols, 
     ccy = y_min + (cells // fine_cols + 0.5) * fy
     lo = np.searchsorted(bg, c_block, side="left")
     many = np.searchsorted(bg, c_block, side="right") - lo
-    kc, ks, centre_d = _narrow(None, lo, many, bs, segments, ccx, ccy, 0.5 * math.hypot(fx, fy))
+    kc, ks, centre_d = _narrow(None, lo, many, bs, segments, ccx, ccy, 0.5 * math.hypot(fx, fy), reach=reach)
     # a point is no farther from the lines than its cell's centre plus the
     # way to it, and no nearer than that less the way: most are settled so
     away = np.hypot(x - ccx[back], y - ccy[back])
@@ -1785,8 +1906,10 @@ def _near(state: VoxelState, solid: Mask2, reach: float) -> Mask2:
     (first, _nearest), distance = tree.query_nearest(centres, return_distance=True, all_matches=False)
     nearest = np.full(band.size, np.inf)
     np.minimum.at(nearest, first, distance)
-    # Every segment that can be the nearest to some fine cell of the cell.
-    pairs = tree.query(centres, predicate="dwithin", distance=nearest + 2.0 * half + 1e-12)
+    # Every segment that can be the nearest to some fine cell of the cell
+    # and within reach of it: no fine centre of the cell is more than half
+    # its diagonal from its centre.
+    pairs = tree.query(centres, predicate="dwithin", distance=np.minimum(nearest + 2.0 * half, reach + half) + 1e-12)
     cell_of, seg_of = pairs
     order = np.argsort(cell_of, kind="stable")
     cell_of, seg_of = cell_of[order], seg_of[order]
@@ -1862,6 +1985,41 @@ def _walk(
     return stop
 
 
+def _walk_at(state: "VoxelState", x: np.ndarray, y: np.ndarray, table: np.ndarray, budget: float, inside: np.ndarray) -> np.ndarray:
+    """:func:`_walk` down the columns at points ``(x, y)`` of ``state``,
+    reading each slab only at the columns the etch is still going down."""
+    z = state.z
+    count = x.size
+    remaining = np.full(count, float(budget))
+    stop = np.full(count, np.inf)
+    stop[inside] = z[-1]
+    live = np.flatnonzero(inside)
+    for k in range(state.n - 1, -1, -1):
+        if live.size == 0:
+            break
+        grid = state.sample(k, x[live], y[live])
+        z0, z1 = float(z[k]), float(z[k + 1])
+        void = grid == VOID
+        stop[live[void]] = z0
+        rate = table[grid]
+        going = void | (rate > 0.0)
+        live, grid, rate, void = live[going], grid[going], rate[going], void[going]
+        etching = ~void
+        if not etching.any():
+            continue
+        at, r = live[etching], rate[etching]
+        cost = (z1 - z0) / r
+        through = remaining[at] >= cost - 1e-12
+        stop[at[through]] = z0
+        remaining[at[through]] -= cost[through]
+        partial = at[~through]
+        stop[partial] = z1 - remaining[partial] * r[~through]
+        keep = np.ones(live.size, dtype=bool)
+        keep[np.flatnonzero(etching)[~through]] = False
+        live = live[keep]
+    return stop
+
+
 def _chunks(cells: np.ndarray, per_cell: int, budget: int = 24_000_000):
     """Pieces of ``cells`` small enough that ``per_cell`` values each fit ``budget``."""
     size = max(1, budget // max(1, per_cell))
@@ -1931,7 +2089,6 @@ def etch_vertical(
     # Boundaries: the columns at any point, walked as they were before.
     edges = _boundary_cells(state, inside)
     if edges.size:
-        slabs = np.arange(before.n)[:, None]
         x_min, y_min, _, _ = state.bounds
         wide = state.nx * B * 4000 + 1
         # where the etch stops at a point is the same for every slab, and
@@ -1944,7 +2101,7 @@ def etch_vertical(
             qx = (x - x_min) / state.fine_x * 4000
             qy = (y - y_min) / state.fine_y * 4000
             if np.abs(qx - np.rint(qx)).max(initial=0.0) > 0.01 or np.abs(qy - np.rint(qy)).max(initial=0.0) > 0.01:
-                return _walk(before.sample(slabs, x[None, :], y[None, :]), before.z, table, budget, inside.at(state, x, y))
+                return _walk_at(before, x, y, table, budget, inside.at(state, x, y))
             ids = np.rint(qy).astype(np.int64) * wide + np.rint(qx).astype(np.int64)
             ids, first, back = _unique(ids, return_index=True, return_inverse=True)
             keys, values = known
@@ -1955,8 +2112,7 @@ def etch_vertical(
             miss = np.flatnonzero(~hit)
             if miss.size:
                 px, py = x[first[miss]], y[first[miss]]
-                columns = before.sample(slabs, px[None, :], py[None, :])
-                stop[miss] = _walk(columns, before.z, table, budget, inside.at(state, px, py))
+                stop[miss] = _walk_at(before, px, py, table, budget, inside.at(state, px, py))
                 merged = np.concatenate([keys, ids[miss]])
                 order = np.argsort(merged, kind="stable")
                 known[0] = merged[order]
@@ -2272,17 +2428,24 @@ def _curving(state: VoxelState, table: np.ndarray, live: "VoxelState", opening: 
     return events
 
 
+def _in(ids: np.ndarray, chosen: np.ndarray, count: int) -> np.ndarray:
+    """``np.isin`` for piece ids below ``count``: a table lookup."""
+    hit = np.zeros(count, dtype=bool)
+    hit[chosen] = True
+    return hit[ids]
+
+
 def _live(state: VoxelState, check: Callable[[], None] | None = None) -> "VoxelState":
     """Open space the ambient reaches, as a two-level field over the stack
     plus one slab on top for the ambient itself (1 where reached); the
     rest of the open space is a sealed cavity."""
     plain = np.concatenate([state.labels == VOID, np.ones((1, state.ny, state.nx), dtype=bool)])
     fine = (state.pool == VOID)[state.brick_ref]
-    coarse_id, fine_id = components2(plain, state.brick_keys, fine, state.nx, state.ny, check=check)
+    coarse_id, pieces = components2(plain, state.brick_keys, fine, state.nx, state.ny, check=check)
     ambient = _unique(coarse_id[-1])
     ambient = ambient[ambient > 0]
-    labels = np.isin(coarse_id, ambient).astype(np.uint8)
-    reached = np.isin(fine_id, ambient) & fine
+    labels = _in(coarse_id, ambient, pieces.parent.size).astype(np.uint8)
+    reached = pieces.member(ambient)
     # Refined cells keep their bricks: 1 where reached, 0 elsewhere.
     labels.reshape(-1)[state.brick_keys] = MIXED
     field = VoxelState(
@@ -2316,9 +2479,8 @@ def _wet_field(state: VoxelState, opening: "Mask2 | None", check: Callable[[], N
     rest -- a channel running under the covered part from a hole in the
     opening fills with etchant from that hole.
     """
-    live = _live(state, check)
     if opening is None:
-        return live
+        return _live(state, check)
     check = check or (lambda: None)
     B, n, ny, nx, plane = state.refine, state.n, state.ny, state.nx, state.plane
     col = opening.coarse
@@ -2358,31 +2520,36 @@ def _wet_field(state: VoxelState, opening: "Mask2 | None", check: Callable[[], N
     order = np.argsort(r_keys, kind="stable")
     r_keys, r_blocks = r_keys[order], r_blocks[order]
     if not resist_c.any() and r_keys.size == 0:
-        return live
-    # what the ambient reaches, less the resist: the pieces of it that touch
-    # the opening hold etchant
-    keys = np.union1d(live.brick_keys, r_keys)
-    fine_live = live.blocks(keys) == 1
-    fine_resist = np.zeros(fine_live.shape, dtype=bool)
+        return _live(state, check)
+    # The etchant comes in from the ambient over the opening: the pieces of
+    # the open space less the resist that reach the top slab there hold it.
+    # (Sealed cavities and space joined to the ambient only through resist
+    # are pieces of their own.)
+    keys = np.union1d(state.brick_keys, r_keys)
+    below = keys < n * plane
+    fine_open = np.ones((keys.size, B, B), dtype=bool)
+    fine_open[below] = state.blocks(keys[below]) == VOID
+    fine_resist = np.zeros(fine_open.shape, dtype=bool)
     if r_keys.size:
         fine_resist[np.searchsorted(keys, r_keys)] = r_blocks
-    fine_open = fine_live & ~fine_resist
-    plain_open = (live.labels == 1) & ~resist_c
+    fine_open &= ~fine_resist
+    plain_open = (lab == VOID) & ~resist_c
     plain_open.reshape(-1)[keys] = False
     check()
-    coarse_id, fine_id = components2(plain_open, keys, fine_open, nx, ny, check=check)
+    coarse_id, pieces = components2(plain_open, keys, fine_open, nx, ny, check=check)
     k_of, cell_of = np.divmod(keys, plane)
-    seeds = [coarse_id[plain_open & (col >= 1)[None]]]
-    if keys.size:
-        seeds.append(fine_id[fine_open & opening.blocks_for(cell_of, B)])
+    seeds = [coarse_id[n][plain_open[n] & (col >= 1)]]
+    top = np.flatnonzero(k_of == n)
+    if top.size:
+        seeds.append(pieces.at(top, opening.blocks_for(cell_of[top], B)))
     wet = _unique(np.concatenate(seeds))
     wet = wet[wet > 0]
-    labels = np.where(np.isin(coarse_id, wet), 1, 0).astype(np.uint8)
+    labels = _in(coarse_id, wet, pieces.parent.size).astype(np.uint8)
     labels[resist_c] = RESIST
     labels.reshape(-1)[keys] = MIXED
-    blocks = np.where(np.isin(fine_id, wet), 1, 0).astype(np.uint8)
+    blocks = pieces.member(wet).astype(np.uint8)
     blocks[fine_resist] = RESIST
-    field = VoxelState(state.bounds, nx, ny, live.z.copy(), labels, ["wet"], 0.0, B)
+    field = VoxelState(state.bounds, nx, ny, np.concatenate([state.z, [state.top + state.cell]]), labels, ["wet"], 0.0, B)
     field.store(keys, blocks)
     return field
 
@@ -3777,52 +3944,84 @@ def resample(state: VoxelState, refine: int, should_cancel: Callable[[], bool] |
     return new
 
 
-def _refined_bricks(blocks: np.ndarray, cuts: np.ndarray, f: int) -> tuple[np.ndarray, np.ndarray]:
-    """Bricks (P, b, b) with their cuts, each fine cell split into f x f.
+@functools.lru_cache(maxsize=8)
+def _children(f: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """How the f x f children of a fine cell cut by each line (code 1..32)
+    are drawn, with 1 for the material left of the parent's line and 2 for
+    the other: (label, cut code, material across the cut), each (33, f, f).
 
-    A child takes its parent's material, or the side of the parent's cut
-    its centre is on; a child the cut crosses is fitted from its parent's
-    line exactly as :func:`_refit` fits a cell -- anchors a hair inside,
-    half sides snapped at their middles -- and every line between two
-    parent anchors runs through child anchors, so nothing is lost.
+    A child takes the side of the parent's line its centre is on; a child
+    the line crosses is fitted from the line exactly as :func:`_refit`
+    fits a cell -- anchors a hair inside, half sides snapped at their
+    middles. Only which side is which matters to the fitting, so this is
+    worked out once per line and per child.
     """
-    P, b, _ = blocks.shape
-    B = b * f
-    j = np.arange(B)
-    parent = j // f
-    offset = j % f
-    labels = blocks[:, parent[:, None], parent[None, :]]
-    parent_cut = cuts[:, parent[:, None], parent[None, :]]
-    out_cut = np.zeros((P, B, B), dtype=np.uint16)
-    p, r, c = np.nonzero(parent_cut)
-    if p.size == 0:
-        return labels, out_cut
-    packed = parent_cut[p, r, c]
-    code = voxel_cut.code_of(packed)
-    other = voxel_cut.other_of(packed)
-    mine = labels[p, r, c]
+    codes = np.repeat(np.arange(1, 33), f * f)
+    orow = np.tile(np.repeat(np.arange(f), f), 32)
+    ocol = np.tile(np.arange(f), 32 * f)
+    one = np.ones(codes.size, np.uint8)
 
     def side(cc, u, v, a, o):
         return np.where(voxel_cut.left_of(cc, u, v), a, o).astype(np.uint8)
 
-    # child points in the parent's unit square
-    centre = side(code, (offset[c] + 0.5) / f, (offset[r] + 0.5) / f, mine, other)
+    centre = side(codes, (ocol + 0.5) / f, (orow + 0.5) / f, one, 2 * one)
     inward = 0.5 + (voxel_cut.ANCHORS - 0.5) * (1.0 - 2e-3)
-    au = (offset[c][:, None] + inward[None, :, 0]) / f
-    av = (offset[r][:, None] + inward[None, :, 1]) / f
-    anchor = side(code[:, None], au, av, mine[:, None], other[:, None])
+    au = (ocol[:, None] + inward[None, :, 0]) / f
+    av = (orow[:, None] + inward[None, :, 1]) / f
+    anchor = side(codes[:, None], au, av, one[:, None], 2 * one[:, None])
     crossing = anchor != np.roll(anchor, -1, axis=1)
     snap = np.broadcast_to(voxel_cut.TO_MIDDLE, anchor.shape).copy()
     rr, h = np.nonzero(crossing)
     if rr.size:
         middle = 0.5 + (voxel_cut.half_middles() - 0.5) * (1.0 - 2e-3)
-        mu = (offset[c[rr]] + middle[h, 0]) / f
-        mv = (offset[r[rr]] + middle[h, 1]) / f
-        got = side(code[rr], mu, mv, mine[rr], other[rr])
+        mu = (ocol[rr] + middle[h, 0]) / f
+        mv = (orow[rr] + middle[h, 1]) / f
+        got = side(codes[rr], mu, mv, one[rr], 2 * one[rr])
         snap[rr, h] = np.where(got == anchor[rr, (h + 1) % 8], 0, 1)
     label, cut = voxel_cut.fit(anchor, centre, snap)
-    labels[p, r, c] = label
-    out_cut[p, r, c] = cut
+    shape = (32, f, f)
+    pad = np.zeros((1, f, f), np.uint8)
+    return (
+        np.concatenate([pad, label.reshape(shape)]),
+        np.concatenate([pad, voxel_cut.code_of(cut).astype(np.uint8).reshape(shape)]),
+        np.concatenate([pad, voxel_cut.other_of(cut).reshape(shape)]),
+    )
+
+
+def _refined_bricks(blocks: np.ndarray, cuts: np.ndarray, f: int) -> tuple[np.ndarray, np.ndarray]:
+    """Bricks (P, b, b) with their cuts, each fine cell split into f x f.
+
+    A child takes its parent's material, or the side of the parent's cut
+    its centre is on; a child the cut crosses is fitted from its parent's
+    line (see :func:`_children`), and every line between two parent
+    anchors runs through child anchors, so nothing is lost.
+    """
+    P, b, _ = blocks.shape
+    B = b * f
+    parent = np.arange(B) // f
+    labels = blocks[:, parent[:, None], parent[None, :]]
+    out_cut = np.zeros((P, B, B), dtype=np.uint16)
+    p, r, c = np.nonzero(cuts)
+    if p.size == 0:
+        return labels, out_cut
+    packed = cuts[p, r, c]
+    code = voxel_cut.code_of(packed)
+    other = voxel_cut.other_of(packed)
+    mine = blocks[p, r, c]
+    label_of, code_of, across_of = _children(f)
+    pick = [mine[:, None, None], other[:, None, None]]
+    child = np.where(label_of[code] == 1, *pick)
+    child_code = code_of[code]
+    child_cut = voxel_cut.pack(child_code, np.where(across_of[code] == 1, *pick))
+    # a line with one material on both sides draws nothing
+    same = mine == other
+    child[same] = mine[same][:, None, None]
+    child_cut[same] = 0
+    at = np.arange(f)
+    rows = r[:, None, None] * f + at[None, :, None]
+    cols = c[:, None, None] * f + at[None, None, :]
+    labels[p[:, None, None], rows, cols] = child
+    out_cut[p[:, None, None], rows, cols] = child_cut
     return labels, out_cut
 
 

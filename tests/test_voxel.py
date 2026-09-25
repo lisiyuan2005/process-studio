@@ -1142,3 +1142,50 @@ def test_the_pictures_are_outlines_that_hold_what_the_state_holds():
         assert _outline_area(section, "SiO2") == pytest.approx(0.2 * (1.0 - chord), abs=0.2 * 2 * state.fine)
     line = voxel.section(state, {}, _rgb, z_max=0.5, vector=True, line=((0.0, 0.5), (1.0, 0.5)))
     assert _outline_area(line, "Si") == pytest.approx(0.2, rel=1e-3)
+
+
+def test_pieces_found_per_distinct_grid_are_the_pieces_of_the_fine_cells():
+    rng = np.random.default_rng(7)
+    layers, ny, nx, B = 4, 6, 7, 4
+    palette = rng.random((5, B, B)) < 0.6  # few grids: refined cells share them
+    plain_cells = rng.random((layers, ny, nx)) < 0.5
+    refined = rng.random((layers, ny, nx)) < 0.45
+    choice = rng.integers(0, len(palette), size=(layers, ny, nx))
+    dense = np.repeat(np.repeat(plain_cells, B, axis=1), B, axis=2)
+    for k, y, x in zip(*np.nonzero(refined)):
+        dense[k, y * B : (y + 1) * B, x * B : (x + 1) * B] = palette[choice[k, y, x]]
+    keys = np.flatnonzero(refined.reshape(-1))
+    k, rest = np.divmod(keys, ny * nx)
+    iy, ix = np.divmod(rest, nx)
+    fine = palette[choice.reshape(-1)[keys]]
+    coarse_id, pieces = voxel.components2(plain_cells & ~refined, keys, fine, nx, ny)
+    found = np.zeros(dense.shape, dtype=np.int64)
+    found[:] = np.repeat(np.repeat(coarse_id, B, axis=1), B, axis=2)
+    ids = np.zeros(fine.shape, dtype=np.int64)
+    ids[fine] = pieces.at(np.arange(keys.size), np.ones(fine.shape, bool))
+    for n in range(keys.size):
+        found[k[n], iy[n] * B : (iy[n] + 1) * B, ix[n] * B : (ix[n] + 1) * B] = ids[n]
+    expected = voxel.components(dense)
+    assert ((found > 0) == dense).all()
+    # the same partition: each piece of one is one piece of the other
+    pairs = np.unique(np.stack([found[dense], expected[dense]]), axis=1)
+    assert pairs.shape[1] == np.unique(found[dense]).size == np.unique(expected[dense]).size
+    # and membership, read back per grid
+    some = np.unique(expected[dense])[::2]
+    chosen = np.unique(found[np.isin(expected, some) & dense])
+    member = pieces.member(chosen)
+    assert (member == (np.isin(ids, chosen) & fine)).all()
+
+
+def test_the_column_walk_that_reads_slabs_as_it_goes_stops_where_the_full_walk_does():
+    rng = np.random.default_rng(3)
+    B = 4
+    fine = rng.integers(0, 4, size=(6, 8 * B, 8 * B)).astype(np.uint8)
+    state = voxel.VoxelState.from_fine((0.0, 0.0, 1.0, 1.0), fine, B, np.linspace(0.0, 0.6, 7), ["A", "B", "C"])
+    table = np.zeros(256)
+    table[1], table[2] = 1.0, 0.25  # C does not etch
+    x, y = rng.random(500), rng.random(500)
+    inside = rng.random(500) < 0.8
+    for budget in (0.05, 0.2, 1.0):
+        full = voxel._walk(state.sample(np.arange(state.n)[:, None], x[None, :], y[None, :]), state.z, table, budget, inside)
+        assert np.array_equal(voxel._walk_at(state, x, y, table, budget, inside), full)
