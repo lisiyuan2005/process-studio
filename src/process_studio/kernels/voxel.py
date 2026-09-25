@@ -2538,8 +2538,11 @@ SHOWN_CELLS = 2048
 
 def shown(state: VoxelState, limit: int = SHOWN_CELLS) -> VoxelState:
     """``state`` with bricks of at most ``limit`` fine cells across the
-    window, each shown cell the material most of its fine cells hold (open
-    space losing a tie). The same state when it is fine enough already."""
+    window, drawn again at that coarser power of two the way
+    :func:`resample` draws it: each shown cell the material at its centre,
+    and its cut lines fitted to the fine geometry, so a curve stays a curve
+    and does not turn into a staircase of the shown cells. The same state
+    when it is fine enough already."""
     refine = state.refine
     while refine > 1 and max(state.nx, state.ny) * refine > limit:
         refine //= 2
@@ -2549,29 +2552,7 @@ def shown(state: VoxelState, limit: int = SHOWN_CELLS) -> VoxelState:
         cached = state.shown.get(refine)
         if cached is not None:
             return cached
-    step = state.refine // refine
-    out = VoxelState(
-        state.bounds, state.nx, state.ny, state.z.copy(), state.labels.copy(),
-        state.materials, state.z_offset, refine,
-    )
-    out.labels.reshape(-1)[state.brick_keys] = VOID  # rewritten by store
-    used, back = _unique(state.brick_ref, return_inverse=True)
-    present = _labels_in(state.pool[used]) if used.size else np.zeros(0, np.uint8)
-    # solid first, so a tie goes to the solid
-    present = np.concatenate([present[present != VOID], present[present == VOID]])
-    reduced = np.zeros((used.size, refine, refine), dtype=np.uint8)
-    chunk = max(1, 16_000_000 // max(1, state.refine**2))
-    for start in range(0, used.size, chunk):
-        blocks = state.pool[used[start : start + chunk]].reshape(-1, refine, step, refine, step)
-        best = np.full(blocks.shape[:1] + (refine, refine), -1, dtype=np.int32)
-        label = np.zeros(best.shape, dtype=np.uint8)
-        for value in present:
-            count = (blocks == value).sum(axis=(2, 4), dtype=np.int32)
-            more = count > best
-            best[more] = count[more]
-            label[more] = value
-        reduced[start : start + chunk] = label
-    out.store(state.brick_keys, reduced[back.reshape(-1)])
+    out = resample(state, refine)
     with state.mesh_lock:
         state.shown[refine] = out
     return out
