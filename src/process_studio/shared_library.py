@@ -148,7 +148,9 @@ class SharedLibrary:
         folder = self.path.parent / "library-backups"
         try:
             copies = sorted(folder.glob(f"{self.path.stem}-*.sqlite3")) if folder.is_dir() else []
-            if copies and time.time() - copies[-1].stat().st_mtime < unless_newer_than:
+            # (a file's time can read a little ahead of the clock on Windows:
+            # a copy asked for outright never looks at it)
+            if unless_newer_than > 0 and copies and time.time() - copies[-1].stat().st_mtime < unless_newer_than:
                 return None
             folder.mkdir(parents=True, exist_ok=True)
             stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{time.time_ns() % 1_000_000_000:09d}"
