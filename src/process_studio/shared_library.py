@@ -21,7 +21,6 @@ import json
 import os
 import sqlite3
 import sys
-import time
 from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
@@ -29,8 +28,6 @@ from uuid import uuid4
 from .models import MaterialDefinition, MaterialResponse, ProcessType, Recipe, ToolDefinition
 
 
-#: How many copies of the library ``library-backups`` keeps.
-BACKUPS_KEPT = 30
 
 
 def library_path() -> Path:
@@ -94,8 +91,6 @@ class SharedLibrary:
             connection.execute(
                 "INSERT OR IGNORE INTO meta(key, value) VALUES ('id', ?)", (uuid4().hex,)
             )
-        # a copy of the library as it was found, now and then
-        self.backup(unless_newer_than=3600)
 
     @property
     def identity(self) -> str:
@@ -117,7 +112,7 @@ class SharedLibrary:
         connection.row_factory = sqlite3.Row
         return connection
 
-    # -- what the user deleted, and copies to go back to ----------------------
+    # -- what the user deleted -----------------------------------------------
 
     def _forget(self, connection: sqlite3.Connection, kind: str, row_id: str) -> None:
         """Delete a row and record its name as deleted by the user.
@@ -136,45 +131,6 @@ class SharedLibrary:
     def deleted_names(self, kind: str) -> set[str]:
         with self.connect() as connection:
             return {row[0] for row in connection.execute("SELECT name FROM deleted WHERE kind=?", (kind,))}
-
-    def backup(self, unless_newer_than: float = 0.0, keep: int = BACKUPS_KEPT) -> Path | None:
-        """Copy the library into ``library-backups`` beside it, keeping the
-        newest ``keep``; returns the copy. Nothing is copied from an empty
-        library, or when the newest copy is younger than
-        ``unless_newer_than`` seconds (the command line starts a process per
-        command, and a script of them must not push out every older copy)."""
-        if not self.path.is_file() or self.is_empty():
-            return None
-        folder = self.path.parent / "library-backups"
-        try:
-            copies = sorted(folder.glob(f"{self.path.stem}-*.sqlite3")) if folder.is_dir() else []
-            # (a file's time can read a little ahead of the clock on Windows:
-            # a copy asked for outright never looks at it)
-            if unless_newer_than > 0 and copies and time.time() - copies[-1].stat().st_mtime < unless_newer_than:
-                return None
-            folder.mkdir(parents=True, exist_ok=True)
-            stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{time.time_ns() % 1_000_000_000:09d}"
-            target = folder / f"{self.path.stem}-{stamp}.sqlite3"
-            source = sqlite3.connect(self.path)
-            try:
-                copy = sqlite3.connect(target)
-                try:
-                    source.backup(copy)
-                finally:
-                    copy.close()
-            finally:
-                source.close()
-            for old in sorted(folder.glob(f"{self.path.stem}-*.sqlite3"))[:-keep]:
-                old.unlink(missing_ok=True)
-            return target
-        except (OSError, sqlite3.Error):
-            # a copy that cannot be made is no reason to stop working
-            return None
-
-    def _before_deleting(self) -> None:
-        """A copy before the first deletion in a while: a deletion is the one
-        thing a save does that cannot be taken back."""
-        self.backup(unless_newer_than=600)
 
     def is_empty(self) -> bool:
         with self.connect() as connection:
@@ -214,7 +170,6 @@ class SharedLibrary:
             return [MaterialDefinition(**json.loads(row[0])) for row in rows]
 
     def remove_material(self, material_id: str) -> None:
-        self._before_deleting()
         with self.connect() as connection:
             self._forget(connection, "materials", material_id)
 
@@ -242,7 +197,6 @@ class SharedLibrary:
             return [ToolDefinition(**json.loads(row[0])) for row in rows]
 
     def remove_tool(self, tool_id: str) -> None:
-        self._before_deleting()
         with self.connect() as connection:
             self._forget(connection, "tools", tool_id)
 
@@ -269,7 +223,6 @@ class SharedLibrary:
             return [recipe_from_payload(json.loads(row[0])) for row in rows]
 
     def remove_recipe(self, recipe_id: str) -> None:
-        self._before_deleting()
         with self.connect() as connection:
             self._forget(connection, "recipes", recipe_id)
 

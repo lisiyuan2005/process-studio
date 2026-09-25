@@ -1,8 +1,6 @@
 """The materials, tools and recipes belong to the user, not to a project."""
 
 import io
-import sqlite3
-from contextlib import closing
 
 import pytest
 
@@ -187,34 +185,6 @@ def test_what_the_library_lost_comes_back_from_a_project_but_a_deletion_does_not
     again["materials"].append(dict(again["materials"][0], id="mine-2", name="MyOxide"))
     call("save_document", root=str(tmp_path / "one"), document=again)
     assert "MyOxide" in {m.name for m in open_repository(tmp_path / "two").load_materials()}
-
-
-def test_the_library_is_copied_aside_and_before_a_deletion(tmp_path) -> None:
-    library = SharedLibrary(tmp_path / "library.sqlite3")
-    assert not (tmp_path / "library-backups").exists()  # nothing to copy yet
-    library.save_material(MaterialDefinition("Si", id="material-si"))
-    library.save_material(MaterialDefinition("Ge", id="material-ge"))
-    assert SharedLibrary(tmp_path / "library.sqlite3").backup() is not None
-    copies = sorted((tmp_path / "library-backups").glob("library-*.sqlite3"))
-    assert copies
-    # an hour-old copy is not repeated on every start
-    SharedLibrary(tmp_path / "library.sqlite3")
-    assert len(sorted((tmp_path / "library-backups").glob("library-*.sqlite3"))) == len(copies)
-
-    def names(copy):
-        # closed at once: Windows will not delete a file that is still open
-        with closing(sqlite3.connect(copy)) as connection:
-            return {row[0] for row in connection.execute("SELECT name FROM materials")}
-
-    library.remove_material("material-ge")
-    assert "Ge" in names(copies[-1])
-    # with no recent copy, a deletion makes one first
-    for copy in (tmp_path / "library-backups").glob("*"):
-        copy.unlink()
-    library.save_material(MaterialDefinition("Ge", id="material-ge"))
-    library.remove_material("material-ge")
-    assert "Ge" in names(sorted((tmp_path / "library-backups").glob("library-*.sqlite3"))[-1])
-    assert "Ge" not in {material.name for material in library.load_materials()}
 
 
 def test_a_library_that_cannot_be_written_falls_back_into_the_workspace(
