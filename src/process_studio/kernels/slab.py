@@ -159,6 +159,31 @@ def resolution_um(project: ProjectDefinition) -> float:
     return DEFAULT_RESOLUTION_UM if not value else float(value)
 
 
+#: Process types a step may give a resolution of its own (the parameter
+#: ``resolution``, in µm): the ones whose geometry is walked or drawn at one.
+RESOLVED_TYPES = ("deposit", "etch", "oxidation")
+
+
+def step_resolution_um(parameters: Mapping[str, Any], process_type: Any) -> float | None:
+    """The resolution a step asks for itself, or None to use the project's.
+
+    It stands in for both the z step and the XY resolution while that step
+    runs: a step that does not need fine detail is run coarser, one that
+    does, finer, and every other step is untouched.
+    """
+    kind = getattr(process_type, "value", process_type)
+    value = parameters.get("resolution")
+    if kind not in RESOLVED_TYPES or value in (None, ""):
+        return None
+    try:
+        resolution = float(value)
+    except (TypeError, ValueError) as error:
+        raise SlabError(f"resolution must be a length in µm, got {value!r}") from error
+    if not math.isfinite(resolution) or resolution <= 0.0:
+        raise SlabError(f"resolution must be a positive length in µm, got {value!r}")
+    return resolution
+
+
 class SlabState:
     """A DeviceFlow device and the wafer offset the workspace displays it at."""
 
@@ -570,17 +595,74 @@ def _deposit(
     _masked_deposit(device, material, thickness, mode, mask, square)
 
 
+def _reached_under_mask(state, opening, ignore=None) -> list:
+    """For each slab of a DeviceFlow state (in its order), the open space a
+    gas or an etchant gets to through the mask's ``opening``.
+
+    Resist is spun on from above: outside the opening it fills the space
+    over the wafer and every hole open straight up to it. What reaches in
+    through the opening goes on through any open space joined to it --
+    under the covered part too, where that space is buried -- but not into
+    the resist. Open space joined to the ambient only through resist, and
+    sealed cavities, are not reached. ``ignore`` is a material counted as
+    open (a film just grown, standing in the space it grew in).
+    """
+    window = box(*state.bounds)
+    slabs = state.slabs
+    tiny = 1e-12 * max(state.bounds_area, 1e-30)
+    free: list = []
+    for slab in slabs:
+        solid = [geom for material, geom in slab.regions.items() if material is not ignore]
+        occupied = shapely.union_all(solid) if solid else Polygon()
+        free.append(state.clean(window.difference(occupied)))
+    # the resist, from the top down
+    exposed = window
+    seeds: list = [None] * len(slabs)
+    for i in range(len(slabs) - 1, -1, -1):
+        exposed = state.clean(exposed.intersection(free[i]))
+        seeds[i] = exposed.intersection(opening)
+        free[i] = state.clean(free[i].difference(exposed.difference(opening)))
+    pieces = [list(getattr(f, "geoms", [f])) if not f.is_empty else [] for f in free]
+    reached = [np.zeros(len(p), dtype=bool) for p in pieces]
+    queue: list[tuple[int, int]] = []
+    for i, parts in enumerate(pieces):
+        if seeds[i].is_empty:
+            continue
+        for j, part in enumerate(parts):
+            if part.intersection(seeds[i]).area > tiny:
+                reached[i][j] = True
+                queue.append((i, j))
+    while queue:
+        i, j = queue.pop()
+        part = pieces[i][j]
+        for other in (i - 1, i + 1):
+            if not 0 <= other < len(slabs):
+                continue
+            for jj, candidate in enumerate(pieces[other]):
+                if reached[other][jj] or not part.intersects(candidate):
+                    continue
+                if part.intersection(candidate).area > tiny:
+                    reached[other][jj] = True
+                    queue.append((other, jj))
+    return [
+        state.clean(shapely.union_all([p for p, hit in zip(parts, hits) if hit])) if hits.any() else Polygon()
+        for parts, hits in zip(pieces, reached)
+    ]
+
+
 def _masked_deposit(
     device: Device, material: str, thickness: float, mode: str, mask: Mask, square: bool = False
 ) -> None:
-    """Deposit only where the mask is open: the lift-off result, exactly.
+    """Deposit through a mask: the film where the gas got to, the lift-off
+    result.
 
     DeviceFlow deposits over the whole window. The film is therefore grown
-    as a stand-in material, then cut down to the mask's columns slab by slab
-    and handed to the real material. That is what a lift-off leaves behind:
-    the film wherever the resist was open, including the sidewalls inside
-    the opening, and nothing where it was covered. The stand-in never keeps
-    any geometry, so it appears in no view and no material list.
+    as a stand-in material, then cut down slab by slab to the space the gas
+    reached through the opening (:func:`_reached_under_mask`) and handed to
+    the real material: the film inside the opening, sidewalls included,
+    and in any space the opening leads into under the covered part; none
+    where the resist was. The stand-in never keeps any geometry, so it
+    appears in no view and no material list.
     """
     registry = device._materials
     real = registry.resolve(material)
@@ -590,13 +672,13 @@ def _masked_deposit(
     stand_in = registry.resolve(stand_in_name)
     device.deposit(stand_in_name, thickness, mode=mode, square=square)
     state = device._state
-    opening = state.clean(mask._geom)
+    reached = _reached_under_mask(state, state.clean(mask._geom), ignore=stand_in)
     changed = []
-    for slab in state.slabs:
+    for slab, where in zip(state.slabs, reached):
         grown = slab.regions.pop(stand_in, None)
         if grown is None:
             continue
-        kept = state.clean(grown.intersection(opening))
+        kept = state.clean(grown.intersection(where))
         if not kept.is_empty:
             existing = slab.regions.get(real)
             slab.regions[real] = (
@@ -1015,6 +1097,13 @@ class SlabKernel:
         recipe = step.effective_recipe(recipes)
         parameters = dict(recipe.parameters)
         logger(f"RUN {step.name} [{recipe.process_type.value}]")
+        # every step sets them: the state it starts from may come from a
+        # step that ran at a resolution of its own
+        own = step_resolution_um(parameters, recipe.process_type)
+        device.conformal_resolution = own if own is not None else resolution_um(project)
+        device.xy_resolution = own if own is not None else resolution_xy_um(project)
+        if own is not None:
+            logger(f"RESOLUTION {own * 1000:g} nm for this step (project {resolution_um(project) * 1000:g} nm)")
         try:
             # The geometry walks hundreds of z samples inside these calls;
             # the hook lets it give up part-way instead of only between

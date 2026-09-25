@@ -322,8 +322,10 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .danger-button:hover { background: rgba(144, 53, 59, 0.16); border-color: rgba(215, 89, 96, 0.4); }
 .empty-inspector { align-items: center; justify-content: center; gap: 8px; color: #5f6c78; font-size: 12px; }
 
-.viewport-panel { position: relative; min-width: 0; min-height: 0; display: grid; grid-template-rows: 42px 1fr; background: #11161c; }
-.viewport-toolbar { display: flex; align-items: center; gap: 10px; padding: 0 13px; border-bottom: 1px solid var(--line-soft); background: #141a20; }
+/* The middle column never grows past its share: its tools wrap onto a
+   second row, and the picture is fitted to what is left. */
+.viewport-panel { position: relative; min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; grid-template-columns: minmax(0, 1fr); overflow: hidden; background: #11161c; }
+.viewport-toolbar { min-width: 0; min-height: 42px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 4px 13px; border-bottom: 1px solid var(--line-soft); background: #141a20; }
 .viewport-title { min-width: 0; display: flex; align-items: center; gap: 7px; color: #aab6c1; font-size: 12px; }
 .viewport-title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .viewport-badges { margin-left: auto; display: flex; align-items: center; gap: 6px; }
@@ -586,7 +588,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
    editor. Everything reuses the tokens above so the two shells stay in step.
    --------------------------------------------------------------------------- */
 
-.viewport-panel { grid-template-rows: 42px 1fr auto; }
+.viewport-panel { grid-template-rows: auto minmax(0, 1fr) auto; }
 .view-tabs { display: inline-flex; padding: 2px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); }
 .view-tabs button { height: 26px; display: inline-flex; align-items: center; gap: 5px; padding: 0 9px; border: 0; border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; font-size: 11px; }
 .view-tabs button.active { background: var(--accent-soft); color: var(--accent); }

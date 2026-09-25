@@ -1255,3 +1255,106 @@ def test_the_pictures_can_be_outlines(kernel, project, sketches):
     assert section["image"] == "" and section["vector"]["shapes"]
     plain = kernel.section(trenched, {}, project=project)
     assert plain["image"] and "vector" not in plain
+
+
+def _channel_under_resist():
+    """Oxide with a buried channel along x under a nitride cap that is open
+    over the channel's right end only; the mask opens x > 0.6."""
+    from shapely.geometry import box as rect
+
+    from deviceflow import Device
+    from deviceflow.mask import Mask
+
+    device = Device("channel", (0.0, 0.0, 1.0, 1.0), conformal_resolution=0.005, verbose=False)
+    for name in ("Si", "SiO2", "SiN", "TiN"):
+        device.material(name)
+    device.deposit("Si", 0.2, mode="planar")
+    device.deposit("SiO2", 0.05, mode="planar")
+    device.deposit("SiN", 0.05, mode="planar")
+    state = device._state
+    for material, cut in (("SiO2", rect(0.2, 0.45, 0.8, 0.55)), ("SiN", rect(0.7, 0.45, 0.8, 0.55))):
+        mat = device._materials.resolve(material)
+        for slab in state.slabs:
+            if mat in slab.regions:
+                slab.regions[mat] = state.clean(slab.regions[mat].difference(cut))
+    state.harmonize(list(state.slabs))
+    state.consolidate()
+    state.validate()
+    return device, Mask(rect(0.6, 0.0, 1.0, 1.0))
+
+
+def test_a_wet_etch_runs_along_a_channel_under_the_resist():
+    """The resist lies on the cap; it is not in the buried channel, so the
+    etchant runs along it from the hole in the opening."""
+    device, mask = _channel_under_resist()
+    device.wet_etch(mask, target="SiO2", depth=0.03)
+    section = device.cross_section((0.0, 0.5), (1.0, 0.5))
+    at = lambda x, z: section.material_at(x, z)  # noqa: E731
+    z = 0.225
+    assert at(0.18, z) is None  # 0.02 past the channel's far end, under resist
+    assert at(0.16, z) == "SiO2"
+    across = device.cross_section((0.3, 0.0), (0.3, 1.0))
+    assert across.material_at(0.43, z) is None  # beside the channel, under resist
+    assert across.material_at(0.40, z) == "SiO2"
+
+
+def test_a_masked_conformal_film_coats_a_channel_under_the_resist():
+    from process_studio.kernels.slab import _masked_deposit
+
+    device, mask = _channel_under_resist()
+    _masked_deposit(device, "TiN", 0.01, "conformal", mask)
+    across = device.cross_section((0.3, 0.0), (0.3, 1.0))
+    z = 0.225
+    assert across.material_at(0.455, z) == "TiN"  # on the channel wall, under resist
+    assert across.material_at(0.5, z) is None
+    section = device.cross_section((0.0, 0.5), (1.0, 0.5))
+    # none on the cap under the resist, some on it inside the opening
+    assert section.material_at(0.3, 0.305) is None
+    assert section.material_at(0.9, 0.305) == "TiN"
+
+
+def _etch(name: str, parameters: dict) -> ProcessStep:
+    return step(
+        ProcessType.ETCH,
+        name=name,
+        parameters={"target": 0.05, "directional_fraction": 0, **parameters},
+        material_responses={"Si": MaterialResponse("Si", 1.0)},
+        mask_source="quick_sketch",
+    )
+
+
+def test_a_step_can_run_at_a_resolution_of_its_own(kernel, detailed_project, sketches):
+    """Coarser for that step only: the next step is back at the project's."""
+    project = detailed_project
+    state = kernel.initial_state(project, materials=default_materials())
+    said: list[str] = []
+    run = lambda s, st: kernel.run_step(  # noqa: E731
+        s, st, project=project, recipes={}, sketches=sketches, logger=said.append,
+        materials=default_materials(),
+    )
+    coarse = run(state, _etch("Coarse", {"resolution": 0.05, "sketch_id": "default"}))
+    assert coarse.device.conformal_resolution == pytest.approx(0.05)
+    assert coarse.device.xy_resolution == pytest.approx(0.05)
+    assert any("RESOLUTION 50 nm" in line for line in said)
+    after = run(coarse, _etch("Plain", {"sketch_id": "default"}))
+    assert after.device.conformal_resolution == pytest.approx(0.01)
+    with pytest.raises(SlabError):
+        run(state, _etch("Bad", {"resolution": -1, "sketch_id": "default"}))
+
+
+def test_a_voxel_step_runs_on_its_own_grid_and_the_next_on_the_projects(kernel, project, sketches):
+    project.fidelity = "voxel"
+    project.resolution_um = 0.001
+    state = kernel.initial_state(project, materials=default_materials())
+    fine = state.refine
+    assert fine > 1
+    run = lambda s, st: kernel.run_step(  # noqa: E731
+        s, st, project=project, recipes={}, sketches=sketches, logger=lambda _m: None,
+        materials=default_materials(),
+    )
+    coarse = run(state, _etch("Coarse", {"resolution": 0.02, "sketch_id": "default"}))
+    assert coarse.refine < fine
+    coarse.check()
+    after = run(coarse, _etch("Plain", {"sketch_id": "default"}))
+    assert after.refine == fine
+    after.check()

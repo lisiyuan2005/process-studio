@@ -30,6 +30,13 @@ export const PARAMETER_SPECS: Record<ProcessType, ParameterSpec[]> = {
     { key: "time_min", label: "Time", unit: "min", initial: 1 },
     { key: "temperature_c", label: "Temperature", unit: "°C", initial: 25 },
     { key: "mode", label: "Deposition mode", kind: "mode", initial: "conformal" },
+  {
+    key: "resolution",
+    label: "Resolution (this step)",
+    unit: "µm",
+    initial: 0.01,
+    hint: "Grid for this step only; leave it out to use the project's. Coarser is faster.",
+  },
   ],
   etch: [
     { key: "target", label: "Target depth", unit: "µm", initial: 0.1 },
@@ -41,6 +48,13 @@ export const PARAMETER_SPECS: Record<ProcessType, ParameterSpec[]> = {
       initial: 1,
       hint: "1 is vertical; 0 is isotropic.",
     },
+  {
+    key: "resolution",
+    label: "Resolution (this step)",
+    unit: "µm",
+    initial: 0.01,
+    hint: "Grid for this step only; leave it out to use the project's. Coarser is faster.",
+  },
   ],
   cmp: [
     { key: "target_z", label: "Planarize to z", unit: "µm", initial: 0 },
@@ -54,6 +68,13 @@ export const PARAMETER_SPECS: Record<ProcessType, ParameterSpec[]> = {
     { key: "target", label: "Consumed thickness", unit: "µm", initial: 0.02 },
     { key: "time_min", label: "Time", unit: "min", initial: 1 },
     { key: "temperature_c", label: "Temperature", unit: "°C", initial: 900 },
+  {
+    key: "resolution",
+    label: "Resolution (this step)",
+    unit: "µm",
+    initial: 0.01,
+    hint: "Grid for this step only; leave it out to use the project's. Coarser is faster.",
+  },
   ],
   flip: [
     {

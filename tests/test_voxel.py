@@ -291,6 +291,46 @@ def test_open_holes_outside_the_mask_are_under_resist():
     assert state.labels[k][50, 68] == voxel.VOID  # beside the open one
 
 
+def test_a_channel_under_the_resist_fills_from_a_hole_in_the_opening():
+    # An oxide layer with a buried channel along x, under a nitride cap that
+    # is open only over the channel's right end, inside the mask's opening.
+    # The resist lies on the cap; it does not get into the channel, so the
+    # etchant runs along it and etches the oxide round it under the resist.
+    oxide = np.full((100, 100), 2, dtype=np.uint8)
+    oxide[45:55, 20:80] = voxel.VOID
+    cap = np.full((100, 100), 3, dtype=np.uint8)
+    cap[45:55, 70:80] = voxel.VOID
+    state = make_state([(0.0, 0.2, "Si"), (0.2, 0.25, oxide), (0.25, 0.3, cap)])
+    opening = np.zeros((100, 100), dtype=bool)
+    opening[:, 60:] = True
+    voxel.etch_isotropic(state, {"SiO2": 1.0}, 0.03, opening)
+    state.check()
+    k = int(np.searchsorted(state.z, 0.225)) - 1
+    row = state.labels[k][50]
+    assert (state.labels[k][42:45, 30] == voxel.VOID).all()  # beside the channel, under resist
+    assert row[17] == voxel.VOID and row[16] == label(state, "SiO2")  # 3 cells past its far end
+    assert state.labels[k][40, 30] == label(state, "SiO2")
+
+
+def test_a_masked_deposition_coats_a_channel_under_the_resist_but_not_a_hole_it_fills():
+    oxide = np.full((100, 100), 2, dtype=np.uint8)
+    oxide[45:55, 20:80] = voxel.VOID  # a buried channel, reached from the opening
+    cap = np.full((100, 100), 3, dtype=np.uint8)
+    cap[45:55, 70:80] = voxel.VOID  # its way up, inside the opening
+    cap[10:20, 10:20] = voxel.VOID  # a hole open straight up, under the resist
+    oxide[10:20, 10:20] = voxel.VOID
+    state = make_state([(0.0, 0.2, "Si"), (0.2, 0.25, oxide), (0.25, 0.3, cap)])
+    opening = np.zeros((100, 100), dtype=bool)
+    opening[:, 60:] = True
+    voxel.deposit(state, "TiN", 0.02, planar=False, opening=opening)
+    state.check()
+    tin = label(state, "TiN")
+    k = int(np.searchsorted(state.z, 0.225)) - 1
+    assert (state.labels[k][45:47, 30] == tin).all()  # on the channel wall, under resist
+    assert state.labels[k][50, 30] == voxel.VOID  # a 50 nm channel, 20 nm each side
+    assert (state.labels[k][10:20, 10:20] == voxel.VOID).all()  # the resist was in there
+
+
 def test_a_sealed_cavity_is_not_an_etchant_source():
     grid = np.full((100, 100), 2, dtype=np.uint8)
     grid[40:60, 40:60] = voxel.VOID  # a buried cavity
@@ -1005,6 +1045,24 @@ def test_filling_a_whole_cell_that_holds_a_cut_leaves_no_stale_brick():
     assert state.labels[1, 1, 3] == voxel.MIXED
     voxel.deposit(state, "SiN", 0.3, planar=False)
     state.check()
+
+
+def test_a_state_drawn_on_a_finer_or_coarser_grid_keeps_its_shape():
+    state = _round_hole(B=4)
+    rng = np.random.default_rng(11)
+    x, y = rng.random(20000), rng.random(20000)
+    k = state.n - 1
+    finer = voxel.resample(state, 16)
+    finer.check()
+    # every line between two anchors runs through finer anchors: nothing moves
+    assert (finer.sample(k, x, y) == state.sample(k, x, y)).mean() > 0.999
+    for name in state.present():
+        assert finer.volume(name) == pytest.approx(state.volume(name), rel=1e-12)
+    coarser = voxel.resample(finer, 2)
+    coarser.check()
+    assert coarser.refine == 2
+    assert (coarser.sample(k, x, y) == state.sample(k, x, y)).mean() > 0.98
+    assert coarser.volume("SiO2") == pytest.approx(state.volume("SiO2"), rel=5e-3)
 
 
 def _outline_area(picture, name):

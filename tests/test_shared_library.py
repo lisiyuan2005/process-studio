@@ -2,6 +2,7 @@
 
 import io
 import sqlite3
+from contextlib import closing
 
 import pytest
 
@@ -201,7 +202,8 @@ def test_the_library_is_copied_aside_and_before_a_deletion(tmp_path) -> None:
     assert len(sorted((tmp_path / "library-backups").glob("library-*.sqlite3"))) == len(copies)
 
     def names(copy):
-        with sqlite3.connect(copy) as connection:
+        # closed at once: Windows will not delete a file that is still open
+        with closing(sqlite3.connect(copy)) as connection:
             return {row[0] for row in connection.execute("SELECT name FROM materials")}
 
     library.remove_material("material-ge")

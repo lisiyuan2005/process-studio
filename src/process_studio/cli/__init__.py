@@ -677,7 +677,7 @@ def cmd_view_top(session: Session, args: argparse.Namespace) -> int:
     destination = Path(args.output)
     payload = session.call(
         "get_top_view", root=str(session.root), branchId=branch["id"], stepId=step_id,
-        steps=not args.no_steps, vector=_wants_svg(destination),
+        steps=not args.no_steps, vector=_wants_svg(destination), hidden=args.hide or [],
     )
     written = _write_picture(payload, destination)
     session.emit(
@@ -1238,7 +1238,7 @@ def build_parser() -> argparse.ArgumentParser:
     view = commands.add_parser("view", help="write a section, a top view or a mesh to a file")
     view_commands = view.add_subparsers(dest="view_command", metavar="KIND")
     view_commands.required = True
-    section = view_commands.add_parser("section", help="a cross-section as PNG")
+    section = view_commands.add_parser("section", help="a cross-section as SVG or PNG")
     _view_step(section)
     section.add_argument("--axis", choices=("x", "y"), default="y", help="cut along this axis (default y)")
     section.add_argument("--at", type=float, metavar="UM", help="where to cut, in µm; default: the middle")
@@ -1246,11 +1246,15 @@ def build_parser() -> argparse.ArgumentParser:
     section.add_argument("--named", metavar="LINE", help="cut along a saved section line, by name or number from `lines list`")
     section.add_argument("--interpolation", type=int, default=1, help="display upsampling factor")
     section.set_defaults(handler=cmd_view_section)
-    top = view_commands.add_parser("top", help="the top view as PNG")
+    top = view_commands.add_parser("top", help="the top view as SVG or PNG")
     _view_step(top)
     top.add_argument(
         "--no-steps", action="store_true",
         help="do not mark where one material meets itself at another height",
+    )
+    top.add_argument(
+        "--hide", action="append", metavar="MATERIAL",
+        help="look through this material: the view shows what is under it (repeatable)",
     )
     top.set_defaults(handler=cmd_view_top)
     mesh = view_commands.add_parser("mesh", help="the 3D surfaces as .glb, .gltf, .obj, .stl or .ply")

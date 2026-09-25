@@ -1333,6 +1333,12 @@ def deposit(
 
     # Everything is read from the state as it was, then written at once.
     before = state.copy()
+    # Inside a mask the film forms where the gas gets to: the open space
+    # the opening leads to, under the resist too where it is buried, and
+    # never the space the resist fills (see _wet_field).
+    reached = None
+    if opening is not None:
+        reached = _wet_field(state, opening, check=lambda: _check(should_cancel, "a deposition"))
     covers: dict[tuple[int, int], Mask2] = {}
     near_of: dict[bytes, Mask2] = {}
     solid_of: dict[tuple[int, int], tuple[bytes, Mask2]] = {}
@@ -1363,8 +1369,8 @@ def deposit(
         film = _and(state, film, void_here)
         if shadow is not None:
             film = _and(state, film, shadow.inverse())
-        if opening is not None:
-            film = _and(state, film, opening)
+        if reached is not None:
+            film = _and(state, film, _field_mask(reached, k))
         films.append((k, film, window))
     keys_out, blocks_out = [], []
     for k, film, _window_k in films:
@@ -1452,8 +1458,8 @@ def deposit(
             if planar and k + 1 < before.n:
                 above = before.sample(np.arange(k + 1, before.n)[:, None], x[None, :], y[None, :])
                 film &= ~(above != VOID).any(axis=0)
-            if opening is not None:
-                film &= opening.at(state, x, y)
+            if reached is not None:
+                film &= reached.sample(k, x, y) == 1
             out[film] = label
             return out
 
@@ -2044,18 +2050,19 @@ def etch_isotropic(
         return
     product_label = state.material_id(product) if product is not None else None
     fill = VOID if product_label is None else product_label
-    # Which open space the ambient reaches is settled before the slabs are
-    # cut: cutting changes no connection, and the cut stack is many times
-    # taller.
-    live = _live(state, check=lambda: _check(should_cancel, "an isotropic etch"))
+    # Where the etchant is -- which open space the ambient reaches, less
+    # what the resist fills -- is settled before the slabs are cut: cutting
+    # changes no connection, and the cut stack is many times taller. The
+    # mask is in it; nothing after this reads the mask.
+    mask = _as_mask(state, opening)
+    live = _wet_field(state, mask, check=lambda: _check(should_cancel, "an isotropic etch"))
     _check(should_cancel, "an isotropic etch")
     step = max(float(dz or 0.0), state.cell)
-    mask = _as_mask(state, opening)
     reach = float(budget) * float(table.max()) + step
     # One grid of planes for every bend, so the cuts near two boundaries
     # line up instead of leaving slivers between them.
     planes = set()
-    for zb in _curving(state, table, live, mask):
+    for zb in _curving(state, table, live, None):
         lo, hi = math.floor((zb - reach) / step), math.ceil((zb + reach) / step)
         planes.update(j * step for j in range(lo, hi + 1))
     lows, highs = state.z[:-1][holding], state.z[1:][holding]
@@ -2065,7 +2072,7 @@ def etch_isotropic(
     live._reslab(np.concatenate([source, [live.n - 1]]))
     from . import voxel_wet
 
-    front = voxel_wet.arrival(state, table, float(budget), mask, live, should_cancel, step=step)
+    front = voxel_wet.arrival(state, table, float(budget), None, live, should_cancel, step=step)
     del live
     L = state.n
     # A level front is a slab boundary at its exact height.
@@ -2280,6 +2287,100 @@ def _live(state: VoxelState, check: Callable[[], None] | None = None) -> "VoxelS
         labels, ["live"], 0.0, state.refine,
     )
     field.store(state.brick_keys, reached.astype(np.uint8))
+    return field
+
+
+#: In the field :func:`_wet_field` returns: open space under resist.
+RESIST = 2
+
+
+def _field_mask(field: VoxelState, k: int, value: int = 1) -> "Mask2":
+    """Where slab ``k`` of a two-level field holds ``value``, as a mask."""
+    lab = field.labels[k]
+    cells = np.flatnonzero((lab == MIXED).reshape(-1))
+    return Mask2.build(lab == value, cells, field.blocks(k * field.plane + cells) == value)
+
+
+def _wet_field(state: VoxelState, opening: "Mask2 | None", check: Callable[[], None] | None = None) -> "VoxelState":
+    """Where the etchant is when a wet etch starts, as :func:`_live` lays it
+    out: 1 open space it fills, :data:`RESIST` open space under resist, 0
+    the rest -- sealed cavities, and pockets the etchant can get to only
+    through resist, which fill once the etch breaks into them.
+
+    Resist is spun on from above: outside the mask's opening it fills the
+    space over the wafer and every hole that is open straight up to it.
+    Space under solid is not reached by it, however it is joined to the
+    rest -- a channel running under the covered part from a hole in the
+    opening fills with etchant from that hole.
+    """
+    live = _live(state, check)
+    if opening is None:
+        return live
+    check = check or (lambda: None)
+    B, n, ny, nx, plane = state.refine, state.n, state.ny, state.nx, state.plane
+    col = opening.coarse
+    lab = np.concatenate([state.labels, np.zeros((1, ny, nx), np.uint8)])  # the ambient on top
+    # columns looked at fine cell by fine cell: refined somewhere, or the
+    # mask's edge crosses them
+    fine_col = col == 2
+    if state.brick_keys.size:
+        fine_col.reshape(-1)[_unique(state.brick_keys % plane)] = True
+    # open straight up to the ambient, from the top down
+    exposed = np.zeros(lab.shape, dtype=bool)
+    e = np.ones((ny, nx), dtype=bool)
+    for k in range(n, -1, -1):
+        e = e & (lab[k] == VOID)
+        exposed[k] = e
+    resist_c = exposed & ((col == 0) & ~fine_col)[None]
+    resist_keys: list[np.ndarray] = []
+    resist_blocks: list[np.ndarray] = []
+    cells = np.flatnonzero((fine_col & (col != 1)).reshape(-1))
+    if cells.size:
+        e = np.ones((cells.size, B, B), dtype=bool)
+        inside = opening.blocks_for(cells, B)
+        for k in range(n, -1, -1):
+            check()
+            if k < n:
+                e &= state.blocks(k * plane + cells) == VOID
+            r = e & ~inside
+            has = r.any(axis=(1, 2))
+            resist_keys.append(k * plane + cells[has])
+            resist_blocks.append(r[has])
+            going = e.any(axis=(1, 2))
+            if not going.any():
+                break
+            cells, e, inside = cells[going], e[going], inside[going]
+    r_keys = np.concatenate(resist_keys) if resist_keys else np.zeros(0, np.int64)
+    r_blocks = np.concatenate(resist_blocks) if resist_blocks else np.zeros((0, B, B), bool)
+    order = np.argsort(r_keys, kind="stable")
+    r_keys, r_blocks = r_keys[order], r_blocks[order]
+    if not resist_c.any() and r_keys.size == 0:
+        return live
+    # what the ambient reaches, less the resist: the pieces of it that touch
+    # the opening hold etchant
+    keys = np.union1d(live.brick_keys, r_keys)
+    fine_live = live.blocks(keys) == 1
+    fine_resist = np.zeros(fine_live.shape, dtype=bool)
+    if r_keys.size:
+        fine_resist[np.searchsorted(keys, r_keys)] = r_blocks
+    fine_open = fine_live & ~fine_resist
+    plain_open = (live.labels == 1) & ~resist_c
+    plain_open.reshape(-1)[keys] = False
+    check()
+    coarse_id, fine_id = components2(plain_open, keys, fine_open, nx, ny, check=check)
+    k_of, cell_of = np.divmod(keys, plane)
+    seeds = [coarse_id[plain_open & (col >= 1)[None]]]
+    if keys.size:
+        seeds.append(fine_id[fine_open & opening.blocks_for(cell_of, B)])
+    wet = _unique(np.concatenate(seeds))
+    wet = wet[wet > 0]
+    labels = np.where(np.isin(coarse_id, wet), 1, 0).astype(np.uint8)
+    labels[resist_c] = RESIST
+    labels.reshape(-1)[keys] = MIXED
+    blocks = np.where(np.isin(fine_id, wet), 1, 0).astype(np.uint8)
+    blocks[fine_resist] = RESIST
+    field = VoxelState(state.bounds, nx, ny, live.z.copy(), labels, ["wet"], 0.0, B)
+    field.store(keys, blocks)
     return field
 
 
@@ -3618,24 +3719,123 @@ def state_bytes(state: VoxelState) -> int:
 # -- steps -----------------------------------------------------------------
 
 
-def grid_size(project: ProjectDefinition) -> tuple[float, int]:
-    """The bulk cell edge and the refinement for a project.
+def grid_size(project: ProjectDefinition, resolution: float | None = None) -> tuple[float, int]:
+    """The bulk cell edge and the refinement for a project (at
+    ``resolution`` instead of the project's XY resolution, for a step that
+    has one of its own).
 
     The bulk is the window over :data:`TARGET_CELLS`. Boundaries are
-    refined to the project's XY resolution when that is finer: ``refine``
-    fine cells per bulk cell, the least power of two that makes a fine
-    cell no larger than the resolution asked for, up to :data:`MAX_REFINE`."""
+    refined to the XY resolution when that is finer: ``refine`` fine cells
+    per bulk cell, the least power of two that makes a fine cell no larger
+    than the resolution asked for, up to :data:`MAX_REFINE`."""
     from . import slab
 
     x_min, y_min, x_max, y_max = slab._window(project)
     span = max(x_max - x_min, y_max - y_min)
     cell = span / TARGET_CELLS
-    resolution = slab.resolution_xy_um(project)
+    if resolution is None:
+        resolution = slab.resolution_xy_um(project)
     refine = 1
     # powers of two, so a picture can take every second, fourth... fine cell
     while refine < MAX_REFINE and cell / refine > resolution * (1 + 1e-9):
         refine *= 2
     return cell, refine
+
+
+def resample(state: VoxelState, refine: int, should_cancel: Callable[[], bool] | None = None) -> VoxelState:
+    """``state`` with ``refine`` fine cells a side in each refined cell.
+
+    The bulk cells, the slabs and the plain cells stay as they are. Each
+    refined cell's new fine cells take the material at their centres, cut
+    lines included, and their boundaries are fitted again against the old
+    geometry -- the same fitting a process does -- so going finer draws the
+    old lines exactly (every line between two old anchors passes through
+    anchors of the finer cells) and going coarser keeps them as closely as
+    the coarser cells allow.
+    """
+    if refine == state.refine:
+        return state
+    new = VoxelState(
+        state.bounds, state.nx, state.ny, state.z.copy(), state.labels.copy(),
+        list(state.materials), state.z_offset, refine,
+    )
+    if refine % state.refine == 0 and state.brick_keys.size:
+        # Finer by a whole factor: a brick's finer drawing is its own
+        # business, so each distinct brick is drawn once.
+        used, back = _unique(state.brick_ref, return_inverse=True)
+        blocks, cuts = _refined_bricks(state.pool[used], state.pool_cut[used], refine // state.refine)
+        back = back.reshape(-1)
+        for part in _chunks(np.arange(state.brick_keys.size), refine * refine * 3):
+            _check(should_cancel, "changing the grid")
+            new.store(state.brick_keys[part], blocks[back[part]], cuts[back[part]])
+        return new
+    x_min, y_min, _, _ = state.bounds
+    B, plane, nx = refine, state.plane, state.nx
+    rows = np.arange(B)
+    for k in range(state.n):
+        _check(should_cancel, "changing the grid")
+        cells, _refs = state.slab_refs(k)
+        if cells.size == 0:
+            continue
+        for part in _chunks(cells, B * B):
+            iy, ix = np.divmod(part, nx)
+            xs = x_min + (ix[:, None] * B + rows[None, :] + 0.5) * new.fine_x
+            ys = y_min + (iy[:, None] * B + rows[None, :] + 0.5) * new.fine_y
+            X = np.broadcast_to(xs[:, None, :], (part.size, B, B))
+            Y = np.broadcast_to(ys[:, :, None], (part.size, B, B))
+            blocks = state.sample(k, X.reshape(-1), Y.reshape(-1)).reshape(part.size, B, B)
+            new.store(k * plane + part, blocks)
+        _refit(new, k, cells, lambda x, y, k=k: state.sample(k, x, y))
+    return new
+
+
+def _refined_bricks(blocks: np.ndarray, cuts: np.ndarray, f: int) -> tuple[np.ndarray, np.ndarray]:
+    """Bricks (P, b, b) with their cuts, each fine cell split into f x f.
+
+    A child takes its parent's material, or the side of the parent's cut
+    its centre is on; a child the cut crosses is fitted from its parent's
+    line exactly as :func:`_refit` fits a cell -- anchors a hair inside,
+    half sides snapped at their middles -- and every line between two
+    parent anchors runs through child anchors, so nothing is lost.
+    """
+    P, b, _ = blocks.shape
+    B = b * f
+    j = np.arange(B)
+    parent = j // f
+    offset = j % f
+    labels = blocks[:, parent[:, None], parent[None, :]]
+    parent_cut = cuts[:, parent[:, None], parent[None, :]]
+    out_cut = np.zeros((P, B, B), dtype=np.uint16)
+    p, r, c = np.nonzero(parent_cut)
+    if p.size == 0:
+        return labels, out_cut
+    packed = parent_cut[p, r, c]
+    code = voxel_cut.code_of(packed)
+    other = voxel_cut.other_of(packed)
+    mine = labels[p, r, c]
+
+    def side(cc, u, v, a, o):
+        return np.where(voxel_cut.left_of(cc, u, v), a, o).astype(np.uint8)
+
+    # child points in the parent's unit square
+    centre = side(code, (offset[c] + 0.5) / f, (offset[r] + 0.5) / f, mine, other)
+    inward = 0.5 + (voxel_cut.ANCHORS - 0.5) * (1.0 - 2e-3)
+    au = (offset[c][:, None] + inward[None, :, 0]) / f
+    av = (offset[r][:, None] + inward[None, :, 1]) / f
+    anchor = side(code[:, None], au, av, mine[:, None], other[:, None])
+    crossing = anchor != np.roll(anchor, -1, axis=1)
+    snap = np.broadcast_to(voxel_cut.TO_MIDDLE, anchor.shape).copy()
+    rr, h = np.nonzero(crossing)
+    if rr.size:
+        middle = 0.5 + (voxel_cut.half_middles() - 0.5) * (1.0 - 2e-3)
+        mu = (offset[c[rr]] + middle[h, 0]) / f
+        mv = (offset[r[rr]] + middle[h, 1]) / f
+        got = side(code[rr], mu, mv, mine[rr], other[rr])
+        snap[rr, h] = np.where(got == anchor[rr, (h + 1) % 8], 0, 1)
+    label, cut = voxel_cut.fit(anchor, centre, snap)
+    labels[p, r, c] = label
+    out_cut[p, r, c] = cut
+    return labels, out_cut
 
 
 def initial_state(project: ProjectDefinition) -> VoxelState:
@@ -3773,6 +3973,15 @@ def run_step(
     parameters = dict(recipe.parameters)
     kind = recipe.process_type
     logger(f"RUN {step.name} [{kind.value}]")
+    # A step with a resolution of its own runs on its own fine grid: the
+    # state is drawn again at it first (see resample), and the next step
+    # draws it at its own. A CMP or a flip keeps whatever grid it is given.
+    own = slab.step_resolution_um(parameters, kind)
+    if own is not None or kind in (ProcessType.DEPOSIT, ProcessType.ETCH, ProcessType.OXIDATION):
+        _, refine = grid_size(project, own)
+        if refine != new.refine:
+            logger(f"VOXEL boundaries redrawn from {new.refine} to {refine} fine cells per cell")
+            new = resample(new, refine, should_cancel)
     boundary = (
         f", boundaries in {new.fine_x * 1000:.4g} x {new.fine_y * 1000:.4g} nm "
         f"({new.refine} x {new.refine} per cell)" if new.refine > 1 else ""
@@ -3784,7 +3993,7 @@ def run_step(
     # The march cuts slabs near a bending front at the project's z step,
     # never finer than a bulk cell; the front is then placed at the z step
     # itself, in thin slabs only where it curves.
-    z_fine = slab.resolution_um(project)
+    z_fine = own if own is not None else slab.resolution_um(project)
     z_step = max(z_fine, new.cell)
     try:
         if kind is ProcessType.DEPOSIT:

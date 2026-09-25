@@ -226,14 +226,25 @@ def _yield_to_barriers(state: ProcessState, depths: dict[Material, float]) -> No
 
 
 def _covered(state: ProcessState, opening) -> list[tuple[float, float, MultiPolygon]]:
-    """Void present before the etch that the mask covers: (z0, z1, region),
-    including the half-space above the initial top outside the opening."""
+    """Void present before the etch that the resist fills: (z0, z1, region),
+    including the half-space above the initial top outside the opening.
+
+    Resist is spun on from above, so outside the opening it fills the
+    space over the wafer and every hole open straight up to it -- and
+    nothing under solid. A channel that runs under the covered part from a
+    hole in the opening is not resist; the etchant gets into it from that
+    hole.
+    """
     if opening is None:
         return []
     window = box(*state.bounds)
     out = []
-    for s in state.slabs:
-        v = state.clean(window.difference(s.occupied()).difference(opening))
+    exposed = window
+    for s in reversed(state.slabs):
+        exposed = state.clean(exposed.intersection(window.difference(s.occupied())))
+        if exposed.is_empty:
+            break
+        v = state.clean(exposed.difference(opening))
         if not v.is_empty:
             out.append((s.z0, s.z1, v))
     above = state.clean(window.difference(opening))

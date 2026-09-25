@@ -206,3 +206,8 @@ under the MIT license in `LICENSE`.
   77,000 vertices at the end -- went from 10.2 s to 5.3 s, and a real
   19-step cell's 0.5 um lateral etch (200 sub-steps) from 196 s to 127 s,
   both removing the same volume to the bit.
+- `process/isotropic_etch.py`: `_covered` (the resist of a masked wet etch
+  or oxidation) takes only the void open straight up to the ambient outside
+  the opening, from the top down. It took every void outside the opening at
+  every depth, so a channel running under the covered part from a hole in
+  the opening was resist and the etchant never went along it.

@@ -132,6 +132,11 @@ def test_run_reports_progress_and_the_views_write_files(workspace: Path, tmp_pat
     assert text.startswith("<svg") and "<title>Si</title>" in text and "<title>Al2O3</title>" in text
     assert run("view", "top", "-o", str(tmp_path / "top.svg"), root=workspace)[0] == EXIT_OK
     assert (tmp_path / "top.svg").read_text().startswith("<svg")
+    # looking through the top material shows what is under it
+    top_material = "<title>Al2O3</title>"
+    assert top_material in (tmp_path / "top.svg").read_text()
+    assert run("view", "top", "--hide", "Al2O3", "-o", str(tmp_path / "under.svg"), root=workspace)[0] == EXIT_OK
+    assert top_material not in (tmp_path / "under.svg").read_text()
     mesh = tmp_path / "mesh.glb"
     result = as_json("view", "mesh", "-o", str(mesh), root=workspace)
     assert set(result["triangles"]) == {"Si", "Al2O3"}

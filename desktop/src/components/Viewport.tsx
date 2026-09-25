@@ -699,8 +699,13 @@ function useFittedSize(
     const element = container.current;
     if (!element) return;
     const fit = () => {
-      const available = element.getBoundingClientRect();
-      if (available.width === 0 || available.height === 0 || pixelWidth === 0) return;
+      // the room inside the padding: the frame is laid out there
+      const style = window.getComputedStyle(element);
+      const available = {
+        width: element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+        height: element.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom),
+      };
+      if (!(available.width > 0) || !(available.height > 0) || pixelWidth === 0) return;
       const scale = Math.min(available.width / pixelWidth, available.height / pixelHeight);
       setSize({ width: pixelWidth * scale, height: pixelHeight * scale });
     };
