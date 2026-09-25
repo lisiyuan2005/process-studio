@@ -365,6 +365,11 @@ def test_views_render_the_stored_result(workspace):
 
     top = call("get_top_view", root=str(workspace), branchId=branch_id, stepId=last_step)
     assert Image.open(io.BytesIO(base64.b64decode(top["image"]))).size == (top["width"], top["height"])
+    # The legend lists what the step's result holds, not the whole library.
+    library = {material["name"] for material in call("open_workspace", root=str(workspace))["materials"]}
+    held = {surface["material"] for surface in surfaces["surfaces"]}
+    assert set(top["materials"]) == held == set(section["materials"])
+    assert held < library
 
 
 def test_section_axis_and_interpolation_are_validated(workspace):

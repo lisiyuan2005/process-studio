@@ -354,6 +354,8 @@ export interface SectionDocument {
   positions: number[];
   line?: SectionLine;
   exact?: boolean;
+  /** The materials this step's result holds: what the legend lists. */
+  materials?: string[];
 }
 
 /** Where a sketch exposes the wafer, drawn by the worker over the project window. */
@@ -381,6 +383,8 @@ export interface TopViewDocument {
   height: number;
   extent: ImageExtent;
   exact?: boolean;
+  /** The materials this step's result holds, hidden ones included: what the legend lists. */
+  materials?: string[];
 }
 
 export interface GdsLayer {

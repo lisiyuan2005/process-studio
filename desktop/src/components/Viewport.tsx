@@ -1227,8 +1227,15 @@ export function Viewport({
   const axesFor = (horizontal: string): [string, string] =>
     mode === "top" ? ["x", "y"] : [horizontal, "z"];
   const triangles = surfaces?.surfaces.reduce((total, item) => total + item.triangleCount, 0) ?? 0;
+  // The legend lists what this step's result holds, not the whole library:
+  // the 3D view's surfaces, or what the worker says the section or the top
+  // view's step holds (hidden materials included, so they can be shown again).
   const shownMaterials = (
-    mode === "surfaces" ? surfaces?.surfaces.map((surface) => surface.material) : undefined
+    mode === "surfaces"
+      ? surfaces?.surfaces.map((surface) => surface.material)
+      : mode === "section"
+        ? section?.materials
+        : topView?.materials
   ) ?? materials.map((material) => material.name);
   const sampled = mode === "top" ? undefined : surfaces?.sampledSpacingUm ?? section?.sampledSpacingUm;
 

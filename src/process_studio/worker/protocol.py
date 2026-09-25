@@ -867,7 +867,7 @@ def dispatch(
         axis = str(parameters.get("axis", "y"))
         if axis not in ("x", "y", "line"):
             raise InvalidRequest("get_section axis must be 'x', 'y' or 'line'.")
-        return kernel.section(
+        payload = kernel.section(
             state,
             _material_colors(repository),
             project=project,
@@ -879,9 +879,13 @@ def dispatch(
             line=_section_line(parameters.get("line")),
             vector=parameters.get("vector") is True,
         )
+        # what the legend lists: the materials this step's result holds,
+        # not the whole library
+        payload["materials"] = kernel.state_materials(state)
+        return payload
     if method == "get_top_view":
         state, repository, project, kernel = _view_state(parameters)
-        return kernel.top_view(
+        payload = kernel.top_view(
             state,
             _material_colors(repository),
             project=project,
@@ -889,6 +893,8 @@ def dispatch(
             steps=parameters.get("steps", True) is not False,
             vector=parameters.get("vector") is True,
         )
+        payload["materials"] = kernel.state_materials(state)
+        return payload
     if method == "export_mesh":
         state, repository, project, kernel = _view_state(parameters)
         destination = parameters.get("destination")
