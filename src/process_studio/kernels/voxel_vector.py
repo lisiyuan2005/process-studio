@@ -202,46 +202,82 @@ def _runs(a, b, line, u, length):
     return a[begin], b[begin], line[begin], u[begin], u[end] + length
 
 
-def _place(out, a, b, line, u, inverse, line_origin, u_origin, emit) -> None:
+def _runs_var(a, b, line, u0, u1):
+    """Join edges with the same materials on the same line where one ends
+    as the next starts: (a, b, line, u0, u1)."""
+    if a.size == 0:
+        return a, b, line, u0, u1
+    order = np.lexsort((u0, line, b, a))
+    a, b, line, u0, u1 = a[order], b[order], line[order], u0[order], u1[order]
+    fresh = np.ones(a.size, dtype=bool)
+    fresh[1:] = (a[1:] != a[:-1]) | (b[1:] != b[:-1]) | (line[1:] != line[:-1]) | (u0[1:] != u1[:-1])
+    begin = np.flatnonzero(fresh)
+    end = np.concatenate([begin[1:], [a.size]]) - 1
+    return a[begin], b[begin], line[begin], u0[begin], u1[end]
+
+
+def _place(out, a, b, line, u0, u1, inverse, line_origin, u_origin, emit) -> None:
     """Edges found once per distinct brick (``a`` and ``b`` either side,
-    (U, lines, units), brick-local ``line`` and ``u``), placed at every
-    brick that holds it (``inverse``, and each brick's origin)."""
-    diff = a != b
-    per = diff.reshape(diff.shape[0], -1).sum(axis=1)
+    ``line``, ``u0`` .. ``u1`` along it, all brick-local and shaped (U,
+    ...)), placed at every brick that holds it (``inverse``, and each
+    brick's origin)."""
+    U = a.shape[0]
+    diff = ((a != b) & (u1 > u0)).reshape(U, -1)
+    per = diff.sum(axis=1)
     if not per.any():
         return
-    ub, where = np.nonzero(diff.reshape(diff.shape[0], -1))
-    a_f = a.reshape(a.shape[0], -1)[ub, where]
-    b_f = b.reshape(b.shape[0], -1)[ub, where]
-    l_f = np.broadcast_to(line, a.shape).reshape(a.shape[0], -1)[ub, where]
-    u_f = np.broadcast_to(u, a.shape).reshape(a.shape[0], -1)[ub, where]
+    ub, where = np.nonzero(diff)
+    a_f = a.reshape(U, -1)[ub, where]
+    b_f = b.reshape(U, -1)[ub, where]
+    l_f = np.broadcast_to(line, a.shape).reshape(U, -1)[ub, where]
+    s_f = u0.reshape(U, -1)[ub, where]
+    e_f = u1.reshape(U, -1)[ub, where]
     start = np.concatenate([[0], np.cumsum(per)[:-1]])
     count = per[inverse]
     brick = np.repeat(np.arange(inverse.size), count)
     offset = np.arange(brick.size) - np.repeat(np.cumsum(count) - count, count)
     pick = start[inverse][brick] + offset
-    A, Bm, LN, U0, U1 = _runs(
-        a_f[pick], b_f[pick], l_f[pick] + line_origin[brick], u_f[pick] + u_origin[brick], 1
+    A, Bm, LN, U0, U1 = _runs_var(
+        a_f[pick], b_f[pick], l_f[pick] + line_origin[brick], s_f[pick] + u_origin[brick], e_f[pick] + u_origin[brick]
     )
     emit(out, A, Bm, LN, U0, U1)
 
 
+def _shared(a, b, side_a: int, side_b: int, *heights):
+    """A side shared by fine cells ``a`` and ``b`` (label, code, other
+    arrays each), in up to three pieces: (starts, stops, material of a,
+    material of b, *heights of a and b) each (3,) + the cells' shape, in
+    steps along the side. ``heights`` are ((left, right) of a, (left,
+    right) of b) when wanted."""
+    from . import voxel_cut
+
+    ea = (heights[0],) if heights else ()
+    eb = (heights[1],) if heights else ()
+    sa = voxel_cut.side_materials(a[0], a[1], a[2], side_a, *ea)
+    sb = voxel_cut.side_materials(b[0], b[1], b[2], side_b, *eb)
+    values = [(sa[1], sa[2], sa[0]), (sb[1], sb[2], sb[0])]
+    if heights:
+        values += [(sa[3], sa[4], sa[0]), (sb[3], sb[4], sb[0])]
+    return voxel_cut.pieces(sa[0], sb[0], *values)
+
+
 def field_edges(coarse: np.ndarray, cells: np.ndarray, lab: np.ndarray, cut: np.ndarray) -> list:
-    """Boundary edges of a flat two-level map, on the half-fine lattice
-    (two units a fine cell): ``coarse`` (ny, nx) labels, MIXED where
-    ``cells`` (sorted, flat) hold fine labels ``lab`` and cuts ``cut``
-    (m, B, B). Void (0) is nothing. Returns (material, sx, sy, ex, ey)
-    arrays, each material on the left of its edges."""
+    """Boundary edges of a flat two-level map, on the anchor lattice
+    (:data:`voxel_cut.STEPS` units a fine cell): ``coarse`` (ny, nx) labels,
+    MIXED where ``cells`` (sorted, flat) hold fine labels ``lab`` and cuts
+    ``cut`` (m, B, B). Void (0) is nothing. Returns (material, sx, sy, ex,
+    ey) arrays, each material on the left of its edges."""
     from . import voxel_cut
     from .voxel import MIXED
 
+    Q = voxel_cut.STEPS
     ny, nx = coarse.shape
     # the fine cells per cell side, from the blocks' shape even when there
     # are none of them: a map with no refined cell is still on its grid
     B = lab.shape[1] if lab.ndim == 3 else 1
     out: list = []
     c16 = coarse.astype(np.int64)
-    span = 2 * B
+    span = Q * B
     # plain against plain (or the picture's edge)
     pad = np.pad(c16, ((0, 0), (1, 1)), constant_values=_OUT)
     left, right = pad[:, :-1], pad[:, 1:]  # (ny, nx + 1): line i between i-1 and i
@@ -258,13 +294,6 @@ def field_edges(coarse: np.ndarray, cells: np.ndarray, lab: np.ndarray, cut: np.
     if cells.size:
         code = voxel_cut.code_of(cut)
         other = voxel_cut.other_of(cut).astype(np.int64)
-        side_left = voxel_cut.EDGE_LEFT
-
-        def halves(sel_lab, sel_code, sel_other, side):
-            """Materials of a row of fine cells along one side, two halves each."""
-            h = [np.where(side_left[sel_code, side, k], sel_lab, sel_other) for k in (0, 1)]
-            return np.stack(h, -1).reshape(sel_lab.shape[0], -1)
-
         flat_coarse = c16.reshape(-1)
 
         def side_of(flat_cells, axis, index):
@@ -288,37 +317,32 @@ def field_edges(coarse: np.ndarray, cells: np.ndarray, lab: np.ndarray, cut: np.
                 O[hit] = other[src, :, index]
             return L, C, O
 
+        def outside(cell, ok):
+            L, C, O = cell
+            L[~ok], C[~ok] = _OUT, 0
+            return L, C, O
+
+        along = np.arange(B)[None, None, :] * Q
         mixed = coarse == MIXED
-        units = 2 * B  # half sides along a coarse side
         # coarse sides with a refined cell on either side
         pad = np.pad(mixed, ((0, 0), (1, 1)))
         j, i = np.nonzero(pad[:, :-1] | pad[:, 1:])  # line i between cells i-1 and i
-        lok, rok = i > 0, i < nx
-        Ll, Cl, Ol = side_of(j * nx + np.clip(i - 1, 0, nx - 1), 2, -1)
-        Lr, Cr, Or = side_of(j * nx + np.clip(i, 0, nx - 1), 2, 0)
-        a = halves(Ll, Cl, Ol, 1)
-        b = halves(Lr, Cr, Or, 3)
-        a[~lok] = _OUT
-        b[~rok] = _OUT
-        uu = j[:, None] * units + np.arange(units)[None, :]
-        line = np.broadcast_to((i * span)[:, None], uu.shape)
-        diff = a != b
-        A, Bm, LN, U0, U1 = _runs(a[diff], b[diff], line[diff], uu[diff], 1)
-        _emit_vertical(out, A, Bm, LN, U0, U1)
+        lcell = outside(side_of(j * nx + np.clip(i - 1, 0, nx - 1), 2, -1), i > 0)
+        rcell = outside(side_of(j * nx + np.clip(i, 0, nx - 1), 2, 0), i < nx)
+        st, sp, ma, mb = _shared(lcell, rcell, 1, 3)
+        base = (j * span)[None, :, None] + along
+        line = np.broadcast_to((i * span)[None, :, None], ma.shape)
+        diff = (ma != mb) & (sp > st)
+        _emit_vertical(out, *_runs_var(ma[diff], mb[diff], line[diff], (base + st)[diff], (base + sp)[diff]))
         pad = np.pad(mixed, ((1, 1), (0, 0)))
         j, i = np.nonzero(pad[:-1, :] | pad[1:, :])  # line j between rows j-1 and j
-        lok, hok = j > 0, j < ny
-        Ll, Cl, Ol = side_of(np.clip(j - 1, 0, ny - 1) * nx + i, 1, -1)
-        Lh, Ch, Oh = side_of(np.clip(j, 0, ny - 1) * nx + i, 1, 0)
-        a = halves(Ll, Cl, Ol, 0)
-        b = halves(Lh, Ch, Oh, 2)
-        a[~lok] = _OUT
-        b[~hok] = _OUT
-        uu = i[:, None] * units + np.arange(units)[None, :]
-        line = np.broadcast_to((j * span)[:, None], uu.shape)
-        diff = a != b
-        A, Bm, LN, U0, U1 = _runs(a[diff], b[diff], line[diff], uu[diff], 1)
-        _emit_horizontal(out, A, Bm, LN, U0, U1)
+        lcell = outside(side_of(np.clip(j - 1, 0, ny - 1) * nx + i, 1, -1), j > 0)
+        hcell = outside(side_of(np.clip(j, 0, ny - 1) * nx + i, 1, 0), j < ny)
+        st, sp, ma, mb = _shared(lcell, hcell, 0, 2)
+        base = (i * span)[None, :, None] + along
+        line = np.broadcast_to((j * span)[None, :, None], ma.shape)
+        diff = (ma != mb) & (sp > st)
+        _emit_horizontal(out, *_runs_var(ma[diff], mb[diff], line[diff], (base + st)[diff], (base + sp)[diff]))
         # inside the refined cells: each different brick once, then placed
         # at every cell that holds it
         cy, cx = np.divmod(cells, nx)
@@ -328,32 +352,32 @@ def field_edges(coarse: np.ndarray, cells: np.ndarray, lab: np.ndarray, cut: np.
             _u, first, inverse = _unique(_pair_hash(lab, cut), return_index=True, return_inverse=True)
             inverse = inverse.reshape(-1)
             ul, uc, uo = lab[first].astype(np.int64), code[first], other[first]
-            U = first.size
-            # vertical lines: between fine columns r and r + 1 of a brick
-            a = np.stack([np.where(side_left[uc[:, :, :-1], 1, k], ul[:, :, :-1], uo[:, :, :-1]) for k in (0, 1)], -1)
-            b = np.stack([np.where(side_left[uc[:, :, 1:], 3, k], ul[:, :, 1:], uo[:, :, 1:]) for k in (0, 1)], -1)
-            a = a.transpose(0, 2, 1, 3).reshape(U, B - 1, units)
-            b = b.transpose(0, 2, 1, 3).reshape(U, B - 1, units)
-            self_line = np.broadcast_to((np.arange(1, B) * 2)[None, :, None], a.shape)
-            self_u = np.broadcast_to(np.arange(units)[None, None, :], a.shape)
-            _place(out, a, b, self_line, self_u, inverse, cx * B * 2, cy * units, _emit_vertical)
-            # horizontal lines: between fine rows r and r + 1
-            a = np.stack([np.where(side_left[uc[:, :-1, :], 0, k], ul[:, :-1, :], uo[:, :-1, :]) for k in (0, 1)], -1)
-            b = np.stack([np.where(side_left[uc[:, 1:, :], 2, k], ul[:, 1:, :], uo[:, 1:, :]) for k in (0, 1)], -1)
-            a = a.reshape(U, B - 1, units)
-            b = b.reshape(U, B - 1, units)
-            _place(out, a, b, self_line, self_u, inverse, cy * B * 2, cx * units, _emit_horizontal)
+            fine = np.arange(B)
+            # vertical lines: between fine columns r and r + 1 of a brick; along y
+            a = (ul[:, :, :-1], uc[:, :, :-1], uo[:, :, :-1])
+            b = (ul[:, :, 1:], uc[:, :, 1:], uo[:, :, 1:])
+            st, sp, ma, mb = (x.transpose(1, 0, 2, 3) for x in _shared(a, b, 1, 3))  # (U, 3, rows, lines)
+            line = np.broadcast_to(((fine[1:]) * Q)[None, None, None, :], ma.shape)
+            u = (fine * Q)[None, None, :, None]
+            _place(out, ma, mb, line, u + st, u + sp, inverse, cx * span, cy * span, _emit_vertical)
+            # horizontal lines: between fine rows r and r + 1; along x
+            a = (ul[:, :-1, :], uc[:, :-1, :], uo[:, :-1, :])
+            b = (ul[:, 1:, :], uc[:, 1:, :], uo[:, 1:, :])
+            st, sp, ma, mb = (x.transpose(1, 0, 2, 3) for x in _shared(a, b, 0, 2))  # (U, 3, lines, columns)
+            line = np.broadcast_to(((fine[1:]) * Q)[None, None, :, None], ma.shape)
+            u = (fine * Q)[None, None, None, :]
+            _place(out, ma, mb, line, u + st, u + sp, inverse, cy * span, cx * span, _emit_horizontal)
         # along the cuts: the label on the left of start -> end
         c, ry, rx = np.nonzero(code > 0)
         if c.size:
             k = code[c, ry, rx]
             s, e = voxel_cut.START[k], voxel_cut.END[k]
-            ox = (cx[c] * B + rx) * 2
-            oy = (cy[c] * B + ry) * 2
-            sx_ = ox + (voxel_cut.ANCHORS[s, 0] * 2).astype(np.int64)
-            sy_ = oy + (voxel_cut.ANCHORS[s, 1] * 2).astype(np.int64)
-            ex_ = ox + (voxel_cut.ANCHORS[e, 0] * 2).astype(np.int64)
-            ey_ = oy + (voxel_cut.ANCHORS[e, 1] * 2).astype(np.int64)
+            ox = (cx[c] * B + rx) * Q
+            oy = (cy[c] * B + ry) * Q
+            sx_ = ox + voxel_cut.ANCHOR_UNITS[s, 0]
+            sy_ = oy + voxel_cut.ANCHOR_UNITS[s, 1]
+            ex_ = ox + voxel_cut.ANCHOR_UNITS[e, 0]
+            ey_ = oy + voxel_cut.ANCHOR_UNITS[e, 1]
             mine, theirs = lab[c, ry, rx].astype(np.int64), other[c, ry, rx]
             keep = mine > 0
             out.append((mine[keep], sx_[keep], sy_[keep], ex_[keep], ey_[keep]))
@@ -366,11 +390,11 @@ def field_edges(coarse: np.ndarray, cells: np.ndarray, lab: np.ndarray, cut: np.
 
 
 def field_loops(
-    coarse, cells, lab, cut, x0: float, y0: float, half_x: float, half_y: float, *, keep_straight: bool = False,
+    coarse, cells, lab, cut, x0: float, y0: float, unit_x: float, unit_y: float, *, keep_straight: bool = False,
 ):
     """Each material's loops of a flat two-level map, in world coordinates
-    (``x0``, ``y0`` the map's corner, ``half_*`` half a fine cell):
-    {material label: (points, starts)}."""
+    (``x0``, ``y0`` the map's corner, ``unit_*`` one anchor step: a fine
+    cell over :data:`voxel_cut.STEPS`): {material label: (points, starts)}."""
     mat, sx, sy, ex, ey = field_edges(coarse, cells, lab, cut)
     out = {}
     for m in np.unique(mat):
@@ -378,8 +402,8 @@ def field_loops(
         points, starts = loops(sx[pick].astype(np.float64), sy[pick].astype(np.float64),
                                ex[pick].astype(np.float64), ey[pick].astype(np.float64), scale=1.0,
                                keep_straight=keep_straight)
-        points[:, 0] = x0 + points[:, 0] * half_x
-        points[:, 1] = y0 + points[:, 1] * half_y
+        points[:, 0] = x0 + points[:, 0] * unit_x
+        points[:, 1] = y0 + points[:, 1] * unit_y
         out[int(m)] = (points, starts)
     return out
 
@@ -451,19 +475,20 @@ def runs_loops(s_list, m_list, z, s_min, s_max):
 
 
 def step_edges(coarse, top_h, cells, lab, code, other, h_left, h_right):
-    """Where one material meets itself at another height, on the half-fine
-    lattice (two units a fine cell): (material, x0, y0, x1, y1). Fine cells
-    are read half a side at a time, a cut's two sides each with its own
-    material and height, and a cut with one material at two heights is a
-    step along its line."""
+    """Where one material meets itself at another height, on the anchor
+    lattice (:data:`voxel_cut.STEPS` units a fine cell): (material, x0,
+    y0, x1, y1). A fine side is read in the pieces its cuts' ends split it
+    into, a cut's two sides each with its own material and height, and a
+    cut with one material at two heights is a step along its line."""
     from . import voxel_cut
     from .voxel import MIXED, Z_EPS
 
+    Q = voxel_cut.STEPS
     ny, nx = coarse.shape
     # the fine cells per cell side, from the blocks' shape even when there
     # are none of them: a map with no refined cell is still on its grid
     B = lab.shape[1] if lab.ndim == 3 else 1
-    span = 2 * B
+    span = Q * B
     out: list = []
     c64 = coarse.astype(np.int64)
 
@@ -481,7 +506,6 @@ def step_edges(coarse, top_h, cells, lab, code, other, h_left, h_right):
     a, _b, ln, u0, u1 = _runs(c64[j, i], np.zeros(j.size, np.int64), (j + 1) * span, i * span, span)
     out.append((a, u0, ln, u1, ln))
     if cells.size:
-        side_left = voxel_cut.EDGE_LEFT
 
         def fine_of(flat_cells):
             """Labels, codes, others and heights of any cells, plain ones repeated."""
@@ -499,71 +523,59 @@ def step_edges(coarse, top_h, cells, lab, code, other, h_left, h_right):
             HL[hit], HR[hit] = h_left[at[hit]], h_right[at[hit]]
             return L, K, O, HL, HR
 
-        def halves(L, K, O, HL, HR, side):
-            """(material, height) along one side of each fine cell, two halves each."""
-            mats, hs = [], []
-            for k in (0, 1):
-                left = side_left[K, side, k]
-                mats.append(np.where(left, L, O))
-                hs.append(np.where(left, HL, HR))
-            return np.stack(mats, -1).reshape(L.shape[0], -1), np.stack(hs, -1).reshape(L.shape[0], -1)
+        def shared(A, side_a, Bn, side_b):
+            st, sp, ma, mb, ha, hb = _shared(A[:3], Bn[:3], side_a, side_b, (A[3], A[4]), (Bn[3], Bn[4]))
+            return st, sp, ma, ha, step(ma, mb, ha, hb) & (sp > st)
 
+        along = np.arange(B)[None, None, :] * Q
         mixed = coarse == MIXED
-        units = 2 * B
         pad = np.pad(mixed, ((0, 0), (0, 1)))
         j, i = np.nonzero((pad[:, :-1] | pad[:, 1:])[:, : nx - 1])  # between i and i + 1
-        A = fine_of(j * nx + i)
-        Bn = fine_of(j * nx + i + 1)
-        ma, ha = halves(*(x[:, :, -1] for x in A), 1)
-        mb, hb = halves(*(x[:, :, 0] for x in Bn), 3)
-        m_, h_ = np.nonzero(step(ma, mb, ha, hb))
-        x = np.full(m_.size, 0) + (i[m_] + 1) * span
-        y = j[m_] * units + h_
-        out.append((ma[m_, h_], x, y, x, y + 1))
+        A = [x[:, :, -1] for x in fine_of(j * nx + i)]
+        Bn = [x[:, :, 0] for x in fine_of(j * nx + i + 1)]
+        st, sp, ma, _h, sel = shared(A, 1, Bn, 3)
+        x = np.broadcast_to(((i + 1) * span)[None, :, None], ma.shape)
+        y = (j * span)[None, :, None] + along
+        out.append((ma[sel], x[sel], (y + st)[sel], x[sel], (y + sp)[sel]))
         pad = np.pad(mixed, ((0, 1), (0, 0)))
         j, i = np.nonzero((pad[:-1, :] | pad[1:, :])[: ny - 1, :])
-        A = fine_of(j * nx + i)
-        Bn = fine_of((j + 1) * nx + i)
-        ma, ha = halves(*(x[:, -1, :] for x in A), 0)
-        mb, hb = halves(*(x[:, 0, :] for x in Bn), 2)
-        m_, h_ = np.nonzero(step(ma, mb, ha, hb))
-        y = np.full(m_.size, 0) + (j[m_] + 1) * span
-        x = i[m_] * units + h_
-        out.append((ma[m_, h_], x, y, x + 1, y))
+        A = [x[:, -1, :] for x in fine_of(j * nx + i)]
+        Bn = [x[:, 0, :] for x in fine_of((j + 1) * nx + i)]
+        st, sp, ma, _h, sel = shared(A, 0, Bn, 2)
+        y = np.broadcast_to(((j + 1) * span)[None, :, None], ma.shape)
+        x = (i * span)[None, :, None] + along
+        out.append((ma[sel], (x + st)[sel], y[sel], (x + sp)[sel], y[sel]))
         cy, cx = np.divmod(cells, nx)
         if B > 1:
             # inside refined cells: right sides of all but the last column
             # against left sides of all but the first
+            arrays = (lab, code, other, h_left, h_right)
             for axis in (0, 1):
                 if axis == 0:
-                    sl_a, sl_b, side_a, side_b = (slice(None), slice(None, -1)), (slice(None), slice(1, None)), 1, 3
+                    A = [x[:, :, :-1] for x in arrays]
+                    Bn = [x[:, :, 1:] for x in arrays]
+                    st, sp, ma, _h, sel = shared(A, 1, Bn, 3)  # (3, m, rows, lines)
+                    _, c_, r_, q_ = np.nonzero(sel)
+                    x = (cx[c_] * B + q_ + 1) * Q
+                    y = (cy[c_] * B + r_) * Q
+                    out.append((ma[sel], x, y + st[sel], x, y + sp[sel]))
                 else:
-                    sl_a, sl_b, side_a, side_b = (slice(None, -1), slice(None)), (slice(1, None), slice(None)), 0, 2
-                arrays_a = [x[(slice(None),) + sl_a] for x in (lab, code, other, h_left, h_right)]
-                arrays_b = [x[(slice(None),) + sl_b] for x in (lab, code, other, h_left, h_right)]
-                mats_a = np.stack([np.where(side_left[arrays_a[1], side_a, k], arrays_a[0], arrays_a[2]) for k in (0, 1)], -1)
-                hs_a = np.stack([np.where(side_left[arrays_a[1], side_a, k], arrays_a[3], arrays_a[4]) for k in (0, 1)], -1)
-                mats_b = np.stack([np.where(side_left[arrays_b[1], side_b, k], arrays_b[0], arrays_b[2]) for k in (0, 1)], -1)
-                hs_b = np.stack([np.where(side_left[arrays_b[1], side_b, k], arrays_b[3], arrays_b[4]) for k in (0, 1)], -1)
-                c_, r_, q_, h_ = np.nonzero(step(mats_a, mats_b, hs_a, hs_b))
-                mat = mats_a[c_, r_, q_, h_]
-                if axis == 0:  # the side between columns q and q + 1 of row r
-                    x = (cx[c_] * B + q_ + 1) * 2
-                    y = (cy[c_] * B + r_) * 2 + h_
-                    out.append((mat, x, y, x, y + 1))
-                else:  # between rows r and r + 1 at column q
-                    y = (cy[c_] * B + r_ + 1) * 2
-                    x = (cx[c_] * B + q_) * 2 + h_
-                    out.append((mat, x, y, x + 1, y))
+                    A = [x[:, :-1, :] for x in arrays]
+                    Bn = [x[:, 1:, :] for x in arrays]
+                    st, sp, ma, _h, sel = shared(A, 0, Bn, 2)  # (3, m, lines, columns)
+                    _, c_, r_, q_ = np.nonzero(sel)
+                    y = (cy[c_] * B + r_ + 1) * Q
+                    x = (cx[c_] * B + q_) * Q
+                    out.append((ma[sel], x + st[sel], y, x + sp[sel], y))
         # a cut with one material at two heights: a step along its line
         c_, r_, q_ = np.nonzero((code > 0) & step(lab, other, h_left, h_right))
         if c_.size:
             k = code[c_, r_, q_]
             s_, e_ = voxel_cut.START[k], voxel_cut.END[k]
-            ox = (cx[c_] * B + q_) * 2
-            oy = (cy[c_] * B + r_) * 2
+            ox = (cx[c_] * B + q_) * Q
+            oy = (cy[c_] * B + r_) * Q
             out.append((lab[c_, r_, q_],
-                        ox + (voxel_cut.ANCHORS[s_, 0] * 2).astype(np.int64), oy + (voxel_cut.ANCHORS[s_, 1] * 2).astype(np.int64),
-                        ox + (voxel_cut.ANCHORS[e_, 0] * 2).astype(np.int64), oy + (voxel_cut.ANCHORS[e_, 1] * 2).astype(np.int64)))
+                        ox + voxel_cut.ANCHOR_UNITS[s_, 0], oy + voxel_cut.ANCHOR_UNITS[s_, 1],
+                        ox + voxel_cut.ANCHOR_UNITS[e_, 0], oy + voxel_cut.ANCHOR_UNITS[e_, 1]))
     parts = [np.concatenate([p[i] for p in out]) for i in range(5)] if out else [np.zeros(0, np.int64)] * 5
     return parts

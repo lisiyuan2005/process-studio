@@ -715,11 +715,12 @@ def arrival(
                     rr = r2[row_patch]
                     t = t_patch + s[rr] * faces.distance(f_patch, p[rr])
                     offer(rr, t, face=f_patch)
-        # A square wider than a cell takes its neighbour's face, which is
-        # nearest to the neighbour: walk it on to the one nearest the square.
-        if NL:
-            wide = (cells < NL) & ~fresh & (how >= 0) & (how < n_entry)
-            wide[wide] = ns[cells[wide]] > 1
+        # A node takes its neighbour's face, which is nearest to the
+        # neighbour: walk it on to the one nearest the node. Along a curved
+        # wall drawn in fine steps the faces are small, and a face handed
+        # on from node to node falls behind the wall's nearest spot.
+        if n_entry:
+            wide = ~fresh & (how >= 0) & (how < n_entry)
             if wide.any():
                 rows = np.flatnonzero(wide)
                 f = climb(how[rows], p[rows])
@@ -936,7 +937,11 @@ def arrival(
     leaf_s = slowness[nlab]
     in_slabs = nk < L
     whole_leaf = in_slabs & (leaf_T + leaf_s * leaf_reach3 <= budget)
-    band_leaf = in_slabs & ~whole_leaf & np.isfinite(leaf_T) & (leaf_T - leaf_s * leaf_reach3 <= budget)
+    # A settled time is got by a real way from a real face, so it is never
+    # early, but it may be late (the march's nearest face is not always the
+    # nearest): squares a little past the budget are near the front too.
+    late = 2.0 * math.hypot(cx, cy)
+    band_leaf = in_slabs & ~whole_leaf & np.isfinite(leaf_T) & (leaf_T - leaf_s * (leaf_reach3 + late) <= budget)
 
     def candidates(nodes, walk=True):
         """(row, face) pairs: each node's own face, its settled same-material
@@ -1488,7 +1493,7 @@ def arrival(
     band_row_of = np.full(max(NL, 1), -1, dtype=np.int64)
     band_row_of[band_ids] = np.arange(band_ids.size)
 
-    def nearest_time(rows, faces_by_row_rows, faces_by_row, points, sl):
+    def nearest_time(rows, faces_by_row_rows, faces_by_row, points, sl, faces_too=False):
         """Earliest arrival at ``points`` over the faces of each point's row.
 
         In two steps: for each fine cell the points are in, the arrival at
@@ -1498,7 +1503,7 @@ def arrival(
         point against those."""
         out = np.full(rows.size, np.inf)
         if rows.size == 0:
-            return out
+            return (out, np.full(0, -1, dtype=np.int64)) if faces_too else out
         gx = np.floor((points[:, 0] - x_min) / fx).astype(np.int64)
         gy = np.floor((points[:, 1] - y_min) / fy).astype(np.int64)
         key = (rows * (ny * B + 1) + gy) * (nx * B + 1) + gx
@@ -1525,16 +1530,28 @@ def arrival(
         idx2 = np.arange(which2.size) - np.repeat(np.cumsum(many2) - many2, many2) + np.repeat(lo2, many2)
         f2 = kf[idx2]
         t2 = faces.time[f2] + sl[which2] * faces.distance(f2, points[which2])
-        np.minimum.at(out, which2, t2)
-        return out
+        if not faces_too:
+            np.minimum.at(out, which2, t2)
+            return out
+        order = np.lexsort((t2, which2))
+        first = np.ones(order.size, dtype=bool)
+        first[1:] = which2[order][1:] != which2[order][:-1]
+        pick = order[first]
+        won = np.full(rows.size, -1, dtype=np.int64)
+        out[which2[pick]] = t2[pick]
+        won[which2[pick]] = f2[pick]
+        return out, won
 
-    def at(height, k, x, y):
+    def at(height, k, x, y, times=False):
         """Whether the etchant got to points (x, y) at ``height`` in slab ``k``
         of the march: 1 yes, 0 no, -1 where placing that slab at that height
-        settled the point's whole fine cell (ask what it wrote there)."""
+        settled the point's whole fine cell (ask what it wrote there). With
+        ``times``, also when it got there (NaN where settled)."""
         x = np.asarray(x, dtype=np.float64).reshape(-1)
         y = np.asarray(y, dtype=np.float64).reshape(-1)
         out = np.full(x.size, -1, dtype=np.int8)
+        when = np.full(x.size, np.nan)
+        which_face = np.full(x.size, -1, dtype=np.int64)
         gx = np.clip(np.floor((x - x_min) / fx).astype(np.int64), 0, nx * B - 1)
         gy = np.clip(np.floor((y - y_min) / fy).astype(np.int64), 0, ny * B - 1)
         key = k * plane + (gy // B) * nx + gx // B
@@ -1559,9 +1576,28 @@ def arrival(
                 f = pf[idx]
                 node = owner_flat[key[ask]].astype(np.int64)
                 t = faces.time[f] + slowness[nlab[node]][which] * faces.distance(f, points[ask][which])
+                order = np.lexsort((t, which))
+                first = np.ones(order.size, dtype=bool)
+                first[1:] = which[order][1:] != which[order][:-1]
+                pick = order[first]
                 best = np.full(ask.size, np.inf)
-                np.minimum.at(best, which, t)
+                best[which[pick]] = t[pick]
                 out[ask] = (best <= budget).astype(np.int8)
+                when[ask] = best
+                which_face[ask[which[pick]]] = f[pick]
+        if times and band_ids.size:
+            # settled points of squares near the front: their time too, from
+            # the square's faces, for a caller that measures more exactly
+            rest = np.flatnonzero((kc == ETCHABLE) & (out < 0))
+            if rest.size:
+                node = owner_flat[key[rest]].astype(np.int64)
+                row = np.minimum(np.searchsorted(band_ids, node), band_ids.size - 1)
+                inband = band_ids[row] == node
+                rest, row = rest[inband], row[inband]
+                if rest.size:
+                    t, fw = nearest_time(row, band_rows, band_faces, points[rest], slowness[nlab[band_ids[row]]], faces_too=True)
+                    when[rest] = t
+                    which_face[rest] = fw
         ref = np.flatnonzero(kc == REFINED)
         if ref.size and pieces:
             at_, hit = refined_at(key[ref])
@@ -1572,8 +1608,12 @@ def arrival(
             row = piece_row[piece]
             ask = (row >= 0) & ~whole_piece[piece]
             if ask.any():
-                t = nearest_time(row[ask], piece_rows, piece_faces, points[ref[ask]], slowness[piece_label[piece[ask]]])
+                t, fw = nearest_time(row[ask], piece_rows, piece_faces, points[ref[ask]], slowness[piece_label[piece[ask]]], faces_too=True)
                 out[ref[ask]] = (t <= budget).astype(np.int8)
+                when[ref[ask]] = t
+                which_face[ref[ask]] = fw
+        if times:
+            return out, when, which_face, faces
         return out
 
     return Front(place, flat_heights, at)

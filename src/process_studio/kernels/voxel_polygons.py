@@ -41,16 +41,16 @@ def slab_faces(state: "VoxelState", k: int) -> tuple[np.ndarray, np.ndarray]:
     the corner of one lands part-way along an edge of another with open
     space on both sides -- so they are a coverage the simplifier keeps
     stitched."""
-    from . import voxel_vector
+    from . import voxel_cut, voxel_vector
     from .voxel import VOID
 
     cells, refs = state.slab_refs(k)
     B = state.refine
     lab = state.pool[refs] if cells.size else np.zeros((0, B, B), np.uint8)
-    cut = state.pool_cut[refs] if cells.size else np.zeros((0, B, B), np.uint16)
+    cut = state.pool_cut[refs] if cells.size else np.zeros((0, B, B), np.uint32)
     found = voxel_vector.field_loops(
         state.labels[k], cells, lab, cut, state.bounds[0], state.bounds[1],
-        0.5 * state.fine_x, 0.5 * state.fine_y,
+        state.fine_x / voxel_cut.STEPS, state.fine_y / voxel_cut.STEPS,
     )
     rings = []
     for points, starts in found.values():

@@ -65,7 +65,6 @@ Semantics follow the simplified (square) film model of the polygon slabs:
 from __future__ import annotations
 
 import base64
-import functools
 import hashlib
 import io
 import math
@@ -176,7 +175,7 @@ def _pair_hash(blocks: np.ndarray, cuts: np.ndarray | None) -> np.ndarray:
     if cuts is None or not cuts.any():
         return h
     n = cuts.shape[0]
-    extra = _brick_hash(np.ascontiguousarray(cuts, dtype=np.uint16).view(np.uint8).reshape(n, -1))
+    extra = _brick_hash(np.ascontiguousarray(cuts, dtype=np.uint32).view(np.uint8).reshape(n, -1))
     has = cuts.reshape(n, -1).any(axis=1)
     with np.errstate(over="ignore"):
         h = np.where(has, h ^ (extra * np.uint64(0xC2B2AE3D27D4EB4F)), h)
@@ -244,7 +243,7 @@ class VoxelState:
             np.zeros(0, dtype=np.int64) if brick_keys is None else np.asarray(brick_keys, dtype=np.int64)
         )
         self.pool = np.zeros((0, B, B), dtype=np.uint8)
-        self.pool_cut = np.zeros((0, B, B), dtype=np.uint16)
+        self.pool_cut = np.zeros((0, B, B), dtype=np.uint32)
         self._pool_hash = np.zeros(0, dtype=np.uint64)
         self.brick_ref = np.zeros(0, dtype=np.int64)
         if bricks is not None and len(bricks):
@@ -318,7 +317,7 @@ class VoxelState:
         if n == 0:
             return np.zeros(0, dtype=np.int64)
         blocks = np.ascontiguousarray(blocks, dtype=np.uint8)
-        cuts = np.zeros(blocks.shape, dtype=np.uint16) if cuts is None else np.ascontiguousarray(cuts, dtype=np.uint16)
+        cuts = np.zeros(blocks.shape, dtype=np.uint32) if cuts is None else np.ascontiguousarray(cuts, dtype=np.uint32)
         hashes = _pair_hash(blocks, cuts)
         # among themselves: one entry per distinct brick
         unique_hash, first, inverse = _unique(hashes, return_index=True, return_inverse=True)
@@ -383,7 +382,7 @@ class VoxelState:
         """Cuts of the fine cells of cells ``keys`` (0 where not cut)."""
         keys = np.asarray(keys, dtype=np.int64)
         B = self.refine
-        out = np.zeros((keys.size, B, B), dtype=np.uint16)
+        out = np.zeros((keys.size, B, B), dtype=np.uint32)
         if self.brick_keys.size and keys.size:
             at = np.searchsorted(self.brick_keys, keys)
             at = np.minimum(at, self.brick_keys.size - 1)
@@ -393,7 +392,13 @@ class VoxelState:
 
     @property
     def has_cuts(self) -> bool:
-        return bool(self.pool_cut.size) and bool(self.pool_cut.any())
+        # the pool is replaced, never written in place: known per array
+        cached = getattr(self, "_has_cuts", None)
+        if cached is not None and cached[0] is self.pool_cut:
+            return cached[1]
+        value = bool(self.pool_cut.size) and bool(self.pool_cut.any())
+        self._has_cuts = (self.pool_cut, value)
+        return value
 
     def store(self, keys: np.ndarray, blocks: np.ndarray, cuts: np.ndarray | None = None) -> None:
         """Write fine labels (and cuts) for the cells ``keys``: a block of
@@ -408,7 +413,7 @@ class VoxelState:
             return
         blocks = np.asarray(blocks, dtype=np.uint8)
         if cuts is None:
-            cuts = np.zeros(blocks.shape, dtype=np.uint16)
+            cuts = np.zeros(blocks.shape, dtype=np.uint32)
             if self.has_cuts and self.brick_keys.size:
                 # only bricks with cuts have any to keep
                 at = np.minimum(np.searchsorted(self.brick_keys, keys), self.brick_keys.size - 1)
@@ -421,10 +426,10 @@ class VoxelState:
                     kept = self.pool_cut[refs]
                     kept[blocks[hit] != self.pool[refs]] = 0
                     cuts[hit] = kept
-        cuts = np.asarray(cuts, dtype=np.uint16)
+        cuts = np.asarray(cuts, dtype=np.uint32)
         if cuts.any():
             # a cut with the same material both sides is no cut
-            cuts = np.where(((cuts >> 8) == blocks) | ((cuts & 0xFF) == 0), np.uint16(0), cuts)
+            cuts = np.where((voxel_cut.other_of(cuts) == blocks) | (voxel_cut.code_of(cuts) == 0), np.uint32(0), cuts)
         first = blocks[:, :1, :1]
         uniform = (blocks == first).all(axis=(1, 2)) & ~cuts.any(axis=(1, 2))
         flat = self.labels.reshape(-1)
@@ -474,17 +479,40 @@ class VoxelState:
             out = out.reshape(shape)
         return out
 
+    def cut_value(self, k: int, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+        """How far points of slab ``k`` are from the cut in their fine cell,
+        positive on its left (the cell's own label); NaN where the cell is
+        not cut. Two points of one fine cell either side of its cut put the
+        cut between them where this is 0."""
+        x_min, y_min, _, _ = self.bounds
+        gx = (np.asarray(x, float) - x_min) / self.fine_x
+        gy = (np.asarray(y, float) - y_min) / self.fine_y
+        fx = np.clip(np.floor(gx).astype(np.int64), 0, self.nx * self.refine - 1)
+        fy = np.clip(np.floor(gy).astype(np.int64), 0, self.ny * self.refine - 1)
+        out = np.full(gx.shape, np.nan)
+        if not self.has_cuts:
+            return out
+        code = voxel_cut.code_of(self.sample_cut(k, fx, fy))
+        has = code > 0
+        if has.any():
+            ax, ay, bx, by = voxel_cut.ends(code[has])
+            u, v = gx[has] - fx[has], gy[has] - fy[has]
+            ex, ey = (bx - ax) * self.fine_x, (by - ay) * self.fine_y
+            cross = ex * (v - ay) * self.fine_y - ey * (u - ax) * self.fine_x
+            out[has] = cross / np.maximum(np.hypot(ex, ey), 1e-300)
+        return out
+
     def sample_cut(self, k: np.ndarray, fx: np.ndarray, fy: np.ndarray) -> np.ndarray:
         """The cut of fine cell ``(fx, fy)`` of slabs ``k`` (0 for none)."""
         B = self.refine
         if not self.has_cuts:
-            return np.zeros(np.broadcast_shapes(np.shape(k), np.shape(fx), np.shape(fy)), dtype=np.uint16)
+            return np.zeros(np.broadcast_shapes(np.shape(k), np.shape(fx), np.shape(fy)), dtype=np.uint32)
         ix, bx = np.divmod(np.asarray(fx), B)
         iy, by = np.divmod(np.asarray(fy), B)
         k, ix, bx, iy, by = np.broadcast_arrays(np.asarray(k), ix, bx, iy, by)
         shape = k.shape
         k, ix, bx, iy, by = (a.reshape(-1) for a in (k, ix, bx, iy, by))
-        out = np.zeros(k.size, dtype=np.uint16)
+        out = np.zeros(k.size, dtype=np.uint32)
         mixed = self.labels[k, iy, ix] == MIXED
         if mixed.any():
             keys = k[mixed] * self.plane + iy[mixed] * self.nx + ix[mixed]
@@ -525,7 +553,7 @@ class VoxelState:
         state = cls(bounds, nx, ny, z, np.zeros((n, ny, nx), np.uint8), materials, z_offset, B)
         state.store(
             np.arange(n * ny * nx, dtype=np.int64), blocks(fine),
-            None if cuts is None else blocks(np.asarray(cuts, dtype=np.uint16)),
+            None if cuts is None else blocks(np.asarray(cuts, dtype=np.uint32)),
         )
         return state
 
@@ -557,7 +585,7 @@ class VoxelState:
             both = np.concatenate([self.pool.reshape(len(self.pool), -1), self.pool_cut.reshape(len(self.pool), -1)], axis=1)
             assert np.unique(both, axis=0).shape[0] == len(self.pool), "a brick is pooled twice"
             code = voxel_cut.code_of(cut)
-            assert (code <= 32).all(), "a cut code is out of range"
+            assert ((code == 0) | voxel_cut.VALID[np.minimum(code, voxel_cut.CODES - 1)]).all() and (code < voxel_cut.CODES).all(), "a cut code is not a line"
             assert not ((code > 0) & (voxel_cut.other_of(cut) == data)).any(), "a cut with one material both sides"
             assert not ((code == 0) & (cut != 0)).any(), "a material across no cut"
 
@@ -740,11 +768,12 @@ class VoxelState:
             )
             if "pool" in stored.files:
                 state.pool = np.ascontiguousarray(stored["pool"], dtype=np.uint8)
-                state.pool_cut = (
-                    np.ascontiguousarray(stored["pool_cut"], dtype=np.uint16)
-                    if "pool_cut" in stored.files
-                    else np.zeros(state.pool.shape, dtype=np.uint16)
-                )
+                if "pool_cut" not in stored.files:
+                    state.pool_cut = np.zeros(state.pool.shape, dtype=np.uint32)
+                elif stored["pool_cut"].dtype == np.uint16:  # eight anchors a cell, before 0.1.2
+                    state.pool_cut = np.ascontiguousarray(voxel_cut.from_old(stored["pool_cut"]))
+                else:
+                    state.pool_cut = np.ascontiguousarray(stored["pool_cut"], dtype=np.uint32)
                 state._pool_hash = _pair_hash(state.pool, state.pool_cut)
                 state.brick_ref = np.asarray(stored["brick_ref"], dtype=np.int64)
         state.path = Path(path)
@@ -1332,7 +1361,85 @@ def _fill_whole(state: VoxelState, k: int, whole: np.ndarray, label: int) -> Non
     if bricked.any():
         cells = np.flatnonzero(bricked.reshape(-1))
         shape = (cells.size, state.refine, state.refine)
-        state.store(k * state.plane + cells, np.full(shape, label, np.uint8), np.zeros(shape, np.uint16))
+        state.store(k * state.plane + cells, np.full(shape, label, np.uint8), np.zeros(shape, np.uint32))
+
+
+def _fit_cells(x0, y0, fx, fy, centre, decide) -> tuple[np.ndarray, np.ndarray]:
+    """Labels and cuts for fine cells (corner ``x0``, ``y0``, size ``fx`` x
+    ``fy``, label at the centre ``centre``) from what ``decide(x, y)`` says
+    is at any point.
+
+    It is asked at the corners and the middles of the sides; on a half side
+    whose ends differ the crossing is found by halving the half side down to
+    one anchor step, and one question more says which of its two anchors it
+    is nearer (see :func:`voxel_cut.fit`).
+    """
+    # A hair inside the cell: a point on a side belongs to both cells,
+    # and a field given cell by cell (a mask with no outline, the state
+    # itself) has its boundary exactly there -- read from inside, a
+    # cell sees its own material all round and is not cut.
+    def at(u, v, rows):
+        return (
+            x0[rows] + (0.5 + (u - 0.5) * (1.0 - 2e-3)) * fx,
+            y0[rows] + (0.5 + (v - 0.5) * (1.0 - 2e-3)) * fy,
+        )
+
+    def ask(xs, ys):
+        got = decide(xs, ys)
+        if isinstance(got, tuple):
+            values = got[1] if isinstance(got[1], (list, tuple)) else [got[1]]
+            return np.asarray(got[0], dtype=np.uint8), [np.asarray(v, dtype=np.float64) for v in values]
+        return np.asarray(got, dtype=np.uint8), None
+
+    count = centre.size
+    rows = np.repeat(np.arange(count), 8)
+    u = np.tile(voxel_cut.COARSE[:, 0], count)
+    v = np.tile(voxel_cut.COARSE[:, 1], count)
+    anchor, value = ask(*at(u, v, rows))
+    anchor = anchor.reshape(-1, 8)
+    crossing = anchor != np.roll(anchor, -1, axis=1)
+    place = np.full(anchor.shape, voxel_cut.HALF // 2, dtype=np.int64)
+    r, h = np.nonzero(crossing)
+    # A process that says how far a point is from a boundary (values
+    # positive on one side, one array per boundary it knows of -- the one it
+    # makes, the ones it leaves where they were): where the two ends of a
+    # half side are on either side of one, the crossing is where it is 0.
+    for channel in value or ():
+        if r.size == 0:
+            break
+        channel = channel.reshape(-1, 8)
+        v0, v1 = channel[r, h], channel[r, (h + 1) % 8]
+        straddle = np.isfinite(v0) & np.isfinite(v1) & ((v0 > 0) != (v1 > 0))
+        if straddle.any():
+            t = v0[straddle] / (v0[straddle] - v1[straddle])
+            place[r[straddle], h[straddle]] = np.clip(np.rint(t * voxel_cut.HALF), 0, voxel_cut.HALF).astype(np.int64)
+            r, h = r[~straddle], h[~straddle]
+    if r.size:
+        near = anchor[r, h]
+        lo = np.zeros(r.size, dtype=np.int64)
+        hi = np.full(r.size, voxel_cut.HALF, dtype=np.int64)
+        while True:
+            open_ = np.flatnonzero(hi - lo > 1)
+            if open_.size == 0:
+                break
+            mid = (lo[open_] + hi[open_]) // 2
+            got = ask(*at(*voxel_cut.half_side_point(h[open_], mid), r[open_]))[0]
+            same = got == near[open_]
+            lo[open_[same]] = mid[same]
+            hi[open_[~same]] = mid[~same]
+        got = ask(*at(*voxel_cut.half_side_point(h, lo + 0.5), r))[0]
+        # past the middle of the step still the near end's material: the
+        # crossing is nearer the far anchor of the step
+        place[r, h] = np.where(got == near, hi, lo)
+    # The centre as given is what the step wrote there; where no anchor
+    # holds it, it is asked again: a front placed on a coarser grid may be
+    # a fine cell or more off, and a thin strip missing every anchor is
+    # still found at the centre.
+    centre = np.asarray(centre, dtype=np.uint8).copy()
+    odd = np.flatnonzero(~(anchor == centre[:, None]).any(axis=1))
+    if odd.size:
+        centre[odd] = ask(*at(np.full(odd.size, 0.5), np.full(odd.size, 0.5), odd))[0]
+    return voxel_cut.fit(anchor, centre, place)
 
 
 def _refit(state: VoxelState, k: int, cells: np.ndarray, decide, memo: dict | None = None, context: bytes = b"") -> None:
@@ -1358,7 +1465,7 @@ def _refit(state: VoxelState, k: int, cells: np.ndarray, decide, memo: dict | No
     fx, fy = state.fine_x, state.fine_y
     keys = k * state.plane + cells
     labels = state.blocks(keys)
-    cuts = np.zeros(labels.shape, dtype=np.uint16)
+    cuts = np.zeros(labels.shape, dtype=np.uint32)
     pad = _padded(state, k, cells)
     if memo is not None:
         key = hashlib.blake2b(context + cells.tobytes() + pad.tobytes(), digest_size=16).digest()
@@ -1372,33 +1479,35 @@ def _refit(state: VoxelState, k: int, cells: np.ndarray, decide, memo: dict | No
         for dx in (-1, 0, 1):
             if dy or dx:
                 edge |= pad[:, 1 + dy : B + 1 + dy, 1 + dx : B + 1 + dx] != centre
-    c, by, bx = np.nonzero(edge)
-    if c.size:
+    seen = edge.copy()
+    todo = edge
+    for _ in range(4 * B):
+        c, by, bx = np.nonzero(todo)
+        if c.size == 0:
+            break
         iy, ix = np.divmod(cells[c], nx)
         x0 = x_min + (ix * B + bx) * fx
         y0 = y_min + (iy * B + by) * fy
-        # A hair inside the cell: a point on a side belongs to both cells,
-        # and a field given cell by cell (a mask with no outline, the state
-        # itself) has its boundary exactly there -- read from inside, a
-        # cell sees its own material all round and is not cut.
-        inward = 0.5 + (voxel_cut.ANCHORS - 0.5) * (1.0 - 2e-3)
-        ax = x0[:, None] + inward[None, :, 0] * fx
-        ay = y0[:, None] + inward[None, :, 1] * fy
-        anchor = np.asarray(decide(ax.ravel(), ay.ravel()), dtype=np.uint8).reshape(-1, 8)
-        crossing = anchor != np.roll(anchor, -1, axis=1)
-        snap = np.broadcast_to(voxel_cut.TO_MIDDLE, anchor.shape).copy()
-        r, h = np.nonzero(crossing)
-        if r.size:
-            middle = 0.5 + (voxel_cut.half_middles() - 0.5) * (1.0 - 2e-3)
-            mx = x0[r] + middle[h, 0] * fx
-            my = y0[r] + middle[h, 1] * fy
-            got = np.asarray(decide(mx, my), dtype=np.uint8)
-            # the middle of the half side holds the far end's material: the
-            # crossing is in the near half, so it snaps to the near anchor
-            snap[r, h] = np.where(got == anchor[r, (h + 1) % 8], 0, 1)
-        label, cut = voxel_cut.fit(anchor, labels[c, by, bx], snap)
+        label, cut = _fit_cells(x0, y0, fx, fy, labels[c, by, bx], decide)
+        moved = (label != labels[c, by, bx]).any()
         labels[c, by, bx] = label
         cuts[c, by, bx] = cut
+        if not moved:
+            break
+        # Where the step placed the boundary a fine cell or more from where
+        # the fit finds it (a front marched on a coarser grid), the cells
+        # past the fitted ones have neighbours of another material now:
+        # they are fitted too, until the boundary is inside fitted cells.
+        state.store(keys, labels, cuts)
+        pad = _padded(state, k, cells)
+        centre = pad[:, 1:-1, 1:-1]
+        todo = np.zeros(labels.shape, dtype=bool)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                if dy or dx:
+                    todo |= pad[:, 1 + dy : B + 1 + dy, 1 + dx : B + 1 + dx] != centre
+        todo &= ~seen
+        seen |= todo
     if memo is not None:
         # identical slabs come together (one layer split up): a few will do
         while len(memo) >= 4:
@@ -1456,7 +1565,6 @@ def deposit(
         reached = _wet_field(state, opening, check=lambda: _check(should_cancel, "a deposition"))
     covers: dict[tuple[int, int], Mask2] = {}
     near_of: dict[bytes, Mask2] = {}
-    solid_of: dict[tuple[int, int], tuple[bytes, Mask2]] = {}
     films: list[tuple[int, Mask2]] = []
     shadow = _Stack(state) if planar else None
     for k in range(n - 1, -1, -1):
@@ -1478,7 +1586,6 @@ def deposit(
             if digest not in near_of:
                 near_of[digest] = _near(state, solid, reach)
             covers[window] = near_of[digest]
-            solid_of[window] = (digest, solid)
         film = covers[window]
         void_here = Mask2.build(kind[k] == 0, *_fine_where(state, k, kind[k] == 2, lambda b: b == VOID))
         film = _and(state, film, void_here)
@@ -1501,20 +1608,53 @@ def deposit(
     # Boundaries: the film's edge at any point -- open space within reach
     # of the solid's surface (the same surface lines, the same reach), not
     # under solid (planar), inside the mask.
+    # The film's edge is fitted against the solid's real edge -- cut lines
+    # and all -- at exactly the thickness: the solid of every slab in the
+    # window, each distinct slab once.
     trees: dict[bytes, tuple[Any, np.ndarray] | None] = {}
+    edges_of: dict[bytes, np.ndarray] = {}
+    slab_key: dict[int, bytes] = {}
     memo: dict = {}
     x_min, y_min, _, _ = state.bounds
     half_cell = 0.5 * math.hypot(state.cell_x, state.cell_y)
+    # thinner than half a fine cell's diagonal, a film would sit wholly in
+    # the fine cells beside the wall as slivers, their centres open: the
+    # processes that read cells would see no film -- nor a barrier in it
+    edge_reach = max(t, 0.5 * math.hypot(state.fine_x, state.fine_y) * 1.0001)
+    # a half side is half a fine cell: a value further from 0 than this
+    # cannot change sign along it, so is not needed exactly
+    diagonal = 0.75 * max(state.fine_x, state.fine_y)
+
+    def key_of(j):
+        if j not in slab_key:
+            cells_j, refs_j = before.slab_refs(j)
+            slab_key[j] = hashlib.blake2b(
+                before.labels[j].tobytes() + cells_j.tobytes() + refs_j.tobytes(), digest_size=16
+            ).digest()
+        return slab_key[j]
+
     for k, _film, window in films:
         _check(should_cancel, "a deposition")
         region = _changed_cells(state, k, before, k)
         if region.size == 0:
             continue
-        digest, solid = solid_of[window]
+        reps: dict[bytes, int] = {}
+        for j in range(window[0], window[1]):
+            reps.setdefault(key_of(j), j)
+        digest = hashlib.blake2b(b"".join(sorted(reps)), digest_size=16).digest()
         if digest not in trees:
-            segments = _surface(before, solid)
+            parts = []
+            for key, j in reps.items():
+                if key not in edges_of:
+                    edges_of[key] = _solid_edges(before, j)
+                parts.append(edges_of[key])
+            segments = np.concatenate(parts) if parts else np.zeros((0, 4))
+            if len(parts) > 1 and len(segments):
+                # the same wall in slab after slab: each segment once
+                segments = np.unique(segments, axis=0)
             trees[digest] = (shapely.STRtree(shapely.linestrings(segments.reshape(-1, 2, 2))), segments) if len(segments) else None
         found = trees[digest]
+        solid_slabs = [j for j in reps.values() if j != k]
         # Per cell: the surface lines that can be the nearest to some point
         # of it -- those within the nearest one's distance from its centre
         # plus its diagonal -- or, where even the farthest point of the cell
@@ -1530,19 +1670,28 @@ def deposit(
             np.minimum.at(nearest, first, distance)
             nearest_line = np.full(region.size, -1, dtype=np.int64)
             nearest_line[first] = line_hit
-            whole_in = nearest + half_cell <= reach
-            whole_out = nearest - half_cell > reach
+            whole_in = nearest + half_cell <= edge_reach
+            whole_out = nearest - half_cell > edge_reach
         else:
             segments = np.zeros((0, 4))
-            nearest_line = np.full(region.size, -1, dtype=np.int64)
             nearest = np.full(region.size, np.inf)
+            nearest_line = np.full(region.size, -1, dtype=np.int64)
 
-        def decide(x, y, k=k, region=region, segments=segments, found=found,
-                   whole_in=whole_in, whole_out=whole_out, nearest_line=nearest_line, nearest=nearest):
+        def decide(x, y, k=k, region=region, segments=segments, found=found, solid_slabs=solid_slabs,
+                   whole_in=whole_in, whole_out=whole_out, nearest=nearest, nearest_line=nearest_line):
             old = before.sample(k, x, y)
             out = old.copy()
             film = old == VOID
+            # how far inside the film's edge (the thickness less the way to
+            # the solid), where the film is what decides
+            value = np.full(x.size, np.nan)
             ask = np.flatnonzero(film)
+            # in the solid of another slab of the window: no distance at all
+            for j in solid_slabs:
+                if ask.size:
+                    inside = before.sample(j, x[ask], y[ask]) != VOID
+                    value[ask[inside]] = edge_reach
+                    ask = ask[~inside]
             if ask.size:
                 gx = np.clip(np.floor((x[ask] - x_min) / state.cell_x).astype(np.int64), 0, state.nx - 1)
                 gy = np.clip(np.floor((y[ask] - y_min) / state.cell_y).astype(np.int64), 0, state.ny - 1)
@@ -1553,30 +1702,39 @@ def deposit(
                 keep = ~sure & ~none
                 ask, row = ask[keep], row[keep]
             if ask.size:
-                # most points are well inside the film: the line nearest to
-                # their bulk cell's centre is already within reach of them;
-                # and a point farther from its cell's centre than the centre
-                # is from reach cannot be within it
+                # the line nearest the bulk cell's centre is no nearer than
+                # the nearest line; the way to the centre bounds it from below
                 g = segments[np.maximum(nearest_line[row], 0)]
-                quick = (nearest_line[row] >= 0) & (_line_distance2(x[ask], y[ask], g) <= reach * reach * (1 + 1e-12))
+                upper = np.where(nearest_line[row] >= 0, np.sqrt(_line_distance2(x[ask], y[ask], g)), np.inf)
                 cy_, cx_ = np.divmod(region[row], state.nx)
                 away = np.hypot(x[ask] - (x_min + (cx_ + 0.5) * state.cell_x), y[ask] - (y_min + (cy_ + 0.5) * state.cell_y))
-                far = ~quick & (nearest[row] - away > reach * (1 + 1e-9))
+                lower = nearest[row] - away
+                deep = upper <= edge_reach - diagonal
+                far = ~deep & (lower > edge_reach + diagonal)
+                value[ask[deep]] = edge_reach - upper[deep]
+                value[ask[far]] = edge_reach - lower[far]
                 film[ask[far]] = False
-                keep = ~quick & ~far
-                ask, row = ask[keep], row[keep]
+                ask = ask[~deep & ~far]
             if ask.size:
-                film[ask] = _within_lines(
-                    x[ask], y[ask], found[0], segments, reach,
+                cap = edge_reach + diagonal
+                d = _line_distances(
+                    x[ask], y[ask], found[0], segments, cap,
                     x_min, y_min, state.fine_x, state.fine_y, state.nx * state.refine, state.refine,
+                    inner=edge_reach - diagonal,
                 )
+                film[ask] = d <= edge_reach
+                value[ask] = edge_reach - np.minimum(d, cap)
             if planar and k + 1 < before.n:
                 above = before.sample(np.arange(k + 1, before.n)[:, None], x[None, :], y[None, :])
-                film &= ~(above != VOID).any(axis=0)
+                shade = (above != VOID).any(axis=0)
+                film &= ~shade
+                value[shade] = np.nan
             if reached is not None:
-                film &= reached.sample(k, x, y) == 1
+                ok = _reached_at(reached, before, k, opening, x, y) == 1
+                film &= ok
+                value[~ok] = np.nan
             out[film] = label
-            return out
+            return out, (value, before.cut_value(k, x, y))
 
         # what decide reads besides the slab itself: the surface lines and
         # the slab as it was; above it too when planar (not shared then)
@@ -1588,13 +1746,75 @@ def deposit(
     state.consolidate()
 
 
+def _reached_at(field: VoxelState, state: VoxelState, k: int, opening: "Mask2 | None", x, y) -> np.ndarray:
+    """What the etchant (or the gas) field says at points of slab ``k``
+    (see :func:`_wet_field`), with the resist's edge where it really is:
+    the field has it to a fine cell, but in a column open straight up to
+    the ambient resist is exactly what the mask covers."""
+    out = field.sample(k, x, y).astype(np.int64)
+    if opening is None or getattr(opening, "geometry", None) is None:
+        return out
+    ask = np.flatnonzero((out == 1) | (out == RESIST))
+    if ask.size:
+        # a column with nothing but open space above the slab is open to
+        # the ambient; only the others are walked down, slab by slab
+        top = getattr(state, "_top_solid", None)
+        if top is None or top[0] is not state.labels:
+            solid = state.labels != VOID
+            highest = np.where(solid.any(axis=0), state.n - 1 - np.argmax(solid[::-1], axis=0), -1)
+            state._top_solid = top = (state.labels, highest)
+        x_min, y_min = state.bounds[0], state.bounds[1]
+        cx = np.clip(np.floor((x[ask] - x_min) / state.cell_x).astype(np.int64), 0, state.nx - 1)
+        cy = np.clip(np.floor((y[ask] - y_min) / state.cell_y).astype(np.int64), 0, state.ny - 1)
+        walk = ask[top[1][cy, cx] > k]
+        clear = ask[top[1][cy, cx] <= k]
+    else:
+        walk = clear = ask
+    for j in range(state.n - 1, k, -1):
+        if walk.size == 0:
+            break
+        walk = walk[state.sample(j, x[walk], y[walk]) == VOID]
+    ask = np.concatenate([clear, walk])
+    if ask.size:
+        out[ask] = np.where(opening.at(state, x[ask], y[ask]), 1, RESIST)
+    return out
+
+
 def _line_distance2(px, py, g):
-    """Squared distance from points to axis-aligned segments (x0, y0, x1, y1)."""
-    gx0, gx1 = np.minimum(g[:, 0], g[:, 2]), np.maximum(g[:, 0], g[:, 2])
-    gy0, gy1 = np.minimum(g[:, 1], g[:, 3]), np.maximum(g[:, 1], g[:, 3])
-    dx = np.maximum(np.maximum(gx0 - px, px - gx1), 0.0)
-    dy = np.maximum(np.maximum(gy0 - py, py - gy1), 0.0)
-    return dx * dx + dy * dy
+    """Squared distance from points to segments (x0, y0, x1, y1)."""
+    x0, y0 = g[:, 0], g[:, 1]
+    dx, dy = g[:, 2] - x0, g[:, 3] - y0
+    length2 = dx * dx + dy * dy
+    with np.errstate(invalid="ignore", divide="ignore"):
+        t = np.where(length2 > 0, ((px - x0) * dx + (py - y0) * dy) / length2, 0.0)
+    t = np.clip(t, 0.0, 1.0)
+    ex = px - (x0 + t * dx)
+    ey = py - (y0 + t * dy)
+    return ex * ex + ey * ey
+
+
+def _solid_edges(state: VoxelState, k: int) -> np.ndarray:
+    """The edge of the solid in slab ``k`` -- everything but open space --
+    exactly, cut lines included: segments (x0, y0, x1, y1). The window's
+    sides are not an edge: the wafer goes on past them."""
+    from . import voxel_vector
+
+    grid = state.labels[k]
+    coarse = np.where(grid == MIXED, MIXED, (grid != VOID).astype(np.uint8)).astype(np.uint8)
+    cells, refs = state.slab_refs(k)
+    lab = (state.pool[refs] != VOID).astype(np.uint8)
+    cut = state.pool_cut[refs]
+    other = (voxel_cut.other_of(cut) != VOID).astype(np.uint8)
+    code = np.where(other != lab, voxel_cut.code_of(cut), 0)
+    mat, sx, sy, ex, ey = voxel_vector.field_edges(coarse, cells, lab, voxel_cut.pack(code, other))
+    Q = voxel_cut.STEPS
+    W, H = state.nx * state.refine * Q, state.ny * state.refine * Q
+    keep = mat == 1
+    on_side = ((sx == ex) & ((sx == 0) | (sx == W))) | ((sy == ey) & ((sy == 0) | (sy == H)))
+    keep &= ~on_side
+    x_min, y_min, _, _ = state.bounds
+    ux, uy = state.fine_x / Q, state.fine_y / Q
+    return np.stack([x_min + sx[keep] * ux, y_min + sy[keep] * uy, x_min + ex[keep] * ux, y_min + ey[keep] * uy], 1)
 
 
 def _pairs(group, lo_of, many_of):
@@ -1639,24 +1859,25 @@ def _narrow(parent_of, lo, many, seg_of, segments, cx, cy, half, budget=4_000_00
     return g[order], sg[order], nearest_all
 
 
-def _within_lines(x, y, tree, segments, reach, x_min, y_min, fx, fy, fine_cols, refine):
-    """Whether points are within ``reach`` of any surface line (``segments``,
-    indexed by ``tree``).
+def _line_distances(x, y, tree, segments, cap, x_min, y_min, fx, fy, fine_cols, refine, inner=-np.inf):
+    """The distance from points to the nearest surface line (``segments``,
+    indexed by ``tree``) where it is within ``cap``; inf where it is not.
 
-    Lines farther than ``reach`` from every point of a block are dropped
-    at once: a line within reach of a point is kept at every level, so a
-    fine cell's nearest distance is overstated only where it is beyond
-    reach anyway.
-
-    Narrowed level by level, so a wall drawn in a great many short lines is
-    not measured line by line from every point: for each block of 4 x 4
-    fine cells the points are in, the lines within the nearest one's
-    distance from its centre plus its diagonal (the only ones that can be
-    nearest anywhere in it); from those, each fine cell's the same way;
-    then each point against its fine cell's."""
-    out = np.zeros(x.size, dtype=bool)
+    Neighbouring fine cells ask at the same corners and middles of sides (a
+    hair inside each): points are put on a lattice of 1/64 of a fine cell
+    and each lattice point measured once. Then narrowed level by level:
+    blocks of 4 x 4 fine cells, fine cells, and points against their cell's
+    lines (see :func:`_narrow`)."""
     if x.size == 0:
-        return out
+        return np.full(0, np.inf)
+    lx = np.rint((x - x_min) / fx * 64).astype(np.int64)
+    ly = np.rint((y - y_min) / fy * 64).astype(np.int64)
+    _k, first, back = _unique(ly * (fine_cols * 64 + 2) + lx, return_index=True, return_inverse=True)
+    if first.size < x.size:
+        ux = x_min + lx[first] * (fx / 64)
+        uy = y_min + ly[first] * (fy / 64)
+        return _line_distances(ux, uy, tree, segments, cap, x_min, y_min, fx, fy, fine_cols, refine, inner)[back]
+    out = np.full(x.size, np.inf)
     gx = np.floor((x - x_min) / fx).astype(np.int64)
     gy = np.floor((y - y_min) / fy).astype(np.int64)
     q = min(4, refine)
@@ -1668,12 +1889,10 @@ def _within_lines(x, y, tree, segments, reach, x_min, y_min, fx, fy, fine_cols, 
     (first, _line), distance = tree.query_nearest(centres, return_distance=True, all_matches=False)
     nearest = np.full(blocks.size, np.inf)
     np.minimum.at(nearest, first, distance)
-    # only lines within reach of some point of the block matter
-    reach_block = reach + 0.5 * q * math.hypot(fx, fy)
+    reach_block = cap + 0.5 * q * math.hypot(fx, fy)
     bg, bs = tree.query(centres, predicate="dwithin", distance=np.minimum(nearest + q * math.hypot(fx, fy), reach_block) + 1e-12)
     order = np.argsort(bg, kind="stable")
     bg, bs = bg[order], bs[order]
-    # fine cells, from their block's lines
     fine_id = gy * fine_cols + gx
     cells, first_c, back = _unique(fine_id, return_index=True, return_inverse=True)
     c_block = b_back[first_c]
@@ -1681,22 +1900,21 @@ def _within_lines(x, y, tree, segments, reach, x_min, y_min, fx, fy, fine_cols, 
     ccy = y_min + (cells // fine_cols + 0.5) * fy
     lo = np.searchsorted(bg, c_block, side="left")
     many = np.searchsorted(bg, c_block, side="right") - lo
-    kc, ks, centre_d = _narrow(None, lo, many, bs, segments, ccx, ccy, 0.5 * math.hypot(fx, fy), reach=reach)
-    # a point is no farther from the lines than its cell's centre plus the
-    # way to it, and no nearer than that less the way: most are settled so
+    kc, ks, centre_d = _narrow(None, lo, many, bs, segments, ccx, ccy, 0.5 * math.hypot(fx, fy), reach=cap)
     away = np.hypot(x - ccx[back], y - ccy[back])
-    d = centre_d[back]
-    out[d + away <= reach] = True
-    open_ = np.abs(d - reach) < away * (1 + 1e-9) + 1e-12 * reach
-    open_ &= ~out
-    ask = np.flatnonzero(open_)
+    # surely nearer than ``inner``: that bound will do
+    sure = centre_d[back] + away <= inner
+    out[sure] = (centre_d[back] + away)[sure]
+    ask = np.flatnonzero(~sure & (centre_d[back] - away <= cap * (1 + 1e-9)))
     back = back[ask]
-    # points, from their fine cell's lines
     lo2 = np.searchsorted(kc, back, side="left")
     many2 = np.searchsorted(kc, back, side="right") - lo2
     which, at = _pairs(ask.size, lo2, many2)
     d2 = _line_distance2(x[ask[which]], y[ask[which]], segments[ks[at]])
-    out[ask[which[d2 <= reach * reach * (1 + 1e-12)]]] = True
+    best = np.full(ask.size, np.inf)
+    np.minimum.at(best, which, d2)
+    best = np.sqrt(best)
+    out[ask] = np.where(best <= cap * (1 + 1e-9), best, np.inf)
     return out
 
 
@@ -2119,6 +2337,8 @@ def etch_vertical(
                 known[1] = np.concatenate([values, stop[miss]])[order]
             return stop[back]
 
+        outline = _Outline(inside) if getattr(inside, "geometry", None) is not None else None
+
         def left_at(k):
             bottom = state.z[k]
             source = int(np.searchsorted(before.z, 0.5 * (state.z[k] + state.z[k + 1]), side="right")) - 1
@@ -2126,7 +2346,12 @@ def etch_vertical(
             def decide(x, y):
                 out = before.sample(source, x, y)
                 out[bottom >= stop_at(x, y) - Z_EPS] = VOID
-                return out
+                # the boundaries it left where they were, and the mask's
+                # edge (positive inside the opening)
+                channels = [before.cut_value(source, x, y)]
+                if outline is not None:
+                    channels.append(outline.signed(x, y))
+                return out, channels
 
             return decide
 
@@ -2138,14 +2363,43 @@ def etch_vertical(
     state.consolidate()
 
 
+def _plain_steps(grid: np.ndarray) -> np.ndarray:
+    """Plain cells beside a plain cell of another label: a boundary a
+    process left on the bulk grid may lie a little off it, in either."""
+    plain = grid != MIXED
+    out = np.zeros(grid.shape, dtype=bool)
+    step = (grid[1:, :] != grid[:-1, :]) & plain[1:, :] & plain[:-1, :]
+    out[1:, :] |= step
+    out[:-1, :] |= step
+    step = (grid[:, 1:] != grid[:, :-1]) & plain[:, 1:] & plain[:, :-1]
+    out[:, 1:] |= step
+    out[:, :-1] |= step
+    return out
+
+
+def _ring(near: np.ndarray) -> np.ndarray:
+    """``near`` and its eight neighbours."""
+    out = near.copy()
+    out[1:, :] |= near[:-1, :]
+    out[:-1, :] |= near[1:, :]
+    grown = out.copy()
+    out[:, 1:] |= grown[:, :-1]
+    out[:, :-1] |= grown[:, 1:]
+    return out
+
+
 def _boundary_cells(state: VoxelState, mask: Mask2 | None) -> np.ndarray:
     """Bulk cells where a boundary can be fitted: every refined cell of
-    any slab, the cells a mask's outline crosses, and -- one fine cell a
-    cell -- every cell with a neighbour of another label."""
+    any slab, the cells a mask's outline crosses, and the cells round
+    them -- a boundary that only clips a cell's corner leaves all its fine
+    centres on one side, and the cell plain -- and, one fine cell a cell,
+    every cell with a neighbour of another label."""
     ny, nx = state.ny, state.nx
     near = (state.labels == MIXED).any(axis=0)
     if mask is not None:
         near |= mask.coarse == 2
+    if state.refine > 1:
+        near = _ring(near)
     if state.refine == 1:
         for k in range(state.n):
             grid = state.labels[k]
@@ -2269,15 +2523,26 @@ def etch_isotropic(
             blocks = state.blocks(new_keys)
             blocks[fine] = fill
             state.store(new_keys, blocks)
-    # Boundaries: what the etchant left at any point of each slab.
+    # Boundaries: what the etchant left at any point of each slab. The
+    # march measures from the fine cells' faces; where the open space it
+    # started from has a cut edge, the straight way from that real edge is
+    # taken instead -- when it is within a little of the march's time, so
+    # the way really is straight (not round a wall, not through a faster
+    # material, not from a cavity that flooded later).
     if front.at is not None:
+        slowness = np.where(table > 0.0, 1.0 / np.where(table > 0.0, table, 1.0), 0.0)
+        tolerance = slowness * 2.0 * math.hypot(state.fine_x, state.fine_y)
+        wide = slowness * 2.0 * math.hypot(state.cell_x, state.cell_y)
+        radius = 8.0 * max(state.fine_x, state.fine_y)
+        edges = _Edges(before)
         for target in np.flatnonzero(changed):
             _check(should_cancel, "an isotropic etch")
+            height = float(middles[target])
 
-            def decide(x, y, target=int(target)):
+            def decide(x, y, target=int(target), height=height):
                 old = before.sample(target, x, y)
                 out = old.copy()
-                said = front.at(middles[target], int(source[target]), x, y)
+                said, when, face, faces = front.at(height, int(source[target]), x, y, times=True)
                 # where placing settled the whole fine cell, what it wrote there
                 settled = said < 0
                 if settled.any():
@@ -2287,12 +2552,186 @@ def etch_isotropic(
                         np.floor((y[settled] - state.bounds[1]) / state.fine_y).astype(np.int64),
                     )
                     said[settled] = (written == fill).astype(np.int8)
-                gone = (table[old] > 0.0) & (said > 0)
+                etchable = table[old] > 0.0
+                gone = etchable & (said > 0)
+                # near the front, from a wall the etchant stood on from the
+                # start: measured to the wall's real edge near the face's
+                # nearest spot, within a little of the march's own time
+                ask = np.flatnonzero(etchable & (face >= 0) & (np.abs(when - float(budget)) <= wide[old]))
+                if ask.size:
+                    f = face[ask]
+                    keep = faces.time[f] == 0.0
+                    ask, f = ask[keep], f[keep]
+                if ask.size:
+                    p = np.stack([x[ask], y[ask], np.full(ask.size, height)], 1)
+                    q = faces.nearest(f, p)
+                    level = faces.half[f, 2] == 0.0
+                    # the slab whose open space the face is on: an upright
+                    # face's own; a level face's, above or below the plane
+                    j = np.searchsorted(before.z, q[:, 2], side="right") - 1
+                    if level.any():
+                        lv = np.flatnonzero(level)
+                        up = np.clip(np.searchsorted(before.z, q[lv, 2], side="right"), 0, before.n) 
+                        up = np.clip(up - 1, 0, before.n - 1)
+                        down = np.clip(up - 1, 0, before.n - 1)
+                        mid = faces.centre[f[lv]]  # a face's corner may be just past its open space
+                        up_open = before.sample(up, mid[:, 0], mid[:, 1]) == VOID
+                        j[lv] = np.where(up_open, up, down)
+                    j = np.clip(j, 0, before.n - 1)
+                    flat = np.full(ask.size, np.inf)
+                    for slab in np.unique(j):
+                        pick = np.flatnonzero(j == slab)
+                        flat[pick] = edges.near(int(slab), q[pick, 0], q[pick, 1], p[pick, 0], p[pick, 1], radius)
+                        # a level face: straight over or under its open space
+                        over = pick[level[pick]]
+                        if over.size:
+                            flat[over[before.sample(int(slab), p[over, 0], p[over, 1]) == VOID]] = 0.0
+                    straight = slowness[old[ask]] * np.sqrt(flat * flat + (p[:, 2] - q[:, 2]) ** 2)
+                    gap = np.abs(straight - when[ask])
+                    agree = gap <= tolerance[old[ask]]
+                    # further off, the straight way only where it is clear:
+                    # its own material all the way, or open space
+                    check = np.flatnonzero(~agree & (gap <= wide[old[ask]]))
+                    if check.size:
+                        clear = np.ones(check.size, dtype=bool)
+                        for fr in np.linspace(0.05, 0.9, 12):
+                            at = p[check] + fr * (q[check] - p[check])
+                            j_at = np.clip(np.searchsorted(before.z, at[:, 2], side="right") - 1, 0, before.n - 1)
+                            got = np.empty(check.size, dtype=np.int64)
+                            for slab in np.unique(j_at):
+                                pick = np.flatnonzero(j_at == slab)
+                                got[pick] = before.sample(int(slab), at[pick, 0], at[pick, 1])
+                            clear &= (got == old[ask[check]]) | (got == VOID)
+                        agree[check[clear]] = True
+                    gone[ask[agree]] = straight[agree] <= float(budget)
+                    when = when.copy()
+                    when[ask[agree]] = straight[agree]
                 out[gone] = fill
-                return out
+                # how much time was to spare: positive where it got there
+                value = np.where(etchable, float(budget) - when, np.nan)
+                return out, (value, before.cut_value(target, x, y))
 
             _refit(state, int(target), _changed_cells(state, int(target), before, int(target)), decide)
     state.consolidate()
+
+
+class _Outline:
+    """A mask's outline, for how far points are from it (positive inside)."""
+
+    def __init__(self, mask: "Mask2") -> None:
+        self.mask = mask
+        rings = shapely.get_rings(shapely.get_parts(mask.geometry)) if not mask.geometry.is_empty else []
+        lines = [shapely.linestrings(shapely.get_coordinates(r)) for r in rings]
+        self.tree = shapely.STRtree(lines) if lines else None
+
+    def signed(self, x, y) -> np.ndarray:
+        x = np.asarray(x, float)
+        y = np.asarray(y, float)
+        if self.tree is None:
+            return np.full(x.size, np.nan)
+        points = shapely.points(x, y)
+        (first, _line), d = self.tree.query_nearest(points, return_distance=True, all_matches=False)
+        out = np.full(x.size, np.inf)
+        np.minimum.at(out, first, d)
+        inside = shapely.intersects_xy(self.mask.geometry, x, y)
+        return np.where(inside, out, -out)
+
+
+class _Edges:
+    """The solid's exact edges in each slab of a state (see
+    :func:`_solid_edges`), in buckets two fine cells wide, for the nearest
+    edge to a point near a given spot; each distinct slab once."""
+
+    def __init__(self, state: VoxelState) -> None:
+        self.state = state
+        self.size = 2.0 * max(state.fine_x, state.fine_y)
+        self.cols = int(math.ceil((state.bounds[2] - state.bounds[0]) / self.size)) + 1
+        self.rows = int(math.ceil((state.bounds[3] - state.bounds[1]) / self.size)) + 1
+        self.key_of: dict[int, bytes] = {}
+        self.found: dict[bytes, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+
+    def _slab(self, j: int):
+        if j not in self.key_of:
+            cells, refs = self.state.slab_refs(j)
+            self.key_of[j] = hashlib.blake2b(
+                self.state.labels[j].tobytes() + cells.tobytes() + refs.tobytes(), digest_size=16
+            ).digest()
+        key = self.key_of[j]
+        if key not in self.found:
+            seg = _solid_edges(self.state, j)
+            x_min, y_min = self.state.bounds[0], self.state.bounds[1]
+            b0x = np.floor((np.minimum(seg[:, 0], seg[:, 2]) - x_min) / self.size).astype(np.int64)
+            b1x = np.floor((np.maximum(seg[:, 0], seg[:, 2]) - x_min) / self.size).astype(np.int64)
+            b0y = np.floor((np.minimum(seg[:, 1], seg[:, 3]) - y_min) / self.size).astype(np.int64)
+            b1y = np.floor((np.maximum(seg[:, 1], seg[:, 3]) - y_min) / self.size).astype(np.int64)
+            wx, wy = b1x - b0x + 1, b1y - b0y + 1
+            many = wx * wy
+            which = np.repeat(np.arange(seg.shape[0]), many)
+            rank = np.arange(which.size) - np.repeat(np.cumsum(many) - many, many)
+            bx = b0x[which] + rank % wx[which]
+            by = b0y[which] + rank // wx[which]
+            bucket = by * self.cols + bx
+            order = np.argsort(bucket, kind="stable")
+            self.found[key] = (seg, bucket[order], which[order])
+        return self.found[key]
+
+    def _closest(self, j: int, qx, qy, px, py, radius: float):
+        """Among the edges within ``radius`` of spots (qx, qy): the distance
+        from points (px, py) to the nearest, and where on it."""
+        seg, bucket, which = self._slab(j)
+        best = np.full(px.size, np.inf)
+        bx_, by_ = qx.copy(), qy.copy()
+        if seg.shape[0] == 0 or px.size == 0:
+            return best, bx_, by_
+        x_min, y_min = self.state.bounds[0], self.state.bounds[1]
+        reach = int(math.ceil(radius / self.size))
+        cx = np.floor((qx - x_min) / self.size).astype(np.int64)
+        cy = np.floor((qy - y_min) / self.size).astype(np.int64)
+        for dy in range(-reach, reach + 1):
+            for dx in range(-reach, reach + 1):
+                b = (cy + dy) * self.cols + (cx + dx)
+                lo = np.searchsorted(bucket, b, side="left")
+                many = np.searchsorted(bucket, b, side="right") - lo
+                rows = np.repeat(np.arange(px.size), many)
+                if rows.size == 0:
+                    continue
+                at = np.arange(rows.size) - np.repeat(np.cumsum(many) - many, many) + np.repeat(lo, many)
+                g = seg[which[at]]
+                x0, y0 = g[:, 0], g[:, 1]
+                ex, ey = g[:, 2] - x0, g[:, 3] - y0
+                length2 = ex * ex + ey * ey
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    t = np.where(length2 > 0, ((px[rows] - x0) * ex + (py[rows] - y0) * ey) / length2, 0.0)
+                t = np.clip(t, 0.0, 1.0)
+                cxp, cyp = x0 + t * ex, y0 + t * ey
+                d = np.hypot(px[rows] - cxp, py[rows] - cyp)
+                order = np.lexsort((d, rows))
+                first = np.ones(order.size, dtype=bool)
+                first[1:] = rows[order][1:] != rows[order][:-1]
+                pick = order[first]
+                better = d[pick] < best[rows[pick]]
+                r_ = rows[pick][better]
+                best[r_] = d[pick][better]
+                bx_[r_] = cxp[pick][better]
+                by_[r_] = cyp[pick][better]
+        return best, bx_, by_
+
+    def near(self, j: int, qx, qy, px, py, radius: float, steps: int = 8) -> np.ndarray:
+        """The distance from points (px, py) to the edge of slab ``j``,
+        from spots (qx, qy) near the nearest: walked along the edge, a
+        ``radius`` at a time, while it gets nearer -- a spot handed on from
+        a wide square is near, not at, a point's nearest."""
+        best, qx, qy = self._closest(j, qx, qy, px, py, radius)
+        active = np.flatnonzero(np.isfinite(best))
+        for _ in range(steps):
+            if active.size == 0:
+                break
+            d, nx_, ny_ = self._closest(j, qx[active], qy[active], px[active], py[active], radius)
+            moved = d < best[active] - 1e-12 * (1.0 + best[active])
+            active = active[moved]
+            best[active] = d[moved]
+            qx[active], qy[active] = nx_[moved], ny_[moved]
+        return best
 
 
 def _changed_cells(state: VoxelState, k: int, before: VoxelState, j: int) -> np.ndarray:
@@ -2321,10 +2760,13 @@ def _changed_cells(state: VoxelState, k: int, before: VoxelState, j: int) -> np.
 
 
 def _edge_cells(state: VoxelState, k: int) -> np.ndarray:
-    """Cells of slab ``k`` a boundary can be fitted in: its refined cells,
+    """Cells of slab ``k`` a boundary can be fitted in: its refined cells
+    and the cells round them (a boundary may clip a plain cell's corner),
     and -- one fine cell a cell -- every cell beside another label."""
     grid = state.labels[k]
     near = grid == MIXED
+    if state.refine > 1:
+        near = _ring(near) | _plain_steps(grid)
     if state.refine == 1:
         differs = np.zeros(grid.shape, dtype=bool)
         step = grid[1:, :] != grid[:-1, :]
@@ -3202,7 +3644,7 @@ def _top_vector(state: VoxelState, colors, extent, width, height, hidden_ids, st
     fill_code = np.where(other != lab, code, 0)
     cut = voxel_cut.pack(fill_code, other)
     found = voxel_vector.field_loops(
-        coarse, cells, lab.astype(np.uint8), cut, x_min, y_min, 0.5 * state.fine_x, 0.5 * state.fine_y
+        coarse, cells, lab.astype(np.uint8), cut, x_min, y_min, state.fine_x / voxel_cut.STEPS, state.fine_y / voxel_cut.STEPS
     )
     fills = [(state.materials[m - 1], *found[m]) for m in sorted(found) if 0 < m <= len(state.materials)]
     strokes = []
@@ -3212,8 +3654,8 @@ def _top_vector(state: VoxelState, colors, extent, width, height, hidden_ids, st
             pick = mat == m
             count = int(pick.sum())
             points = np.stack([
-                np.stack([x_min + x0[pick] * 0.5 * state.fine_x, y_min + y0[pick] * 0.5 * state.fine_y], 1),
-                np.stack([x_min + x1[pick] * 0.5 * state.fine_x, y_min + y1[pick] * 0.5 * state.fine_y], 1),
+                np.stack([x_min + x0[pick] * state.fine_x / voxel_cut.STEPS, y_min + y0[pick] * state.fine_y / voxel_cut.STEPS], 1),
+                np.stack([x_min + x1[pick] * state.fine_x / voxel_cut.STEPS, y_min + y1[pick] * state.fine_y / voxel_cut.STEPS], 1),
             ], 1).reshape(-1, 2)
             strokes.append((state.materials[int(m) - 1], points, np.arange(count) * 2))
     return voxel_vector.payload(fills, strokes, colors, extent, width, height, darker)
@@ -3431,24 +3873,34 @@ def build_meshes(state: VoxelState, *, buried: bool) -> dict[str, tuple[np.ndarr
     return meshes
 
 
-#: The most corners a face has: a cut wall with the crossings of the cuts
-#: below and above put into its bottom and top edges.
-_WIDEST = 6
+#: The most corners a face has: a floor piece a cut below and a cut above
+#: split off (see voxel_cut.floor_pieces).
+_WIDEST = voxel_cut.PIECE_POINTS
 
 
 def _join_units(table: np.ndarray) -> tuple[np.ndarray, ...]:
     """Unit faces (owner, other, orient, sense, line, u, v) joined into
     rectangles: along u, then along v. Returns (owner, other, orient,
     sense, line, u0, u1, v0, v1), ends exclusive."""
-    order = _row_order(table[:, [0, 1, 2, 3, 4, 6, 5]])
+    pieces = np.concatenate([table[:, :6], table[:, 5:6] + 1, table[:, 6:7]], axis=1)
+    return _join_pieces(pieces)
+
+
+def _join_pieces(table: np.ndarray) -> tuple[np.ndarray, ...]:
+    """Faces (owner, other, orient, sense, line, u0, u1, v) -- a stretch of
+    a line in one slab -- joined into rectangles: along u where one ends as
+    the next starts, then along v. Returns (owner, other, orient, sense,
+    line, u0, u1, v0, v1), ends exclusive."""
+    order = _row_order(table[:, [0, 1, 2, 3, 4, 7, 5]])
     rec = table[order]
+    key = [0, 1, 2, 3, 4, 7]
     start = np.ones(rec.shape[0], dtype=bool)
-    start[1:] = (rec[1:, [0, 1, 2, 3, 4, 6]] != rec[:-1, [0, 1, 2, 3, 4, 6]]).any(axis=1) | (rec[1:, 5] != rec[:-1, 5] + 1)
+    start[1:] = (rec[1:, key] != rec[:-1, key]).any(axis=1) | (rec[1:, 5] != rec[:-1, 6])
     begin = np.flatnonzero(start)
     end = np.concatenate([begin[1:], [rec.shape[0]]]) - 1
     runs = np.stack([rec[begin, 0], rec[begin, 1], rec[begin, 2], rec[begin, 3], rec[begin, 4],
-                     rec[begin, 5], rec[end, 5] + 1, rec[begin, 6]], 1)  # ..., u0, u1, v
-    order = _row_order(runs[:, [0, 1, 2, 3, 4, 5, 6, 7]])
+                     rec[begin, 5], rec[end, 6], rec[begin, 7]], 1)  # ..., u0, u1, v
+    order = _row_order(runs)
     runs = runs[order]
     start = np.ones(runs.shape[0], dtype=bool)
     start[1:] = (runs[1:, :7] != runs[:-1, :7]).any(axis=1) | (runs[1:, 7] != runs[:-1, 7] + 1)
@@ -3463,26 +3915,26 @@ def _fine_faces(state: VoxelState):
     neighbour, points (P, W, 3), corner count) per group, the points
     counter-clockwise seen from outside the owner.
 
-    Floors and ceilings between fine cells that are not cut, and walls
-    between fine cells half a side at a time, are unit faces joined into
-    rectangles; a floor or ceiling a cut crosses is split into the parts
-    the cuts below and above make, and a cut cell has a wall along its
-    cut."""
+    Floors and ceilings between fine cells that are not cut are unit faces
+    joined into rectangles, and so are walls between fine cells, read in
+    the pieces the cuts' ends split a side into; a floor or ceiling a cut
+    crosses is split into the parts the cuts below and above make, and a
+    cut cell has a wall along its cut."""
     B, n, nx, ny, plane = state.refine, state.n, state.nx, state.ny, state.plane
     M = voxel_cut.LATTICE
-    H = M // 2
+    Q = voxel_cut.STEPS
+    S = M // Q  # lattice points an anchor step
     labels = state.labels
     code_of, other_of = voxel_cut.code_of, voxel_cut.other_of
-    left_on = voxel_cut.EDGE_LEFT
     floors: list[np.ndarray] = []  # unit faces, a fine cell each
-    sides: list[np.ndarray] = []  # unit faces, half a fine side each
+    sides: list[np.ndarray] = []  # stretches of a fine side, in anchor steps
     out: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
 
     def blocks(k, cells, fill):
         if 0 <= k < n:
             keys = k * plane + cells
             return state.blocks(keys).astype(np.int16), state.cuts(keys)
-        return np.full((cells.size, B, B), fill, dtype=np.int16), np.zeros((cells.size, B, B), dtype=np.uint16)
+        return np.full((cells.size, B, B), fill, dtype=np.int16), np.zeros((cells.size, B, B), dtype=np.uint32)
 
     def emit(into, a, b, orient, line, u, v, where=None):
         # a sits on the negative side of the face, b on the positive one
@@ -3498,10 +3950,30 @@ def _fine_faces(state: VoxelState):
                     np.broadcast_to(v, face.shape)[face],
                 ], 1).astype(np.int64))
 
-    def material(lab, cut, side, half):
-        """The material of each fine cell along half ``half`` of its side ``side``."""
-        code = code_of(cut)
-        return np.where(left_on[code, side, half], lab, other_of(cut).astype(np.int16))
+    def emit_pieces(a_cell, b_cell, side_a, side_b, orient, line, base, v):
+        """The shared sides of fine cells ``a_cell`` and ``b_cell`` (label,
+        cut arrays alike), each in up to three pieces; ``base`` is where
+        each side starts along its line, in anchor steps."""
+        la, ca = a_cell
+        lb, cb = b_cell
+        sa = voxel_cut.side_materials(la.astype(np.int64), code_of(ca), other_of(ca).astype(np.int64), side_a)
+        sb = voxel_cut.side_materials(lb.astype(np.int64), code_of(cb), other_of(cb).astype(np.int64), side_b)
+        st, sp, ma, mb = voxel_cut.pieces(sa[0], sb[0], (sa[1], sa[2], sa[0]), (sb[1], sb[2], sb[0]))
+        # outside the window stays outside whatever the cut says
+        ma = np.where(la[None] == _OUTSIDE, _OUTSIDE, ma)
+        mb = np.where(lb[None] == _OUTSIDE, _OUTSIDE, mb)
+        there = sp > st
+        u0 = base[None] + st
+        u1 = base[None] + sp
+        ln = np.broadcast_to(line, ma.shape[1:])[None]
+        for owner, other, sense in ((ma, mb, 1), (mb, ma, 0)):
+            face = there & (owner != other) & (owner != VOID) & (owner != _OUTSIDE)
+            if face.any():
+                count = int(face.sum())
+                sides.append(np.stack([
+                    owner[face], other[face], np.full(count, orient), np.full(count, sense),
+                    np.broadcast_to(ln, face.shape)[face], u0[face], u1[face], np.full(count, v),
+                ], 1).astype(np.int64))
 
     fine = np.arange(B)
     # Floors and ceilings.
@@ -3530,29 +4002,33 @@ def _fine_faces(state: VoxelState):
         high_other = other_of(ca[c, ry, rx]).astype(np.int16)
         ox = (ix[c] * B + rx) * M
         oy = (iy[c] * B + ry) * M
-        pair = code_b * 33 + code_a
-        for key in _unique(pair):
-            sel = np.flatnonzero(pair == key)
-            for poly, left_b, left_a in voxel_cut.regions(int(key) // 33, int(key) % 33):
-                mb = low[sel] if left_b else low_other[sel]
-                ma = high[sel] if left_a else high_other[sel]
-                face = mb != ma
-                if not face.any():
-                    continue
-                pick = sel[face]
-                pts = np.empty((pick.size, len(poly), 3), dtype=np.int64)
-                pts[:, :, 0] = ox[pick][:, None] + poly[None, :, 0]
-                pts[:, :, 1] = oy[pick][:, None] + poly[None, :, 1]
-                pts[:, :, 2] = b
-                # up: the material below owns it; down: the one above, reversed
-                out.append((mb[face], ma[face], pts, np.full(pick.size, len(poly))))
-                out.append((ma[face], mb[face], pts[:, ::-1], np.full(pick.size, len(poly))))
-    halves = np.arange(2 * B)
+        points, count, left_b, left_a = voxel_cut.floor_pieces(code_b, code_a)
+        W = voxel_cut.PIECE_POINTS
+        for j in range(4):
+            mb = low if left_b[j] else low_other
+            ma = high if left_a[j] else high_other
+            face = (count[:, j] > 0) & (mb != ma)
+            if not face.any():
+                continue
+            pick = np.flatnonzero(face)
+            pts = np.empty((pick.size, W, 3), dtype=np.int64)
+            pts[:, :, 0] = ox[pick][:, None] + points[pick, j, :, 0]
+            pts[:, :, 1] = oy[pick][:, None] + points[pick, j, :, 1]
+            pts[:, :, 2] = b
+            size = count[pick, j]
+            # up: the material below owns it; down: the one above, reversed
+            out.append((mb[pick], ma[pick], pts, size))
+            idx = size[:, None] - 1 - np.arange(W)[None, :]
+            idx = np.where(idx >= 0, idx, 0)
+            out.append((ma[pick], mb[pick], np.take_along_axis(pts, idx[:, :, None].repeat(3, axis=2), axis=1), size))
     for k in range(n):
         grid = labels[k]
         mixed = grid == MIXED
         if not mixed.any():
             continue
+        cells = np.flatnonzero(mixed.reshape(-1))
+        iy, ix = np.divmod(cells, nx)
+        data, cut = blocks(k, cells, VOID)
         for axis in (0, 1):  # walls facing x, then y
             # pairs of cells side by side along the axis, either refined;
             # the window edge is a neighbour outside
@@ -3579,39 +4055,22 @@ def _fine_faces(state: VoxelState):
             high_c[~high_ok] = 0
             if axis == 0:
                 # the low cell's right side, the high cell's left side, along y
-                a = np.stack([material(low_l[:, :, -1], low_c[:, :, -1], 1, h) for h in (0, 1)], -1).reshape(-1, 2 * B)
-                bb = np.stack([material(high_l[:, :, 0], high_c[:, :, 0], 3, h) for h in (0, 1)], -1).reshape(-1, 2 * B)
-                line = (cc * B)[:, None] * M
-                u = r[:, None] * 2 * B + halves[None, :]
+                line = ((cc * B) * M)[:, None]
+                base = (r[:, None] * B + fine[None, :]) * Q
+                emit_pieces((low_l[:, :, -1], low_c[:, :, -1]), (high_l[:, :, 0], high_c[:, :, 0]), 1, 3, 0, line, base, k)
+                # inside refined cells: between fine columns q and q + 1, along y
+                line = ((ix[:, None, None] * B + fine[None, None, 1:]) * M)
+                base = (iy[:, None, None] * B + fine[None, :, None]) * Q
+                emit_pieces((data[:, :, :-1], cut[:, :, :-1]), (data[:, :, 1:], cut[:, :, 1:]), 1, 3, 0, line, base, k)
             else:
-                a = np.stack([material(low_l[:, -1, :], low_c[:, -1, :], 0, h) for h in (0, 1)], -1).reshape(-1, 2 * B)
-                bb = np.stack([material(high_l[:, 0, :], high_c[:, 0, :], 2, h) for h in (0, 1)], -1).reshape(-1, 2 * B)
-                line = (r * B)[:, None] * M
-                u = cc[:, None] * 2 * B + halves[None, :]
-            emit(sides, a, bb, axis, line, u, np.int64(k))
-            # inside refined cells
-            cells = np.flatnonzero(mixed.reshape(-1))
-            iy, ix = np.divmod(cells, nx)
-            data, cut = blocks(k, cells, VOID)
-            if axis == 0:
-                a = np.stack([material(data[:, :, :-1], cut[:, :, :-1], 1, h) for h in (0, 1)], -1)  # (m, B, B-1, 2)
-                bb = np.stack([material(data[:, :, 1:], cut[:, :, 1:], 3, h) for h in (0, 1)], -1)
-                a = a.transpose(0, 2, 1, 3).reshape(cells.size, B - 1, 2 * B)
-                bb = bb.transpose(0, 2, 1, 3).reshape(cells.size, B - 1, 2 * B)
-                line = ((ix[:, None, None] * B + fine[None, 1:, None]) * M)
-                u = iy[:, None, None] * 2 * B + halves[None, None, :]
-            else:
-                a = np.stack([material(data[:, :-1, :], cut[:, :-1, :], 0, h) for h in (0, 1)], -1)  # (m, B-1, B, 2)
-                bb = np.stack([material(data[:, 1:, :], cut[:, 1:, :], 2, h) for h in (0, 1)], -1)
-                a = a.reshape(cells.size, B - 1, 2 * B)
-                bb = bb.reshape(cells.size, B - 1, 2 * B)
+                # the low cell's top side, the high cell's bottom side, along x
+                line = ((r * B) * M)[:, None]
+                base = (cc[:, None] * B + fine[None, :]) * Q
+                emit_pieces((low_l[:, -1, :], low_c[:, -1, :]), (high_l[:, 0, :], high_c[:, 0, :]), 0, 2, 1, line, base, k)
                 line = ((iy[:, None, None] * B + fine[None, 1:, None]) * M)
-                u = ix[:, None, None] * 2 * B + halves[None, None, :]
-            emit(sides, a, bb, axis, line, u, np.int64(k))
+                base = (ix[:, None, None] * B + fine[None, None, :]) * Q
+                emit_pieces((data[:, :-1, :], cut[:, :-1, :]), (data[:, 1:, :], cut[:, 1:, :]), 0, 2, 1, line, base, k)
         # the walls along the cuts
-        cells = np.flatnonzero(mixed.reshape(-1))
-        iy, ix = np.divmod(cells, nx)
-        data, cut = blocks(k, cells, VOID)
         c, ry, rx = np.nonzero(cut > 0)
         if c.size:
             code = code_of(cut[c, ry, rx])
@@ -3623,12 +4082,12 @@ def _fine_faces(state: VoxelState):
             ox = (ix[c] * B + rx) * M
             oy = (iy[c] * B + ry) * M
             start, end = voxel_cut.START[code], voxel_cut.END[code]
-            ax_ = ox + (voxel_cut.ANCHORS[start, 0] * M).astype(np.int64)
-            ay_ = oy + (voxel_cut.ANCHORS[start, 1] * M).astype(np.int64)
-            bx_ = ox + (voxel_cut.ANCHORS[end, 0] * M).astype(np.int64)
-            by_ = oy + (voxel_cut.ANCHORS[end, 1] * M).astype(np.int64)
-            cross_b = _crossings(code, code_below)
-            cross_t = _crossings(code, code_above)
+            ax_ = ox + voxel_cut.ANCHOR_LATTICE[start, 0]
+            ay_ = oy + voxel_cut.ANCHOR_LATTICE[start, 1]
+            bx_ = ox + voxel_cut.ANCHOR_LATTICE[end, 0]
+            by_ = oy + voxel_cut.ANCHOR_LATTICE[end, 1]
+            cross_b = voxel_cut.crossing(code, code_below)
+            cross_t = voxel_cut.crossing(code, code_above)
             count = code.size
             # the label's face looks across to the right: A0, (Xb), B0, B1, (Xt), A1
             pts = np.zeros((count, _WIDEST, 3), dtype=np.int64)
@@ -3666,8 +4125,8 @@ def _fine_faces(state: VoxelState):
         )
         out.append((own, nb, corners, np.full(own.size, 4)))
     if sides:
-        own, nb, orient, sense, line, u0, u1, v0, v1 = _join_units(np.concatenate(sides))
-        L, a0, a1, b0, b1 = line, u0 * H, u1 * H, v0, v1
+        own, nb, orient, sense, line, u0, u1, v0, v1 = _join_pieces(np.concatenate(sides))
+        L, a0, a1, b0, b1 = line, u0 * S, u1 * S, v0, v1
         for o in (0, 1):
             for sn in (1, 0):
                 pick = (orient == o) & (sense == sn)
@@ -3681,18 +4140,6 @@ def _fine_faces(state: VoxelState):
                     corners = (np.stack([np.stack([p0, Lp, q0], -1), np.stack([p0, Lp, q1], -1), np.stack([p1, Lp, q1], -1), np.stack([p1, Lp, q0], -1)], 1) if sn
                                else np.stack([np.stack([p0, Lp, q0], -1), np.stack([p1, Lp, q0], -1), np.stack([p1, Lp, q1], -1), np.stack([p0, Lp, q1], -1)], 1))
                 out.append((own[pick], nb[pick], corners, np.full(int(pick.sum()), 4)))
-    return out
-
-
-def _crossings(code: np.ndarray, other: np.ndarray) -> np.ndarray:
-    """Where cut ``other`` crosses cut ``code`` strictly inside it, on the
-    lattice within the cell: (count, 2), -1 where it does not."""
-    out = np.full((code.size, 2), -1, dtype=np.int64)
-    pair = code.astype(np.int64) * 33 + other.astype(np.int64)
-    for key in _unique(pair):
-        point = voxel_cut.crossing(int(key) // 33, int(key) % 33)
-        if point is not None:
-            out[pair == key] = point
     return out
 
 
@@ -3944,63 +4391,20 @@ def resample(state: VoxelState, refine: int, should_cancel: Callable[[], bool] |
     return new
 
 
-@functools.lru_cache(maxsize=8)
-def _children(f: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """How the f x f children of a fine cell cut by each line (code 1..32)
-    are drawn, with 1 for the material left of the parent's line and 2 for
-    the other: (label, cut code, material across the cut), each (33, f, f).
-
-    A child takes the side of the parent's line its centre is on; a child
-    the line crosses is fitted from the line exactly as :func:`_refit`
-    fits a cell -- anchors a hair inside, half sides snapped at their
-    middles. Only which side is which matters to the fitting, so this is
-    worked out once per line and per child.
-    """
-    codes = np.repeat(np.arange(1, 33), f * f)
-    orow = np.tile(np.repeat(np.arange(f), f), 32)
-    ocol = np.tile(np.arange(f), 32 * f)
-    one = np.ones(codes.size, np.uint8)
-
-    def side(cc, u, v, a, o):
-        return np.where(voxel_cut.left_of(cc, u, v), a, o).astype(np.uint8)
-
-    centre = side(codes, (ocol + 0.5) / f, (orow + 0.5) / f, one, 2 * one)
-    inward = 0.5 + (voxel_cut.ANCHORS - 0.5) * (1.0 - 2e-3)
-    au = (ocol[:, None] + inward[None, :, 0]) / f
-    av = (orow[:, None] + inward[None, :, 1]) / f
-    anchor = side(codes[:, None], au, av, one[:, None], 2 * one[:, None])
-    crossing = anchor != np.roll(anchor, -1, axis=1)
-    snap = np.broadcast_to(voxel_cut.TO_MIDDLE, anchor.shape).copy()
-    rr, h = np.nonzero(crossing)
-    if rr.size:
-        middle = 0.5 + (voxel_cut.half_middles() - 0.5) * (1.0 - 2e-3)
-        mu = (ocol[rr] + middle[h, 0]) / f
-        mv = (orow[rr] + middle[h, 1]) / f
-        got = side(codes[rr], mu, mv, one[rr], 2 * one[rr])
-        snap[rr, h] = np.where(got == anchor[rr, (h + 1) % 8], 0, 1)
-    label, cut = voxel_cut.fit(anchor, centre, snap)
-    shape = (32, f, f)
-    pad = np.zeros((1, f, f), np.uint8)
-    return (
-        np.concatenate([pad, label.reshape(shape)]),
-        np.concatenate([pad, voxel_cut.code_of(cut).astype(np.uint8).reshape(shape)]),
-        np.concatenate([pad, voxel_cut.other_of(cut).reshape(shape)]),
-    )
-
-
 def _refined_bricks(blocks: np.ndarray, cuts: np.ndarray, f: int) -> tuple[np.ndarray, np.ndarray]:
     """Bricks (P, b, b) with their cuts, each fine cell split into f x f.
 
     A child takes its parent's material, or the side of the parent's cut
-    its centre is on; a child the cut crosses is fitted from its parent's
-    line (see :func:`_children`), and every line between two parent
-    anchors runs through child anchors, so nothing is lost.
+    its centre is on; a child the cut crosses (its corners are not all on
+    one side) is fitted from its parent's line as :func:`_refit` fits a
+    cell, so its cut runs from anchor to anchor within a step of the
+    parent's line.
     """
     P, b, _ = blocks.shape
     B = b * f
     parent = np.arange(B) // f
     labels = blocks[:, parent[:, None], parent[None, :]]
-    out_cut = np.zeros((P, B, B), dtype=np.uint16)
+    out_cut = np.zeros((P, B, B), dtype=np.uint32)
     p, r, c = np.nonzero(cuts)
     if p.size == 0:
         return labels, out_cut
@@ -4008,20 +4412,29 @@ def _refined_bricks(blocks: np.ndarray, cuts: np.ndarray, f: int) -> tuple[np.nd
     code = voxel_cut.code_of(packed)
     other = voxel_cut.other_of(packed)
     mine = blocks[p, r, c]
-    label_of, code_of, across_of = _children(f)
-    pick = [mine[:, None, None], other[:, None, None]]
-    child = np.where(label_of[code] == 1, *pick)
-    child_code = code_of[code]
-    child_cut = voxel_cut.pack(child_code, np.where(across_of[code] == 1, *pick))
-    # a line with one material on both sides draws nothing
-    same = mine == other
-    child[same] = mine[same][:, None, None]
-    child_cut[same] = 0
+    g = np.arange(f + 1) / f
+    corner_left = voxel_cut.left_of(code[:, None, None], g[None, None, :], g[None, :, None])  # (m, v, u)
+    half = (np.arange(f) + 0.5) / f
+    centre_left = voxel_cut.left_of(code[:, None, None], half[None, None, :], half[None, :, None])
+    child = np.where(centre_left, mine[:, None, None], other[:, None, None]).astype(np.uint8)
     at = np.arange(f)
     rows = r[:, None, None] * f + at[None, :, None]
     cols = c[:, None, None] * f + at[None, None, :]
     labels[p[:, None, None], rows, cols] = child
-    out_cut[p[:, None, None], rows, cols] = child_cut
+    # children the line crosses
+    first = corner_left[:, :-1, :-1]
+    mixed = (corner_left[:, :-1, 1:] != first) | (corner_left[:, 1:, :-1] != first) | (corner_left[:, 1:, 1:] != first)
+    q, i, j = np.nonzero(mixed)
+    if q.size:
+        # each parent cell laid out at x = 2q in a plane of its own
+        def decide(x, y):
+            which = np.floor(np.asarray(x) / 2.0).astype(np.int64)
+            left = voxel_cut.left_of(code[which], np.asarray(x) - 2.0 * which, np.asarray(y))
+            return np.where(left, mine[which], other[which])
+
+        label, cut = _fit_cells(2.0 * q + j / f, i / f, 1.0 / f, 1.0 / f, child[q, i, j], decide)
+        labels[p[q], r[q] * f + i, c[q] * f + j] = label
+        out_cut[p[q], r[q] * f + i, c[q] * f + j] = cut
     return labels, out_cut
 
 

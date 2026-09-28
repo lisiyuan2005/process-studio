@@ -1036,8 +1036,8 @@ def test_filling_a_whole_cell_that_holds_a_cut_leaves_no_stale_brick():
     fine = np.zeros((2, 32, 32), np.uint8)
     fine[0] = 1
     fine[1, :, :12] = 2
-    cuts = np.zeros(fine.shape, np.uint16)
-    cuts[1, 5, 12] = voxel_cut.pack(np.array(voxel_cut.CODE_OF[5, 1]), np.array(2))
+    cuts = np.zeros(fine.shape, np.uint32)
+    cuts[1, 5, 12] = voxel_cut.pack(np.array(voxel_cut.CODE_OF[5 * voxel_cut.HALF, 1 * voxel_cut.HALF]), np.array(2))
     state = voxel.VoxelState.from_fine(
         (0.0, 0.0, 1.0, 1.0), fine, 4, np.array([0.0, 0.1, 0.2]), ["Si", "SiO2", "SiN"], cuts=cuts
     )
@@ -1054,10 +1054,10 @@ def test_a_state_drawn_on_a_finer_or_coarser_grid_keeps_its_shape():
     k = state.n - 1
     finer = voxel.resample(state, 16)
     finer.check()
-    # every line between two anchors runs through finer anchors: nothing moves
+    # the finer cells' lines run within a finer anchor step of the old ones
     assert (finer.sample(k, x, y) == state.sample(k, x, y)).mean() > 0.999
     for name in state.present():
-        assert finer.volume(name) == pytest.approx(state.volume(name), rel=1e-12)
+        assert finer.volume(name) == pytest.approx(state.volume(name), rel=1e-5)
     coarser = voxel.resample(finer, 2)
     coarser.check()
     assert coarser.refine == 2
@@ -1094,13 +1094,14 @@ def test_the_polygon_view_holds_the_state_as_polygon_slabs_that_follow_the_circl
 
 
 def test_a_map_with_no_refined_cell_is_outlined_on_its_own_grid():
-    from process_studio.kernels import voxel_vector
+    from process_studio.kernels import voxel_cut, voxel_vector
 
     # refined four times, but no brick yet: the outline is still the window
     labels = np.ones((8, 8), np.uint8)
+    unit = 1 / 32 / voxel_cut.STEPS
     found = voxel_vector.field_loops(
-        labels, np.zeros(0, np.int64), np.zeros((0, 4, 4), np.uint8), np.zeros((0, 4, 4), np.uint16),
-        0.0, 0.0, 0.5 / 32, 0.5 / 32,
+        labels, np.zeros(0, np.int64), np.zeros((0, 4, 4), np.uint8), np.zeros((0, 4, 4), np.uint32),
+        0.0, 0.0, unit, unit,
     )
     points, _starts = found[1]
     assert points.min(axis=0).tolist() == [0.0, 0.0] and points.max(axis=0).tolist() == [1.0, 1.0]
