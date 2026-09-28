@@ -1439,7 +1439,14 @@ def _fit_cells(x0, y0, fx, fy, centre, decide) -> tuple[np.ndarray, np.ndarray]:
     odd = np.flatnonzero(~(anchor == centre[:, None]).any(axis=1))
     if odd.size:
         centre[odd] = ask(*at(np.full(odd.size, 0.5), np.full(odd.size, 0.5), odd))[0]
-    return voxel_cut.fit(anchor, centre, place)
+    label, cut = voxel_cut.fit(anchor, centre, place)
+    # Two materials round the cell but no cut (both crossings at one
+    # corner, say): whole, as what is at the centre -- asked, not as given.
+    left = np.flatnonzero((cut == 0) & (anchor != anchor[:, :1]).any(axis=1))
+    left = left[~np.isin(left, odd)]
+    if left.size:
+        label[left] = ask(*at(np.full(left.size, 0.5), np.full(left.size, 0.5), left))[0]
+    return label, cut
 
 
 def _refit(state: VoxelState, k: int, cells: np.ndarray, decide, memo: dict | None = None, context: bytes = b"") -> None:
@@ -2533,7 +2540,7 @@ def etch_isotropic(
         slowness = np.where(table > 0.0, 1.0 / np.where(table > 0.0, table, 1.0), 0.0)
         tolerance = slowness * 2.0 * math.hypot(state.fine_x, state.fine_y)
         wide = slowness * 2.0 * math.hypot(state.cell_x, state.cell_y)
-        radius = 8.0 * max(state.fine_x, state.fine_y)
+        radius = 2.0 * max(state.fine_x, state.fine_y)
         edges = _Edges(before)
         for target in np.flatnonzero(changed):
             _check(should_cancel, "an isotropic etch")
@@ -2716,7 +2723,7 @@ class _Edges:
                 by_[r_] = cyp[pick][better]
         return best, bx_, by_
 
-    def near(self, j: int, qx, qy, px, py, radius: float, steps: int = 8) -> np.ndarray:
+    def near(self, j: int, qx, qy, px, py, radius: float, steps: int = 64) -> np.ndarray:
         """The distance from points (px, py) to the edge of slab ``j``,
         from spots (qx, qy) near the nearest: walked along the edge, a
         ``radius`` at a time, while it gets nearer -- a spot handed on from
