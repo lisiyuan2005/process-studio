@@ -13,7 +13,6 @@ import type {
   SectionLine,
   SurfaceDocument,
   Triangulation,
-  VoxelMesh,
   UpdateInfo,
   TopViewDocument,
   WindowBounds,
@@ -38,6 +37,11 @@ export interface RunOptions {
    * this is only for walking a whole flow without ever waiting.
    */
   prepareBuried?: boolean;
+  /**
+   * Build the 3D views of the steps that ran, in the background (the
+   * default). Off in the recipe view, where no geometry is looked at.
+   */
+  warmViews?: boolean;
 }
 
 export interface ViewRequest {
@@ -47,8 +51,6 @@ export interface ViewRequest {
   interpolation?: number;
   /** 3D view only: which triangulator builds the mesh. */
   triangulation?: Triangulation;
-  /** 3D view of a voxel state only: cells or polygons. */
-  mesh?: VoxelMesh;
   /**
    * 3D view only: also build the faces that lie against another material.
    * They are invisible while both materials are shown and are most of a

@@ -139,6 +139,7 @@ def run_flow(
     force: bool = False,
     from_step_id: str | None = None,
     prepare_buried: bool = False,
+    warm_views: bool = True,
     progress: ProgressCallback | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
@@ -288,14 +289,17 @@ def run_flow(
             "message": f"Finished {len(executed)} step(s), {len(cached)} cache hit(s) in {elapsed_ms:.0f} ms",
         }
     )
-    _warm_views_later(
-        kernel,
-        [
-            repository.snapshot_path(branch.id, result_key(step_id, project.fidelity))
-            for step_id in executed
-        ],
-        buried=prepare_buried,
-    )
+    # Nobody is looking at the geometry (the recipe view): building every
+    # step's 3D mesh would only take the processor from the next run.
+    if warm_views:
+        _warm_views_later(
+            kernel,
+            [
+                repository.snapshot_path(branch.id, result_key(step_id, project.fidelity))
+                for step_id in executed
+            ],
+            buried=prepare_buried,
+        )
     return {
         "branchId": branch.id,
         "executedStepIds": executed,

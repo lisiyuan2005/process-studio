@@ -697,12 +697,7 @@ def _import_recipes(parameters: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-#: The voxel model's two ways to draw the 3D view: a face per fine cell
-#: side, or polygon slabs (see kernels.voxel_polygons).
-MESH_METHODS = ("cells", "polygons")
-
-
-def _prepare_buried_faces_later(kernel: Any, state: Any, project: Any, mesh: str | None = None) -> None:
+def _prepare_buried_faces_later(kernel: Any, state: Any, project: Any) -> None:
     """Build the mesh a peek behind a hidden material needs, in the background.
 
     The view that was just answered does not wait for it, and neither does
@@ -712,7 +707,7 @@ def _prepare_buried_faces_later(kernel: Any, state: Any, project: Any, mesh: str
 
     def work() -> None:
         try:
-            kernel.warm_views(state, buried=True, mesh=mesh)
+            kernel.warm_views(state, buried=True)
         except Exception:  # noqa: BLE001 - a warm-up must never surface as an error
             pass
 
@@ -833,6 +828,7 @@ def dispatch(
             force=bool(parameters.get("force", False)),
             from_step_id=parameters.get("fromStepId"),
             prepare_buried=bool(parameters.get("prepareBuried", False)),
+            warm_views=bool(parameters.get("warmViews", True)),
             progress=progress,
             should_cancel=(lambda: False) if cancel is None else cancel.is_set,
         )
@@ -847,9 +843,6 @@ def dispatch(
                 raise InvalidRequest(
                     f"get_surfaces triangulation must be one of {', '.join(MESH_ENGINES)}."
                 )
-        mesh = parameters.get("mesh")
-        if mesh is not None and mesh not in MESH_METHODS:
-            raise InvalidRequest(f"get_surfaces mesh must be one of {', '.join(MESH_METHODS)}.")
         payload = kernel.surfaces(
             state,
             project=project,
@@ -857,9 +850,7 @@ def dispatch(
             materials=None if materials is None else [str(name) for name in materials],
             triangulation=triangulation,
             buried=buried,
-            mesh=mesh,
         )
-        payload["mesh"] = mesh or "cells"
         if not buried:
             # Looking at a step is the best guess there is that its buried
             # faces will be wanted: hiding a material is the next thing
@@ -867,7 +858,7 @@ def dispatch(
             # sent. Prepared now, in the background, for this step alone --
             # preparing every step of a run took half a minute of a flow's
             # worth of them, most never looked at.
-            _prepare_buried_faces_later(kernel, state, project, mesh)
+            _prepare_buried_faces_later(kernel, state, project)
         colors = _material_colors(repository)
         for surface in payload["surfaces"]:
             surface["color"] = colors.get(surface["material"], "#7c83a0")

@@ -20,6 +20,7 @@ from ..models import (
     ProjectDefinition,
     Recipe,
     ToolDefinition,
+    known_fidelity,
     new_id,
 )
 from .errors import InvalidRequest
@@ -387,7 +388,7 @@ def project_from_json(payload: Mapping[str, Any]) -> ProjectDefinition:
         raise InvalidRequest("project id cannot be empty")
     resolution = payload.get("resolutionUm")
     resolution_xy = payload.get("resolutionXyUm")
-    fidelity = str(payload.get("fidelity") or "simplified")
+    fidelity = known_fidelity(payload.get("fidelity"))
     if fidelity not in FIDELITIES:
         raise InvalidRequest(f"project fidelity must be one of {FIDELITIES}, got {fidelity!r}.")
     return ProjectDefinition(

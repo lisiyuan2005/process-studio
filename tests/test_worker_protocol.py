@@ -372,24 +372,14 @@ def test_views_render_the_stored_result(workspace):
     assert held < library
 
 
-def test_a_voxel_step_is_drawn_as_cells_or_as_polygons(workspace):
+def test_a_project_saved_with_the_retired_voxel_model_opens_simplified(workspace):
     document = call("open_workspace", root=str(workspace))
     document["project"]["fidelity"] = "voxel"
     call("save_document", root=str(workspace), document=document)
-    result = call("run_flow", root=str(workspace))
-    common = {
-        "root": str(workspace),
-        "branchId": result["branchId"],
-        "stepId": result["executedStepIds"][-1],
-    }
-    cells = call("get_surfaces", **common)
-    polygons = call("get_surfaces", **common, mesh="polygons")
-    assert cells["mesh"] == "cells" and polygons["mesh"] == "polygons"
-    assert {s["material"] for s in cells["surfaces"]} == {s["material"] for s in polygons["surfaces"]}
-    assert all(s["triangleCount"] > 0 for s in polygons["surfaces"])
-    assert all(s["color"].startswith("#") for s in polygons["surfaces"])
+    assert call("open_workspace", root=str(workspace))["project"]["fidelity"] == "simplified"
+    document["project"]["fidelity"] = "cubes"
     with pytest.raises(InvalidRequest):
-        call("get_surfaces", **common, mesh="blocks")
+        call("save_document", root=str(workspace), document=document)
 
 
 def test_section_axis_and_interpolation_are_validated(workspace):

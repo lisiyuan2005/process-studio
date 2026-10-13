@@ -1032,8 +1032,7 @@ class SlabKernel:
             "ProcessFlow-Emulator runs. Planar and conformal deposition, "
             "blanket or inside a mask, vertical and isotropic etching, "
             "unselective CMP. No grid to converge; conformal deposition is "
-            "walked at the set resolution. The voxel film model keeps the "
-            "slabs but draws x and y on a grid, for a fast look at a flow."
+            "walked at the set resolution."
         ),
         process_types=("deposit", "etch", "cmp", "no_geometry", "oxidation", "flip"),
         mask_sources=("none", "quick_sketch", "gds"),
@@ -1053,8 +1052,6 @@ class SlabKernel:
         materials: Sequence[MaterialDefinition] = (),
     ) -> SlabState:
         """The bare wafer: one substrate slab, its top face at z = 0."""
-        if project.fidelity == "voxel":
-            return _voxel().initial_state(project)
         x_min, y_min, x_max, y_max = _window(project)
         z_offset = float(project.grid["z_min"])
         thickness = -z_offset
@@ -1085,11 +1082,6 @@ class SlabKernel:
         materials: Sequence[MaterialDefinition] = (),
         should_cancel: Callable[[], bool] | None = None,
     ) -> SlabState:
-        if isinstance(state, _voxel().VoxelState):
-            return _voxel().run_step(
-                state, step, project=project, recipes=recipes, sketches=sketches,
-                logger=logger, materials=materials, should_cancel=should_cancel,
-            )
         device = state.working_copy()
         if not step.enabled:
             logger(f"SKIP {step.name}: disabled")
@@ -1136,19 +1128,12 @@ class SlabKernel:
         return SlabState(device, state.z_offset)
 
     def load_state(self, path: Path) -> SlabState:
-        # Both film models store under one suffix; the voxel file says so
-        # in its first bytes.
-        voxel = _voxel()
-        if voxel.is_voxel_file(Path(path)):
-            return voxel.VoxelState.load(path)
         return SlabState.load(path)
 
     def state_materials(self, state: SlabState) -> list[str]:
-        if isinstance(state, _voxel().VoxelState):
-            return state.present()
         return state.priority
 
-    def warm_views(self, state: SlabState, buried: bool = False, mesh: str | None = None) -> None:
+    def warm_views(self, state: SlabState, buried: bool = False) -> None:
         """Build a display mesh now, so the 3D view does not have to.
 
         The free surface is what the view opens with and is warmed first
@@ -1157,18 +1142,9 @@ class SlabKernel:
         second pass: by the time anyone gets round to looking behind a
         material, the mesh for it is usually already there.
         """
-        if isinstance(state, _voxel().VoxelState):
-            if mesh != "polygons":
-                _voxel().meshes_for(state, buried)
-                return
-            from . import voxel_polygons
-
-            state = voxel_polygons.polygon_state(state)
         display_meshes(state, buried=buried)
 
     def state_bytes(self, state: SlabState) -> int:
-        if isinstance(state, _voxel().VoxelState):
-            return _voxel().state_bytes(state)
         # Polygons are the bulk of a slab state: two doubles per coordinate
         # plus shapely's bookkeeping, which the factor of four stands in for.
         coordinates = sum(
@@ -1194,17 +1170,7 @@ class SlabKernel:
         materials: Sequence[str] | None = None,
         triangulation: str | None = None,
         buried: bool = False,
-        mesh: str | None = None,
     ) -> dict[str, Any]:
-        if isinstance(state, _voxel().VoxelState):
-            if mesh != "polygons":
-                return _voxel().surfaces(
-                    state, z_max=float(project.grid["z_max"]), materials=materials, buried=buried
-                )
-            # drawn as polygon slabs: the slab kernel's own 3D view of them
-            from . import voxel_polygons
-
-            state = voxel_polygons.polygon_state(state)
         device = state.device
         engine = triangulation or DEFAULT_ENGINE
         meshes = display_meshes(state, engine, buried)
@@ -1273,11 +1239,6 @@ class SlabKernel:
         line: tuple[tuple[float, float], tuple[float, float]] | None = None,
         vector: bool = False,
     ) -> dict[str, Any]:
-        if isinstance(state, _voxel().VoxelState):
-            return _voxel().section(
-                state, colors, _rgb, z_max=float(project.grid["z_max"]), axis=axis,
-                position=position, line=line, interpolation=interpolation, vector=vector,
-            )
         device = state.device
         x_min, y_min, x_max, y_max = device.bounds
         if line is not None:
@@ -1425,8 +1386,6 @@ class SlabKernel:
         steps: bool = True,
         vector: bool = False,
     ) -> dict[str, Any]:
-        if isinstance(state, _voxel().VoxelState):
-            return _voxel().top_view(state, colors, _rgb, hidden=hidden, steps=steps, vector=vector)
         device = state.device
         x_min, y_min, x_max, y_max = device.bounds
         extent = (x_min, x_max, y_min, y_max)
@@ -1470,8 +1429,6 @@ class SlabKernel:
 def _vector(shapes, lines, colors, extent) -> tuple[dict, int, int]:
     """Exact polygons (and step lines) as outlines in a picture frame of the
     true shape: (payload, width, height)."""
-    from . import voxel_vector
-
     h0, h1, v0, v1 = extent
     span = max(h1 - h0, v1 - v0, 1e-12)
     width = max(2, round(BASE_PIXELS * (h1 - h0) / span))
@@ -1494,15 +1451,57 @@ def _vector(shapes, lines, colors, extent) -> tuple[dict, int, int]:
     def darker(color: str) -> str:
         return "#%02x%02x%02x" % _darker(_rgb(color))
 
-    return voxel_vector.payload(fills, strokes, colors, extent, width, height, darker), width, height
+    return _outline_payload(fills, strokes, colors, extent, width, height, darker), width, height
 
 
-def _voxel():
-    """The voxel film model, imported when first asked for: it reads this
-    module's step helpers, so it cannot be imported while this one loads."""
-    from . import voxel
+def _b64(array: np.ndarray, dtype) -> str:
+    return base64.b64encode(np.ascontiguousarray(array, dtype=dtype).tobytes()).decode("ascii")
 
-    return voxel
+
+def _outline_payload(
+    fills: Sequence[tuple[str, np.ndarray, np.ndarray]],
+    strokes: Sequence[tuple[str, np.ndarray, np.ndarray]],
+    colors: Mapping[str, str],
+    extent: tuple[float, float, float, float],
+    width: int,
+    height: int,
+    darker=None,
+) -> dict:
+    """The picture as outlines, in its own pixel frame (x to the right, y
+    down): ``fills`` are (material, points, loop starts) in world
+    coordinates, drawn in order; ``strokes`` open lines the same way."""
+    h0, h1, v0, v1 = extent
+    sx = width / max(h1 - h0, 1e-300)
+    sy = height / max(v1 - v0, 1e-300)
+
+    def frame(points):
+        out = np.empty_like(points, dtype=np.float64)
+        out[:, 0] = (points[:, 0] - h0) * sx
+        out[:, 1] = (v1 - points[:, 1]) * sy
+        return out
+
+    shapes = []
+    for name, points, starts in fills:
+        if points.shape[0] == 0:
+            continue
+        shapes.append({
+            "material": name,
+            "color": colors.get(name, "#7c83a0"),
+            "points": _b64(frame(points), np.float32),
+            "starts": _b64(starts, np.int32),
+        })
+    lines = []
+    for name, points, starts in strokes:
+        if points.shape[0] == 0:
+            continue
+        color = colors.get(name, "#7c83a0")
+        lines.append({
+            "material": name,
+            "color": darker(color) if darker else color,
+            "points": _b64(frame(points), np.float32),
+            "starts": _b64(starts, np.int32),
+        })
+    return {"width": int(width), "height": int(height), "shapes": shapes, "lines": lines}
 
 
 def _encode(array: np.ndarray) -> str:

@@ -1,11 +1,11 @@
 import {
   ArrowLeft,
-  Boxes,
   Circle,
   CircleAlert,
   CheckCircle2,
   Cpu,
   Grid3x3,
+  ListChecks,
   LoaderCircle,
   Play,
   Save,
@@ -82,7 +82,6 @@ import type {
   LibraryKind,
   ProcessType,
   Triangulation,
-  VoxelMesh,
   ParameterValue,
   QuickSketch,
   SectionAxis,
@@ -125,8 +124,9 @@ import { tabName, type TabHandle } from "./domain/tabs";
 type SaveState = "saved" | "saving" | "unsaved" | "error";
 
 const AUTOSAVE_DELAY_MS = 600;
-// where this viewer keeps how the voxel model's 3D view is drawn
-const VOXEL_MESH_KEY = "process-studio.voxel-mesh";
+
+// where this viewer keeps whether the workspace shows the recipes only
+const RECIPE_VIEW_KEY = "process-studio.recipe-view";
 
 function errorMessage(reason: unknown) {
   return reason instanceof Error ? reason.message : String(reason);
@@ -159,14 +159,7 @@ export type WorkspaceProps = {
 };
 
 /** The slab kernel's film models, fastest first. */
-const FILM_MODELS: { id: Fidelity; label: string; title: string; icon: typeof Boxes }[] = [
-  {
-    id: "voxel",
-    label: "Voxel",
-    icon: Boxes,
-    title:
-      "Voxel: slabs with exact heights, x and y on a grid of cells. A whole flow in seconds; edges land within half a cell, and a sidewall film thinner than a cell is kept one cell thick.",
-  },
+const FILM_MODELS: { id: Fidelity; label: string; title: string; icon: typeof Square }[] = [
   {
     id: "simplified",
     label: "Simplified",
@@ -253,18 +246,20 @@ export function Workspace({
   // Which triangulator builds the 3D mesh. Ear clipping is the default;
   // the other is there to compare against, and costs a rebuild.
   const [triangulation, setTriangulation] = useState<Triangulation>("ears");
-  // How the voxel model's 3D view is drawn; this viewer's choice, kept.
-  const [voxelMesh, setVoxelMeshState] = useState<VoxelMesh>(() => {
+  // The recipes only: no 3D view, section or top view, and nothing fetched
+  // or built for them, so the step list and the parameters have the whole
+  // window and an edit never waits on geometry. This viewer's choice, kept.
+  const [recipeView, setRecipeViewState] = useState<boolean>(() => {
     try {
-      return window.localStorage.getItem(VOXEL_MESH_KEY) === "polygons" ? "polygons" : "cells";
+      return window.localStorage.getItem(RECIPE_VIEW_KEY) === "1";
     } catch {
-      return "cells";
+      return false;
     }
   });
-  const setVoxelMesh = (value: VoxelMesh) => {
-    setVoxelMeshState(value);
+  const setRecipeView = (value: boolean) => {
+    setRecipeViewState(value);
     try {
-      window.localStorage.setItem(VOXEL_MESH_KEY, value);
+      window.localStorage.setItem(RECIPE_VIEW_KEY, value ? "1" : "0");
     } catch {
       // a preference that cannot be kept is still used for this session
     }
@@ -1089,6 +1084,9 @@ export function Workspace({
       if (mod && key === "s") {
         event.preventDefault();
         void saveNow();
+      } else if (mod && key === "e") {
+        event.preventDefault();
+        setRecipeView(!recipeView);
       } else if (event.key === "F5") {
         event.preventDefault();
         if (busy) return;
@@ -1141,6 +1139,11 @@ export function Workspace({
     // own, and a step that has finished is stored before the next begins.
     if (!root || !branchId) return;
     const token = (viewToken.current += 1);
+    if (recipeView) {
+      // nothing on screen to fill; what was loading is dropped
+      setViewLoading(false);
+      return;
+    }
     const target = `${branchId}:${selectedStepId}`;
     if (shownTarget.current !== target) {
       // Never leave one step's result on screen while another one loads.
@@ -1173,8 +1176,7 @@ export function Workspace({
         // Hiding a material is asking to see the cavity it leaves, which is
         // made of the faces around it: they have to be fetched then.
         const buried = alwaysBuried || hiddenMaterials.length > 0;
-        const mesh = document?.project.fidelity === "voxel" ? voxelMesh : undefined;
-        const key = `surfaces:${target}:${interpolation}:${triangulation}:${buried}:${mesh ?? ""}`;
+        const key = `surfaces:${target}:${interpolation}:${triangulation}:${buried}`;
         const hit = cached<SurfaceDocument>(key);
         if (hit) {
           setSurfaces(hit);
@@ -1182,7 +1184,7 @@ export function Workspace({
           return;
         }
         setViewLoading(true);
-        const next = await bridge.getSurfaces(root, { ...request, triangulation, buried, mesh });
+        const next = await bridge.getSurfaces(root, { ...request, triangulation, buried });
         if (token !== viewToken.current) return;
         setSurfaces(remember(key, next));
       } else if (mode === "section") {
@@ -1249,13 +1251,13 @@ export function Workspace({
     interpolation,
     topSteps,
     triangulation,
-    voxelMesh,
     document?.project.fidelity,
     alwaysBuried,
     hiddenMaterials,
     sectionAxis,
     sectionIndex,
     sectionLine,
+    recipeView,
   ]);
 
   useEffect(() => {
@@ -1298,7 +1300,7 @@ export function Workspace({
       setSaveState("saved");
       const result = await bridge.runFlow(
         saved.root,
-        { branchId: branch.id, throughStepId, force, fromStepId, prepareBuried },
+        { branchId: branch.id, throughStepId, force, fromStepId, prepareBuried, warmViews: !recipeView },
         requestId,
       );
       skipNextAutosave.current = true;
@@ -1691,9 +1693,16 @@ export function Workspace({
     {
       label: "View",
       items: [
-        { label: "3D surfaces", action: () => setMode("surfaces"), checked: mode === "surfaces" },
-        { label: "Section", action: () => setMode("section"), checked: mode === "section" },
-        { label: "Top view", action: () => setMode("top"), checked: mode === "top" },
+        { label: "Recipes only (no 3D)", action: () => setRecipeView(!recipeView), checked: recipeView, shortcut: "Ctrl+E" },
+        ...(["surfaces", "section", "top"] as const).map((item, index) => ({
+          label: item === "surfaces" ? "3D surfaces" : item === "section" ? "Section" : "Top view",
+          separated: index === 0,
+          action: () => {
+            setMode(item);
+            setRecipeView(false);
+          },
+          checked: !recipeView && mode === item,
+        })),
         { label: "Mark the steps inside a material on the top view", action: () => setTopSteps((value) => !value), checked: topSteps, separated: true },
         { label: "Worker log", action: () => setShowLog((value) => !value), checked: showLog, separated: true },
       ],
@@ -1717,22 +1726,6 @@ export function Workspace({
                 action: () => setTriangulation("delaunay"),
                 checked: triangulation === "delaunay",
               },
-              ...(fidelity === "voxel"
-                ? [
-                    {
-                      label: "Cells (a face per fine cell, fast)",
-                      heading: "Voxel 3D view",
-                      separated: true,
-                      action: () => setVoxelMesh("cells"),
-                      checked: voxelMesh === "cells",
-                    },
-                    {
-                      label: "Polygons (full resolution, fewer triangles)",
-                      action: () => setVoxelMesh("polygons"),
-                      checked: voxelMesh === "polygons",
-                    },
-                  ]
-                : []),
               {
                 label: "Build the faces between materials",
                 heading: "Buried faces",
@@ -1777,8 +1770,7 @@ export function Workspace({
         { label: "Discard results and run everything again…", action: forceRerun, disabled: busy, separated: true },
         ...(projectKernel?.id === "slab"
           ? [
-              { label: "Voxel films (grid, fastest)", heading: "Film model", action: () => void setFidelity("voxel"), checked: fidelity === "voxel", separated: true, disabled: busy },
-              { label: "Simplified films (square, fast)", action: () => void setFidelity("simplified"), checked: fidelity === "simplified", disabled: busy },
+              { label: "Simplified films (square, fast)", heading: "Film model", action: () => void setFidelity("simplified"), checked: fidelity === "simplified", separated: true, disabled: busy },
               { label: "Detailed films (rounded)", action: () => void setFidelity("detailed"), checked: fidelity === "detailed", disabled: busy },
             ]
           : []),
@@ -1813,7 +1805,7 @@ export function Workspace({
 
   return (
     <div
-      className="app-shell"
+      className={`app-shell${recipeView ? " recipe-only" : ""}`}
       // The panel widths live on the shell so the log drawer, which sits
       // outside the grid, lines up with the same edges.
       style={
@@ -1931,6 +1923,20 @@ export function Workspace({
                   : "Saved"}
           </span>
         </div>
+        <button
+          type="button"
+          className={`log-button recipe-view-button${recipeView ? " active" : ""}`}
+          aria-pressed={recipeView}
+          title={
+            recipeView
+              ? "Show the 3D view again (Ctrl+E)"
+              : "Recipes only: hide the 3D view and edit the steps' parameters with the whole window (Ctrl+E)"
+          }
+          onClick={() => setRecipeView(!recipeView)}
+        >
+          <ListChecks size={15} />
+          Recipes
+        </button>
         <button type="button" className="log-button" onClick={() => setShowLog((value) => !value)}>
           <ScrollText size={15} />
           Log{events.length > 0 && <span>{events.length}</span>}
@@ -1975,19 +1981,21 @@ export function Workspace({
         </div>
       ) : null}
 
-      <div className="workspace-grid">
+      <div className={`workspace-grid${recipeView ? " recipe-only" : ""}`}>
         <PanelResizer
           side="left"
           share={(panelShares ?? DEFAULT_PANELS).steps}
           onResize={(width) => resizePanel("steps", width)}
           onReset={resetPanels}
         />
-        <PanelResizer
-          side="right"
-          share={(panelShares ?? DEFAULT_PANELS).inspector}
-          onResize={(width) => resizePanel("inspector", width)}
-          onReset={resetPanels}
-        />
+        {!recipeView && (
+          <PanelResizer
+            side="right"
+            share={(panelShares ?? DEFAULT_PANELS).inspector}
+            onResize={(width) => resizePanel("inspector", width)}
+            onReset={resetPanels}
+          />
+        )}
         <StepList
           steps={steps}
           statuses={statuses}
@@ -2029,93 +2037,95 @@ export function Workspace({
           loopDialogOpen={loopDialog}
           onLoopDialogChange={setLoopDialog}
         />
-        <Viewport
-          mode={mode}
-          onModeChange={setMode}
-          title={
-            loopSummary
-              ? `${loopSummary.loop.name} · after its last step (${loopSummary.last})`
-              : selectedStep
-                ? `${selectedStep.name} · after step ${steps.indexOf(selectedStep) + 1}`
-                : "Initial wafer"
-          }
-          loading={viewLoading}
-          error={viewError}
-          notice={viewNotice}
-          surfacesSupported={projectKernel?.surfaces ?? capabilities?.rendering.surfaces ?? false}
-          maximumInterpolation={capabilities?.rendering.maximumInterpolation ?? 4}
-          interpolation={interpolation}
-          onInterpolationChange={setInterpolation}
-          topSteps={topSteps}
-          onTopStepsChange={setTopSteps}
-          triangulation={triangulation}
-          onTriangulationChange={setTriangulation}
-          sectionAxis={sectionAxis}
-          onSectionAxisChange={(axis) => {
-            setSectionAxis(axis);
-            setSectionIndex(null);
-            sectionPosition.current = null;
-          }}
-          sectionLines={sectionLines}
-          sectionLine={sectionLine}
-          windowBounds={{
-            xMin: document.project.grid.xMin,
-            xMax: document.project.grid.xMax,
-            yMin: document.project.grid.yMin,
-            yMax: document.project.grid.yMax,
-          }}
-          onSelectLine={(lineId) => {
-            setActiveLineId(lineId);
-            if (lineId) setSectionAxis("line");
-            else if (sectionAxis === "line") setSectionAxis("y");
-          }}
-          onSaveLine={(line) => {
-            const isNew = !line.id;
-            const saved: SectionLine = isNew
-              ? { ...line, id: newId("line"), name: line.name || nextSectionLineName(document) }
-              : line;
-            setDocument(upsertSectionLine(document, saved));
-            setActiveLineId(saved.id);
-            setSectionAxis("line");
-            // A freshly drawn line is what the user wants to look at.
-            if (isNew) setMode("section");
-          }}
-          onRemoveLine={(lineId) => {
-            setDocument(removeSectionLine(document, lineId));
-            if (activeLineId === lineId) {
-              setActiveLineId(null);
-              if (sectionAxis === "line") setSectionAxis("y");
+        {!recipeView && (
+          <Viewport
+            mode={mode}
+            onModeChange={setMode}
+            title={
+              loopSummary
+                ? `${loopSummary.loop.name} · after its last step (${loopSummary.last})`
+                : selectedStep
+                  ? `${selectedStep.name} · after step ${steps.indexOf(selectedStep) + 1}`
+                  : "Initial wafer"
             }
-          }}
-          onExportMesh={() => void exportMesh()}
-          onSaveImage={(kind, image) => void saveImage(kind, image)}
-          sectionIndex={sectionIndex ?? 0}
-          onSectionIndexChange={(index) => {
-            sectionPosition.current = section?.positions?.[index] ?? null;
-            setSectionIndex(index);
-          }}
-          materials={document.materials}
-          hiddenMaterials={hiddenMaterials}
-          onToggleMaterial={(material) =>
-            setHiddenMaterials((current) =>
-              current.includes(material)
-                ? current.filter((name) => name !== material)
-                : [...current, material],
-            )
-          }
-          looks={materialLooks}
-          onLookChange={(material, look) =>
-            setMaterialLooks((current) => {
-              const next = { ...current };
-              if (look) next[material] = look;
-              else delete next[material];
-              return next;
-            })
-          }
-          surfaces={surfaces}
-          section={section}
-          topView={topView}
-        />
+            loading={viewLoading}
+            error={viewError}
+            notice={viewNotice}
+            surfacesSupported={projectKernel?.surfaces ?? capabilities?.rendering.surfaces ?? false}
+            maximumInterpolation={capabilities?.rendering.maximumInterpolation ?? 4}
+            interpolation={interpolation}
+            onInterpolationChange={setInterpolation}
+            topSteps={topSteps}
+            onTopStepsChange={setTopSteps}
+            triangulation={triangulation}
+            onTriangulationChange={setTriangulation}
+            sectionAxis={sectionAxis}
+            onSectionAxisChange={(axis) => {
+              setSectionAxis(axis);
+              setSectionIndex(null);
+              sectionPosition.current = null;
+            }}
+            sectionLines={sectionLines}
+            sectionLine={sectionLine}
+            windowBounds={{
+              xMin: document.project.grid.xMin,
+              xMax: document.project.grid.xMax,
+              yMin: document.project.grid.yMin,
+              yMax: document.project.grid.yMax,
+            }}
+            onSelectLine={(lineId) => {
+              setActiveLineId(lineId);
+              if (lineId) setSectionAxis("line");
+              else if (sectionAxis === "line") setSectionAxis("y");
+            }}
+            onSaveLine={(line) => {
+              const isNew = !line.id;
+              const saved: SectionLine = isNew
+                ? { ...line, id: newId("line"), name: line.name || nextSectionLineName(document) }
+                : line;
+              setDocument(upsertSectionLine(document, saved));
+              setActiveLineId(saved.id);
+              setSectionAxis("line");
+              // A freshly drawn line is what the user wants to look at.
+              if (isNew) setMode("section");
+            }}
+            onRemoveLine={(lineId) => {
+              setDocument(removeSectionLine(document, lineId));
+              if (activeLineId === lineId) {
+                setActiveLineId(null);
+                if (sectionAxis === "line") setSectionAxis("y");
+              }
+            }}
+            onExportMesh={() => void exportMesh()}
+            onSaveImage={(kind, image) => void saveImage(kind, image)}
+            sectionIndex={sectionIndex ?? 0}
+            onSectionIndexChange={(index) => {
+              sectionPosition.current = section?.positions?.[index] ?? null;
+              setSectionIndex(index);
+            }}
+            materials={document.materials}
+            hiddenMaterials={hiddenMaterials}
+            onToggleMaterial={(material) =>
+              setHiddenMaterials((current) =>
+                current.includes(material)
+                  ? current.filter((name) => name !== material)
+                  : [...current, material],
+              )
+            }
+            looks={materialLooks}
+            onLookChange={(material, look) =>
+              setMaterialLooks((current) => {
+                const next = { ...current };
+                if (look) next[material] = look;
+                else delete next[material];
+                return next;
+              })
+            }
+            surfaces={surfaces}
+            section={section}
+            topView={topView}
+          />
+        )}
         <Inspector
           step={selectedStep}
           loop={loopSummary}

@@ -11,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 
 from .models import (
+    known_fidelity,
     result_keys,
     FlowBranch,
     MaterialDefinition,
@@ -265,7 +266,7 @@ class ProjectRepository:
             resolution_um=row["resolution_um"],
             resolution_xy_um=row["resolution_xy_um"],
             section_lines=json.loads(row["section_lines_json"]) if row["section_lines_json"] else [],
-            fidelity=row["fidelity"] or "detailed",
+            fidelity=known_fidelity(row["fidelity"], "detailed"),
         )
 
     def list_projects(self) -> list[ProjectDefinition]:

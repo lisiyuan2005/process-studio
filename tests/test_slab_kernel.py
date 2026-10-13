@@ -1340,21 +1340,3 @@ def test_a_step_can_run_at_a_resolution_of_its_own(kernel, detailed_project, ske
     assert after.device.conformal_resolution == pytest.approx(0.01)
     with pytest.raises(SlabError):
         run(state, _etch("Bad", {"resolution": -1, "sketch_id": "default"}))
-
-
-def test_a_voxel_step_runs_on_its_own_grid_and_the_next_on_the_projects(kernel, project, sketches):
-    project.fidelity = "voxel"
-    project.resolution_um = 0.001
-    state = kernel.initial_state(project, materials=default_materials())
-    fine = state.refine
-    assert fine > 1
-    run = lambda s, st: kernel.run_step(  # noqa: E731
-        s, st, project=project, recipes={}, sketches=sketches, logger=lambda _m: None,
-        materials=default_materials(),
-    )
-    coarse = run(state, _etch("Coarse", {"resolution": 0.02, "sketch_id": "default"}))
-    assert coarse.refine < fine
-    coarse.check()
-    after = run(coarse, _etch("Plain", {"sketch_id": "default"}))
-    assert after.refine == fine
-    after.check()

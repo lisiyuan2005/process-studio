@@ -177,7 +177,7 @@ export interface ProjectSummary {
   fidelity?: Fidelity;
 }
 
-export type Fidelity = "detailed" | "simplified" | "voxel";
+export type Fidelity = "detailed" | "simplified";
 
 export interface SketchShape {
   kind: "rectangle" | "circle" | "polygon" | "path";
@@ -287,8 +287,6 @@ export interface SurfaceDocument {
   exact?: boolean;
   /** Which triangulator built these meshes; absent from other kernels. */
   triangulation?: Triangulation;
-  /** How a voxel state was drawn. */
-  mesh?: VoxelMesh;
   /** True when the faces against other materials are in here as well. */
   buried?: boolean;
   bounds: {
@@ -377,14 +375,6 @@ export interface MaskPreview {
  * thirty times faster over a cap with a hole array.
  */
 export type Triangulation = "ears" | "delaunay";
-
-/**
- * How the voxel model's 3D view is drawn: a face for every fine cell side
- * along a boundary (drawn from a coarser copy when the grid is fine), or
- * each slab's materials as polygons -- the full resolution, far fewer
- * triangles, built once per step and slower the first time.
- */
-export type VoxelMesh = "cells" | "polygons";
 
 export interface TopViewDocument {
   image: string;
