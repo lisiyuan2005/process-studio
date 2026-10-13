@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SketchShape } from "../types";
-import { crowdedAxes, footprint } from "./sketch";
+import { crowdedAxes, footprint, sketchCopy } from "./sketch";
 
 function shape(partial: Partial<SketchShape>): SketchShape {
   return {
@@ -51,5 +51,25 @@ describe("crowdedAxes", () => {
   it("reads a negative pitch by its distance", () => {
     const left = shape({ kind: "rectangle", parameters: { size: [0.4, 0.4] }, array: [3, 1, -0.2, 0] });
     expect(crowdedAxes(left).x).toBe(true);
+  });
+});
+
+describe("sketchCopy", () => {
+  const trench = { id: "a", name: "Trench", shapes: [shape({ parameters: { width: 1 } })] };
+
+  it("is a new sketch with shapes of its own", () => {
+    const copy = sketchCopy(trench, [trench], "b");
+    expect(copy.id).toBe("b");
+    expect(copy.name).toBe("Trench copy");
+    expect(copy.shapes).toEqual(trench.shapes);
+    copy.shapes[0].parameters.width = 5;
+    copy.shapes.push(shape({}));
+    expect(trench.shapes).toHaveLength(1);
+    expect(trench.shapes[0].parameters.width).toBe(1);
+  });
+
+  it("takes a name no other sketch has", () => {
+    const others = [trench, { id: "b", name: "Trench copy", shapes: [] }, { id: "c", name: "Trench copy 2", shapes: [] }];
+    expect(sketchCopy(trench, others, "d").name).toBe("Trench copy 3");
   });
 });

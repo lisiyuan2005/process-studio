@@ -119,6 +119,7 @@ import {
 } from "./domain/layout";
 
 import { libraryOf, sameLibrary, withLibrary, type Library } from "./domain/library";
+import { sketchCopy } from "./domain/sketch";
 import { tabName, type TabHandle } from "./domain/tabs";
 
 type SaveState = "saved" | "saving" | "unsaved" | "error";
@@ -1387,16 +1388,21 @@ export function Workspace({
     }
   };
 
-  const openSketchEditor = async (sketchId: string | null) => {
+  // ``copy`` opens a new sketch that starts as the given one: saving it
+  // points this step at the copy and leaves the original as it was.
+  const openSketchEditor = async (sketchId: string | null, copy = false) => {
     if (!document || !branch || !selectedStep) return;
     const existing = sketchId ? document.sketches.find((item) => item.id === sketchId) : undefined;
-    const sketch: QuickSketch = existing ?? {
-      id: newId("sketch"),
-      name: "New sketch",
-      shapes: [],
-    };
+    const sketch: QuickSketch =
+      existing && copy
+        ? sketchCopy(existing, document.sketches, newId("sketch"))
+        : existing ?? {
+            id: newId("sketch"),
+            name: "New sketch",
+            shapes: [],
+          };
     setSketchBackdrop(undefined);
-    setSketchEditor({ sketch, isNew: !existing });
+    setSketchEditor({ sketch, isNew: !existing || copy });
     // The wafer this step's mask lands on is the result of the step before
     // it; when that has not been run there is simply no backdrop.
     const index = steps.indexOf(selectedStep);
@@ -2172,7 +2178,7 @@ export function Workspace({
           onMaskChange={(patch) =>
             selectedStep && setDocument(updateStep(document, selectedStep.id, patch))
           }
-          onEditSketch={(sketchId) => void openSketchEditor(sketchId)}
+          onEditSketch={(sketchId, copy) => void openSketchEditor(sketchId, copy)}
           onRunToHere={() => selectedStep && void runFlow(selectedStep.id)}
           onRemove={() => selectedStep && removeStepById(selectedStep.id)}
         />

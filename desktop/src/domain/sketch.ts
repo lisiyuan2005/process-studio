@@ -1,4 +1,17 @@
-import type { SketchShape } from "../types";
+import type { QuickSketch, SketchShape } from "../types";
+
+/**
+ * A new sketch that starts as a copy of ``source``: its own id, a name no
+ * other sketch has ("Trench copy", then "Trench copy 2", ...) and shapes of
+ * its own, so editing it leaves the source and every step using it alone.
+ */
+export function sketchCopy(source: QuickSketch, others: readonly QuickSketch[], id: string): QuickSketch {
+  const taken = new Set(others.map((item) => item.name));
+  const base = `${source.name} copy`;
+  let name = base;
+  for (let n = 2; taken.has(name); n += 1) name = `${base} ${n}`;
+  return { id, name, shapes: structuredClone(source.shapes) };
+}
 
 /** How wide and tall one copy of a shape is, in micrometres. */
 export interface Footprint {

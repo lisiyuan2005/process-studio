@@ -1,4 +1,4 @@
-import { BookDown, CircleAlert, Layers, PenLine, Play, Plus, Repeat, Save, Trash2, Ungroup, Wrench } from "lucide-react";
+import { BookDown, CircleAlert, Copy, Layers, PenLine, Play, Plus, Repeat, Save, Trash2, Ungroup, Wrench } from "lucide-react";
 import { ToolPicker } from "./ToolPicker";
 import { useEffect, useMemo, useState } from "react";
 import type {
@@ -72,8 +72,11 @@ interface InspectorProps {
     datatype?: number | null;
     keep?: MaskKeep;
   }) => void;
-  /** Open the sketch editor on a sketch, or on a new one when null. */
-  onEditSketch: (sketchId: string | null) => void;
+  /**
+   * Open the sketch editor on a sketch, or on a new one when null; with
+   * ``copy``, on a new sketch that starts as a copy of that one.
+   */
+  onEditSketch: (sketchId: string | null, copy?: boolean) => void;
   onRunToHere: () => void;
   onRemove: () => void;
 }
@@ -613,6 +616,16 @@ export function Inspector({
                 >
                   <PenLine size={13} />
                   Edit sketch
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={busy || !sketches.some((sketch) => sketch.id === String(step.parameters.sketch_id ?? "default"))}
+                  title="A new sketch that starts as a copy of this one. Saving it switches this step to the copy; the original, and every other step using it, stay as they are."
+                  onClick={() => onEditSketch(String(step.parameters.sketch_id ?? "default"), true)}
+                >
+                  <Copy size={13} />
+                  Copy as new
                 </button>
                 <button type="button" className="secondary-button" disabled={busy} onClick={() => onEditSketch(null)}>
                   <Plus size={13} />
