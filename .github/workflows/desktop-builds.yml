@@ -12,7 +12,10 @@ on:
         default: all
         options: [all, windows, macos]
       release:
-        description: Also publish a GitHub release under this tag (e.g. v0.2.0); needs both platforms
+        description: >-
+          Also publish a GitHub release under this tag, built with that version:
+          a beta (v0.1.4-beta.1) from the beta branch, or a stable release
+          (v0.1.4) from main, where the commit must carry a beta of it. Needs both platforms
         type: string
         default: ""
   push:
@@ -28,7 +31,62 @@ permissions:
 
 # One build per platform. There is one kernel, so there is one edition.
 jobs:
+  prepare:
+    # What is released, if anything: the tag, the version the build carries
+    # and the channel. A beta is a pre-release, built from the beta branch.
+    # A stable release is a beta promoted as it was: built from main, at a
+    # commit that already carries a beta of the same version.
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+      based_on: ${{ steps.release.outputs.based_on }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: release
+        env:
+          TAG: ${{ inputs.release || (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || '' }}
+          REF: ${{ github.ref }}
+        run: |
+          set -e
+          fail() { echo "::error::$1"; exit 1; }
+          if [ -z "$TAG" ]; then
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$' \
+            || fail "$TAG is not a release tag: v0.1.4 or v0.1.4-beta.1"
+          version="${TAG#v}"
+          based_on=""
+          case "$TAG" in
+            *-beta.*)
+              prerelease=true
+              [ "$REF" = "refs/heads/beta" ] || [ "$REF" = "refs/tags/$TAG" ] \
+                || fail "a beta is released from the beta branch, not $REF"
+              ;;
+            *)
+              prerelease=false
+              [ "$REF" = "refs/heads/main" ] || [ "$REF" = "refs/tags/$TAG" ] \
+                || fail "a stable release is released from main, not $REF"
+              based_on=$(git tag --points-at HEAD --list "v${version}-beta.*" | sort -V | tail -n 1)
+              [ -n "$based_on" ] \
+                || fail "no beta of $version at this commit: release one from the beta branch and move main to it first"
+              ;;
+          esac
+          {
+            echo "tag=$TAG"
+            echo "version=$version"
+            echo "prerelease=$prerelease"
+            echo "based_on=$based_on"
+          } >> "$GITHUB_OUTPUT"
+          echo "release $TAG (prerelease: $prerelease${based_on:+, promoted from $based_on})"
+
   windows:
+    needs: prepare
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.platforms == 'all' || inputs.platforms == 'windows' }}
     runs-on: windows-latest
     env:
@@ -58,6 +116,11 @@ jobs:
             desktop/src-tauri/target
           key: cargo-windows-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
           restore-keys: cargo-windows-
+
+      - name: Put the release version in the build
+        if: ${{ needs.prepare.outputs.version != '' }}
+        shell: bash
+        run: python scripts/set_version.py "${{ needs.prepare.outputs.version }}"
 
       - name: Run the kernel and worker tests
         shell: pwsh
@@ -100,6 +163,7 @@ jobs:
     # Pinned to the image the emulator builds on. A newer runner means a newer
     # SDK and a different linker signature, and that app opens where this one
     # did not.
+    needs: prepare
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.platforms == 'all' || inputs.platforms == 'macos' }}
     runs-on: macos-14
     env:
@@ -130,6 +194,11 @@ jobs:
             desktop/src-tauri/target
           key: cargo-macos-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
           restore-keys: cargo-macos-
+
+      - name: Put the release version in the build
+        if: ${{ needs.prepare.outputs.version != '' }}
+        shell: bash
+        run: python scripts/set_version.py "${{ needs.prepare.outputs.version }}"
 
       - name: Run the kernel and worker tests
         run: |
@@ -173,8 +242,8 @@ jobs:
     # worker's update check expects (see worker/update.py).
     # A manual run names the tag in `release`; the release action creates
     # the tag at this commit when it does not exist yet.
-    if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.release != '' }}
-    needs: [windows, macos]
+    if: ${{ needs.prepare.outputs.tag != '' }}
+    needs: [prepare, windows, macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -198,7 +267,12 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.release || github.ref_name }}
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          # the commit is how the update check tells which beta a stable
+          # release was promoted from
           target_commitish: ${{ github.sha }}
           files: release/*
+          prerelease: ${{ needs.prepare.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.prepare.outputs.prerelease == 'true' && 'false' || 'true' }}
+          body: ${{ needs.prepare.outputs.based_on != '' && format('Promoted from {0}, built from the same commit.', needs.prepare.outputs.based_on) || '' }}
           generate_release_notes: true

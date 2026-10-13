@@ -214,22 +214,28 @@ export type LibraryKind = "materials" | "tools" | "recipes";
 export type FlowExportFormat = "xlsx" | "csv" | "json" | "yaml";
 
 /** The newest published release, compared with this build. */
-export interface UpdateInfo {
-  currentVersion: string;
-  latestVersion: string;
-  /**
-   * The latest release is a different build from this one. Not "greater":
-   * the version was reset when the project narrowed to one kernel, so the
-   * release to install can be a lower number than a machine is running.
-   */
+/** One release on one channel, against this build. */
+export interface ReleaseInfo {
+  version: string;
+  /** "beta" for a GitHub pre-release. */
+  channel: "stable" | "beta";
+  /** It comes after this build (a beta before its release; 0.9.x before 0.1.0). */
   available: boolean;
-  /** Whether that release is also a higher version than this build. */
-  newer: boolean;
   releaseUrl: string;
   publishedAt: string | null;
   notes: string;
   /** The download for this platform and edition, when the release carries one. */
   asset: { name: string; url: string; sizeBytes: number } | null;
+  /** For a stable release: the beta it was promoted from, built from the same commit. */
+  basedOn: string | null;
+}
+
+/** The newest stable release and the newest beta. */
+export interface UpdateInfo {
+  currentVersion: string;
+  currentChannel: "stable" | "beta";
+  stable: ReleaseInfo | null;
+  beta: ReleaseInfo | null;
 }
 
 /** One command line run inside the worker, as the CLI would have run it. */

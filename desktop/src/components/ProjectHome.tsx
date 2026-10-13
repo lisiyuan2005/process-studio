@@ -1,13 +1,22 @@
 import { ArrowRight, Boxes, Clock3, Download, FolderOpen, Layers3, Lock, Plus, RefreshCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { RecentWorkspace } from "../domain/recent";
-import type { KernelDescription, UpdateInfo } from "../types";
+import type { KernelDescription, ReleaseInfo, UpdateInfo } from "../types";
 
 function megabytes(bytes: number): string {
   return `${(bytes / 1_048_576).toFixed(bytes >= 104_857_600 ? 0 : 1)} MB`;
 }
 
-/** The version line of the home page: this build, and whether GitHub has a newer one. */
+/** What the update check says about each channel, newest first: stable, then beta. */
+function offers(info: UpdateInfo): ReleaseInfo[] {
+  return [info.stable, info.beta].filter((item): item is ReleaseInfo => !!item && item.available);
+}
+
+function channelName(release: ReleaseInfo): string {
+  return release.channel === "beta" ? "Beta" : "Stable";
+}
+
+/** The version line of the home page: this build, and whether GitHub has a newer stable release or beta. */
 function UpdateCheck({
   version,
   onCheck,
@@ -27,14 +36,14 @@ function UpdateCheck({
     | { kind: "idle" }
     | { kind: "checking" }
     | { kind: "done"; info: UpdateInfo }
-    | { kind: "installing"; info: UpdateInfo }
+    | { kind: "installing"; release: ReleaseInfo }
     | { kind: "failed"; message: string }
   >({ kind: "idle" });
-  const install = async (info: UpdateInfo) => {
-    if (!info.asset) return;
-    setState({ kind: "installing", info });
+  const install = async (release: ReleaseInfo) => {
+    if (!release.asset) return;
+    setState({ kind: "installing", release });
     try {
-      await onInstall(info.asset.url);
+      await onInstall(release.asset.url);
     } catch (reason) {
       setState({ kind: "failed", message: reason instanceof Error ? reason.message : String(reason) });
     }
@@ -47,48 +56,65 @@ function UpdateCheck({
       setState({ kind: "failed", message: reason instanceof Error ? reason.message : String(reason) });
     }
   };
+  const available = state.kind === "done" ? offers(state.info) : [];
+  const latest =
+    state.kind === "done"
+      ? [state.info.stable && `stable ${state.info.stable.version}`, state.info.beta && `beta ${state.info.beta.version}`]
+          .filter(Boolean)
+          .join(" · ")
+      : "";
   return (
     <div className="update-check">
       <span className="version-tag" title="This build">{version}</span>
       {state.kind === "installing" ? (
         <span className="update-news">
-          <RefreshCw size={11} className="spin" /> {installProgress ?? "Installing…"} · the application
-          restarts when it is done
+          <RefreshCw size={11} className="spin" /> {channelName(state.release)} {state.release.version}:{" "}
+          {installProgress ?? "Installing…"} · the application restarts when it is done
         </span>
-      ) : state.kind === "done" && state.info.available ? (
-        <>
-          <span className="update-news">
-            {state.info.latestVersion} is available
-            {state.info.asset ? "" : " (no download for this platform; see the release page)"}
-          </span>
-          {state.info.asset && (
-            <button
-              type="button"
-              className="update-button"
-              title={`Download ${state.info.asset.name} (${megabytes(state.info.asset.sizeBytes)}), replace this installation and restart`}
-              onClick={() => void install(state.info)}
-            >
-              <Download size={12} />
-              Update now ({megabytes(state.info.asset.sizeBytes)})
-            </button>
-          )}
-          {state.info.asset && (
-            <button
-              type="button"
-              className="update-link"
-              title="Download the archive with the browser instead"
-              onClick={() => void onOpenUrl(state.info.asset!.url)}
-            >
-              Download only
-            </button>
-          )}
-          <button type="button" className="update-link" onClick={() => void onOpenUrl(state.info.releaseUrl)}>
-            Release notes
-          </button>
-        </>
+      ) : available.length ? (
+        <div className="update-offers">
+          {available.map((release) => (
+            <div key={release.channel} className="update-offer">
+              <span className={`channel-tag channel-${release.channel}`}>{channelName(release)}</span>
+              <span className="update-news">
+                {release.version} is available
+                {release.basedOn ? ` (promoted from ${release.basedOn})` : ""}
+                {release.asset ? "" : " (no download for this platform; see the release page)"}
+              </span>
+              {release.asset && (
+                <button
+                  type="button"
+                  className="update-button"
+                  title={`Download ${release.asset.name} (${megabytes(release.asset.sizeBytes)}), replace this installation and restart`}
+                  onClick={() => void install(release)}
+                >
+                  <Download size={12} />
+                  {release.channel === "beta" ? "Install beta" : "Update now"} ({megabytes(release.asset.sizeBytes)})
+                </button>
+              )}
+              {release.asset && (
+                <button
+                  type="button"
+                  className="update-link"
+                  title="Download the archive with the browser instead"
+                  onClick={() => void onOpenUrl(release.asset!.url)}
+                >
+                  Download only
+                </button>
+              )}
+              <button type="button" className="update-link" onClick={() => void onOpenUrl(release.releaseUrl)}>
+                Release notes
+              </button>
+            </div>
+          ))}
+        </div>
       ) : (
         <>
-          {state.kind === "done" && <span className="update-news muted">Up to date</span>}
+          {state.kind === "done" && (
+            <span className="update-news muted" title={latest ? `Newest: ${latest}` : undefined}>
+              Up to date{latest ? ` (${latest})` : ""}
+            </span>
+          )}
           {state.kind === "failed" && (
             <span className="update-news muted" title={state.message}>
               Could not check: {state.message}
@@ -98,7 +124,7 @@ function UpdateCheck({
             type="button"
             className="update-link"
             disabled={state.kind === "checking"}
-            title="Ask GitHub for the newest release"
+            title="Ask GitHub for the newest stable release and the newest beta"
             onClick={() => void check()}
           >
             <RefreshCw size={11} className={state.kind === "checking" ? "spin" : ""} />

@@ -84,6 +84,7 @@ import type {
   Triangulation,
   ParameterValue,
   QuickSketch,
+  ReleaseInfo,
   SectionAxis,
   SectionDocument,
   SectionLine,
@@ -218,6 +219,8 @@ export function Workspace({
     // A second button, for when the notice offers a thing to do as
     // well as a thing to read: installing an update, and its notes.
     primary?: { label: string; run: () => void };
+    // More things to do, between the two: installing the beta as well.
+    more?: { label: string; run: () => void }[];
   } | null>(null);
   // Every selected step (the focused `selectedStepId` included) and the
   // anchor a Shift-click extends from, the way a file list selects.
@@ -1039,34 +1042,48 @@ export function Workspace({
     void runFlow(undefined, true);
   };
   const checkUpdateFromMenu = () => {
+    const installRun = (release: ReleaseInfo) => () => {
+      const url = release.asset?.url;
+      if (url)
+        void installUpdate(url).catch((reason) =>
+          setNotice({ title: "Could not install the update", text: errorMessage(reason) }),
+        );
+    };
+    const size = (release: ReleaseInfo) =>
+      release.asset?.sizeBytes ? ` (${Math.round(release.asset.sizeBytes / 1_048_576)} MB)` : "";
     void bridge
       .checkUpdate()
-      .then((info) =>
-        setNotice(
-          info.available
-            ? {
-                title: `Version ${info.latestVersion} is available`,
-                text: info.asset
-                  ? `This is ${info.currentVersion}. Installing downloads ${
-                      info.asset.sizeBytes ? `${Math.round(info.asset.sizeBytes / 1_048_576)} MB and ` : ""
-                    }restarts the application.`
-                  : `This is ${info.currentVersion}. There is no packaged build for this platform, so install it from the release page.`,
-                primary: info.asset
-                  ? {
-                      label: "Install now",
-                      run: () => {
-                        const url = info.asset?.url;
-                        if (url) void installUpdate(url).catch((reason) =>
-                          setNotice({ title: "Could not install the update", text: errorMessage(reason) }),
-                        );
-                      },
-                    }
-                  : undefined,
-                action: { label: "Release notes", run: () => void bridge.openUrl(info.releaseUrl) },
-              }
-            : { title: "Up to date", text: `${info.currentVersion} is the newest release.` },
-        ),
-      )
+      .then((info) => {
+        const stable = info.stable?.available ? info.stable : null;
+        const beta = info.beta?.available ? info.beta : null;
+        const newest = [info.stable && `stable ${info.stable.version}`, info.beta && `beta ${info.beta.version}`]
+          .filter(Boolean)
+          .join(", ");
+        if (!stable && !beta) {
+          setNotice({ title: "Up to date", text: `This is ${info.currentVersion}. Newest: ${newest}.` });
+          return;
+        }
+        const line = (release: ReleaseInfo) =>
+          `${release.channel === "beta" ? "Beta" : "Stable"} ${release.version}${
+            release.basedOn ? ` (promoted from ${release.basedOn})` : ""
+          }${release.asset ? size(release) : ": no packaged build for this platform, see the release page"}.`;
+        const first = stable ?? beta!;
+        setNotice({
+          title: stable && beta ? "Updates are available" : `${stable ? "Stable" : "Beta"} ${first.version} is available`,
+          text: `This is ${info.currentVersion}. ${[stable, beta]
+            .filter((item): item is ReleaseInfo => !!item)
+            .map(line)
+            .join(" ")} Installing downloads the build and restarts the application.`,
+          primary: first.asset
+            ? { label: `Install ${first.channel === "beta" ? "beta" : first.version}`, run: installRun(first) }
+            : undefined,
+          more:
+            stable && beta?.asset
+              ? [{ label: "Install beta", run: installRun(beta) }]
+              : undefined,
+          action: { label: "Release notes", run: () => void bridge.openUrl(first.releaseUrl) },
+        });
+      })
       .catch((reason) => setNotice({ title: "Could not check for updates", text: errorMessage(reason) }));
   };
 
@@ -2295,6 +2312,11 @@ export function Workspace({
                   {notice.primary.label}
                 </button>
               )}
+              {notice.more?.map((item) => (
+                <button key={item.label} type="button" className="secondary-button" onClick={() => { item.run(); setNotice(null); }}>
+                  {item.label}
+                </button>
+              ))}
               {notice.action && (
                 <button type="button" className="secondary-button" onClick={() => { notice.action?.run(); setNotice(null); }}>
                   {notice.action.label}

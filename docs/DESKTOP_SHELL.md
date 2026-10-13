@@ -348,9 +348,19 @@ worker 二进制（或解释器加 `-m process_studio.worker`）不带参数时�
 
   **Windows 包装的是明确列出的依赖集**：`numpy pillow gdstk openpyxl pyyaml shapely trimesh mapbox-earcut truststore certifi`，再用 `--no-deps` 装 `process_studio` 本身。`scikit-fmm` 和 `scikit-image`（连带 `networkx`、`imageio`、`tifffile`、`lazy-loader`）是 level set 内核专用的求解器和 marching cubes，随它一起不装了；PyInstaller 的 spec 也把 `scipy`、`skfmm`、`skimage` 写进 `excludes`。`scipy` 也不装了：唯一用到它的是 trimesh 把面的颜色转成顶点颜色（一个稀疏矩阵）来写 mesh 文件，而导出现在直接给顶点上色——同一张图，少一个几十 MB 的依赖。`tests/test_packaging.py` 用一个会 ImportError 的假 scipy 在**新进程**里真导一次 mesh 把这件事钉住：trimesh 是在 import 时决定 scipy 在不在的，在已经 import 过的进程里再屏蔽证明不了什么（这正是本地绿、CI 红的原因）。`matplotlib` 早已从核心依赖里删掉（deviceflow 自己的 PNG 导出是惰性 import 加优雅降级）。装完之后脚本还会删掉 `pip`/`setuptools`/`wheel`（构建期工具，运行时从不 import）、每个依赖包自带的 `tests`/`test` 目录和 `__pycache__`。这一套让 Windows 包从 `v0.9.0` 的 139 MB（解压 354 MB）降到约 65-70 MB。
 
-**发布与检查更新**：一个版本一份产物，两个平台各一个：`ProcessStudio-Windows.zip` 和 `ProcessStudio-macOS.zip`（外加 Windows 安装程序 `ProcessStudio-Setup.exe` 和 dmg）。推一个 `v*` 标签（版本号同时写在 `pyproject.toml`、`src/process_studio/__init__.py`、`desktop/package.json`、`desktop/src-tauri/tauri.conf.json` 和 `Cargo.toml` 里）会构建两个平台并由 `publish` 任务发成一个 GitHub Release；也可以手动触发工作流并在 `release` 框里填 tag。首页版本号旁边的 **Check for updates** 走 worker 的 `check_update`（读 `releases/latest`，页面本身不联网），给出本平台资产的 **Download** 按钮和 **Release notes**，两者都由 worker 的 `open_url` 用系统浏览器打开，且只允许仓库自己的地址。
+**发布与检查更新**：一个版本一份产物，两个平台各一个：`ProcessStudio-Windows.zip` 和 `ProcessStudio-macOS.zip`（外加 Windows 安装程序 `ProcessStudio-Setup.exe` 和 dmg）。
 
-**版本号从 `0.9.8` 重置成 `0.1.0`**（只剩一个内核、一个版本，从这里重新数）。所以"有没有新版本"不能只看"更大"：`describe_release` 同时给出 `available`（最新 release 与当前构建**不同**）和 `newer`（严格更大），界面用前者，`0.9.8` 的用户因此仍然会被告知有 `0.1.0` 可装。
+**两个通道：正式版和测试版**。
+
+- **分支**：`beta` 是测试版分支，日常开发合进这里；`main` 是正式版分支，只会被快进到某个已经发过的测试版提交。
+- **测试版**：在 `beta` 分支上手动触发 `Desktop builds`，`release` 填 `v0.1.4-beta.1` 这样的 tag。它发成 GitHub 的 **Pre-release**，不会成为 Latest。
+- **正式版**：先把 `main` 快进到要转正的那个测试版的提交，再在 `main` 上触发，`release` 填 `v0.1.4`。工作流的 `prepare` 任务会检查这个提交上有没有 `v0.1.4-beta.*` 标签，没有就拒绝发布，所以**每个正式版都对应一个测试版、代码一模一样**，Release 说明里写着「Promoted from v0.1.4-beta.N」。
+- **版本号**：不再手改。构建前 `scripts/set_version.py` 按 tag 把版本写进 `pyproject.toml`（PEP 440 写法 `0.1.4b1`）、两个 `__init__.py`、`desktop/package.json`、`package-lock.json`（带 `-beta.N`），以及 `tauri.conf.json`、`Cargo.toml`、`Cargo.lock`（只写 `0.1.4`，Windows 安装程序要求纯数字）。同一个提交发测试版和正式版，只是写进去的版本号不同。
+- 日常每次改动的测试构建（`release` 留空）照旧不发布。
+
+首页版本号旁边的 **Check for updates**（以及 Help 菜单里的同名项）走 worker 的 `check_update`：读 `releases?per_page=50`（页面本身不联网），分别找出最新的正式版和最新的测试版，各自和当前构建比较，有更新就各给一行：**Update now / Install beta**、**Download only**、**Release notes**。正式版那一行会注明它是从哪个测试版转正的（按两个 release 的目标提交相同认出来）。比较规则：`0.1.4-beta.1 < 0.1.4-beta.2 < 0.1.4 < 0.1.5-beta.1`，所以测试版用户不会被推回更旧的正式版，正式版用户也不会被推给它转正前的那个测试版。链接都由 worker 的 `open_url` 用系统浏览器打开，且只允许仓库自己的地址。
+
+**版本号从 `0.9.8` 重置成 `0.1.0`**（只剩一个内核、一个版本，从这里重新数）。比较时 `0.9.0`–`0.9.8` 排在所有 `0.1.0` 之后的版本前面，所以还在 `0.9.8` 的用户照样会被告知有新版本可装。
 
 `Desktop builds` 工作流跑的就是这两个脚本，每个平台一个作业；手动触发时可以在 GitHub 的 Run workflow 对话框里选平台。构建前先执行 `python -m pytest -q`，前端测试由脚本里的 `npm run test` 负责。Windows 用 `--bundles nsis`，交付 `ProcessStudio.exe` 加同级的 `resources/`（免安装版，应用内更新装的也是它），外加一个 NSIS 安装程序 `ProcessStudio-Setup.exe`：按当前用户安装（不需要管理员，安装目录用户自己可写，应用内更新才能覆盖），把 embeddable Python 作为资源装到 exe 同级的 `resources/python`，和免安装版目录结构一样；主程序名用 `mainBinaryName` 固定成 `ProcessStudio`。macOS 用 `--bundles app`，交付 `Process Studio.app` 和 DMG。不生成 MSI。
 

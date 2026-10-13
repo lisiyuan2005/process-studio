@@ -23,34 +23,69 @@ def test_versions_compare_numerically():
     assert update.version_tuple("0.6.0-rc1") == (0, 6, 0)
 
 
-def test_a_release_is_described_against_this_build(monkeypatch):
-    monkeypatch.setattr(update, "asset_name", lambda *args: "ProcessStudio-Windows.zip")
-    release = {
-        "tag_name": "v9.0.0",
-        "html_url": "https://github.com/lisiyuan2005/process-studio/releases/tag/v9.0.0",
-        "published_at": "2026-09-12T00:00:00Z",
+def test_a_beta_comes_before_its_release_and_the_old_numbering_before_all():
+    order = ["0.9.8", "0.1.0", "0.1.2", "0.1.3-beta.1", "0.1.3-beta.2", "0.1.3-beta.10", "v0.1.3", "0.1.4-beta.1", "0.10.0"]
+    assert sorted(order, key=update.version_key) == order
+    assert update.channel_of("0.1.3-beta.2") == "beta" and update.channel_of("0.1.3") == "stable"
+
+
+def _release(tag, *, prerelease=False, published="2026-10-01T00:00:00Z", commit="c1", draft=False):
+    return {
+        "tag_name": tag,
+        "prerelease": prerelease,
+        "draft": draft,
+        "published_at": published,
+        "target_commitish": commit,
+        "html_url": f"https://github.com/lisiyuan2005/process-studio/releases/tag/{tag}",
         "body": "notes",
         "assets": [
             {"name": "ProcessStudio-macOS.zip", "browser_download_url": "m", "size": 1},
             {"name": "ProcessStudio-Windows.zip", "browser_download_url": "w", "size": 123},
         ],
     }
-    described = update.describe_release(release)
-    assert described["currentVersion"] == __version__
-    assert described["latestVersion"] == "9.0.0"
-    assert described["available"] and described["newer"]
+
+
+def test_a_release_is_described_against_this_build(monkeypatch):
+    monkeypatch.setattr(update, "asset_name", lambda *args: "ProcessStudio-Windows.zip")
+    described = update.describe_release(_release("v9.0.0"))
+    assert described["version"] == "9.0.0" and described["channel"] == "stable"
+    assert described["available"]
     assert described["asset"] == {"name": "ProcessStudio-Windows.zip", "url": "w", "sizeBytes": 123}
-    # A release below this build is still offered -- the version was reset,
-    # so the one to install is the latest one published, not the greatest.
-    older = update.describe_release({"tag_name": "v0.0.1", "assets": []})
-    assert older["available"] and not older["newer"] and older["asset"] is None
-    same = update.describe_release({"tag_name": f"v{__version__}", "assets": []})
-    assert not same["available"]
+    assert not update.describe_release(_release("v0.0.1"))["available"]
+    assert not update.describe_release(_release(f"v{__version__}"))["available"]
+    # the numbering was reset: a machine on 0.9.8 is offered 0.1.x
+    assert update.describe_release(_release("v0.1.2"), current="0.9.8")["available"]
 
 
-def test_check_update_reads_the_latest_release(monkeypatch):
-    monkeypatch.setattr(update, "fetch_latest_release", lambda: {"tag_name": "v0.0.1", "assets": []})
-    assert update.check_update()["latestVersion"] == "0.0.1"
+def test_the_newest_stable_and_the_newest_beta_are_found_with_where_the_stable_came_from():
+    releases = [
+        _release("v0.1.4-beta.1", prerelease=True, published="2026-10-05T00:00:00Z", commit="c4"),
+        _release("v0.1.3", published="2026-10-04T00:00:00Z", commit="c3"),
+        _release("v0.1.3-beta.2", prerelease=True, published="2026-10-03T00:00:00Z", commit="c3"),
+        _release("v0.1.3-beta.1", prerelease=True, published="2026-10-02T00:00:00Z", commit="c2"),
+        _release("v0.1.5", draft=True, published="2026-10-06T00:00:00Z", commit="c5"),
+        _release("v0.1.2", published="2026-10-01T00:00:00Z", commit="c1"),
+    ]
+    found = update.describe_releases(releases, current="0.1.3-beta.2")
+    assert found["currentChannel"] == "beta"
+    assert found["stable"]["version"] == "0.1.3" and found["stable"]["basedOn"] == "0.1.3-beta.2"
+    assert found["beta"]["version"] == "0.1.4-beta.1" and found["beta"]["channel"] == "beta"
+    # the beta tester is offered both: the release their beta became, and the next beta
+    assert found["stable"]["available"] and found["beta"]["available"]
+    on_stable = update.describe_releases(releases, current="0.1.3")
+    assert not on_stable["stable"]["available"] and on_stable["beta"]["available"]
+    # a beta tester is not offered an older stable release
+    ahead = update.describe_releases(releases, current="0.1.4-beta.1")
+    assert not ahead["stable"]["available"] and not ahead["beta"]["available"]
+
+
+def test_check_update_reads_both_channels(monkeypatch):
+    monkeypatch.setattr(update, "fetch_releases", lambda: [_release("v0.0.1")])
+    found = update.check_update()
+    assert found["stable"]["version"] == "0.0.1" and found["beta"] is None
+    monkeypatch.setattr(update, "fetch_releases", list)
+    with pytest.raises(WorkerError):
+        update.check_update()
 
 
 def test_only_the_repository_pages_can_be_opened(monkeypatch):

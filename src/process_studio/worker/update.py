@@ -1,5 +1,11 @@
 """Checking GitHub for a newer release of the application.
 
+There are two channels. A stable release is an ordinary GitHub release
+(``v0.1.3``); a beta is a pre-release (``v0.1.4-beta.2``) and is never
+marked latest. Every stable release is a beta promoted as it was: built
+from the same commit as one of the betas, which GitHub records as both
+releases' target, so the check can say which beta a stable release is.
+
 The desktop asks the worker rather than fetching itself: the webview's
 content policy keeps page code off the network, while the worker is a
 plain process with the user's own connectivity. Only the repository's
@@ -23,7 +29,7 @@ from .errors import InvalidRequest, WorkerError
 
 #: The repository whose releases carry the packaged builds.
 REPOSITORY = "lisiyuan2005/process-studio"
-RELEASES_API = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
+RELEASES_API = f"https://api.github.com/repos/{REPOSITORY}/releases?per_page=50"
 ALLOWED_URL_PREFIXES = (
     f"https://github.com/{REPOSITORY}/",
     f"https://objects.githubusercontent.com/",
@@ -35,6 +41,29 @@ def version_tuple(text: str) -> tuple[int, ...]:
     """Numbers of a version string such as "v0.6.1" or "0.6.1-rc2", for ordering."""
     numbers = re.findall(r"\d+", text.split("-", 1)[0])
     return tuple(int(n) for n in numbers) or (0,)
+
+
+#: The versions before the numbering was reset to 0.1.0, when the project
+#: narrowed to one kernel: they come before every later version.
+LEGACY = ((0, 9, 0), (0, 9, 8))
+
+
+def version_key(text: str) -> tuple:
+    """A version's place in order: "0.1.3-beta.2" before "0.1.3" before
+    "0.1.4-beta.1", and the versions from before the reset first of all."""
+    text = text.removeprefix("v")
+    base, _, pre = text.partition("-")
+    numbers = (version_tuple(base) + (0, 0, 0))[:3]
+    era = 0 if LEGACY[0] <= numbers <= LEGACY[1] else 1
+    if not pre:
+        return (era, numbers, 1, ())
+    # a pre-release is before its release; betas are ordered by their number
+    return (era, numbers, 0, tuple(int(n) for n in re.findall(r"\d+", pre)))
+
+
+def channel_of(version: str) -> str:
+    """"beta" for a pre-release version ("0.1.4-beta.2"), else "stable"."""
+    return "beta" if "-" in version else "stable"
 
 
 def asset_name(platform: str | None = None) -> str | None:
@@ -51,10 +80,15 @@ def asset_name(platform: str | None = None) -> str | None:
     return None
 
 
-def describe_release(release: Mapping[str, Any], *, current: str = __version__) -> dict[str, Any]:
-    """What the desktop shows for a release document from the GitHub API."""
-    tag = str(release.get("tag_name") or "")
-    latest = tag[1:] if tag.startswith("v") else tag
+def _bare(tag: str) -> str:
+    return tag.removeprefix("v")
+
+
+def describe_release(
+    release: Mapping[str, Any], *, current: str = __version__, based_on: str | None = None
+) -> dict[str, Any]:
+    """What the desktop shows for one release document from the GitHub API."""
+    version = _bare(str(release.get("tag_name") or ""))
     wanted = asset_name()
     asset = None
     for item in release.get("assets") or []:
@@ -65,21 +99,42 @@ def describe_release(release: Mapping[str, Any], *, current: str = __version__) 
                 "sizeBytes": int(item.get("size") or 0),
             }
             break
-    latest_numbers = version_tuple(latest)
-    current_numbers = version_tuple(current)
     return {
-        "currentVersion": current,
-        "latestVersion": latest,
-        # Whether to offer it is whether it is a *different* build from this
-        # one, not whether it is a greater number: the version was reset from
-        # 0.9.8 to 0.1.0 when the project narrowed to one kernel, so the
-        # release to install is lower than what some machines are running.
-        "available": bool(latest) and latest_numbers != current_numbers,
-        "newer": latest_numbers > current_numbers,
+        "version": version,
+        "channel": "beta" if release.get("prerelease") else "stable",
+        # Offered when it comes after this build: a beta tester is not
+        # offered the stable release their beta later became, and a machine
+        # still on 0.9.x is offered 0.1.x (see LEGACY).
+        "available": bool(version) and version_key(version) > version_key(current),
         "releaseUrl": str(release.get("html_url") or f"https://github.com/{REPOSITORY}/releases"),
         "publishedAt": release.get("published_at"),
         "notes": str(release.get("body") or ""),
         "asset": asset,
+        # the beta a stable release was promoted from
+        "basedOn": based_on,
+    }
+
+
+def describe_releases(releases: list[Mapping[str, Any]], *, current: str = __version__) -> dict[str, Any]:
+    """The newest stable release and the newest beta, each against this build."""
+    published = [item for item in releases if not item.get("draft") and item.get("tag_name")]
+    published.sort(key=lambda item: str(item.get("published_at") or ""), reverse=True)
+    stable = next((item for item in published if not item.get("prerelease")), None)
+    beta = next((item for item in published if item.get("prerelease")), None)
+    based_on = None
+    if stable is not None:
+        commit = stable.get("target_commitish")
+        same = [
+            item for item in published
+            if item.get("prerelease") and commit and item.get("target_commitish") == commit
+        ]
+        if same:
+            based_on = _bare(str(max(same, key=lambda item: version_key(str(item["tag_name"])))["tag_name"]))
+    return {
+        "currentVersion": current,
+        "currentChannel": channel_of(current),
+        "stable": None if stable is None else describe_release(stable, current=current, based_on=based_on),
+        "beta": None if beta is None else describe_release(beta, current=current),
     }
 
 
@@ -131,7 +186,7 @@ def _unreachable(error: Exception) -> WorkerError:
     return WorkerError(f"Could not reach GitHub: {error}")
 
 
-def fetch_latest_release() -> dict[str, Any]:
+def fetch_releases() -> list[dict[str, Any]]:
     request = urllib.request.Request(
         RELEASES_API,
         headers={
@@ -145,15 +200,19 @@ def fetch_latest_release() -> dict[str, Any]:
         ) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
-        if error.code == 404:
-            raise WorkerError("No release has been published yet.") from error
         raise WorkerError(f"GitHub answered {error.code} to the release check.") from error
     except (urllib.error.URLError, TimeoutError, OSError) as error:
         raise _unreachable(error) from error
 
 
 def check_update() -> dict[str, Any]:
-    return describe_release(fetch_latest_release())
+    releases = fetch_releases()
+    if not isinstance(releases, list):
+        raise WorkerError("GitHub's answer to the release check was not a list of releases.")
+    found = describe_releases(releases)
+    if found["stable"] is None and found["beta"] is None:
+        raise WorkerError("No release has been published yet.")
+    return found
 
 
 def open_url(url: Any) -> dict[str, Any]:
