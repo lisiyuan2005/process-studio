@@ -46,6 +46,9 @@ const WORKER_METHODS: &[&str] = &[
     "import_recipes_xlsx",
     "gds_layers",
     "list_sketches",
+    "create_branch",
+    "rename_branch",
+    "delete_branch",
 ];
 
 /// Methods that may name a directory that does not exist yet.

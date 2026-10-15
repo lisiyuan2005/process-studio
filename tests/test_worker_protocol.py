@@ -1576,3 +1576,21 @@ def test_an_old_absolute_layout_path_is_adopted(tmp_path):
     with repository.connect() as connection:
         connection.execute("UPDATE projects SET gds_path = ?", (r"C:\elsewhere\other.gds",))
     assert repository.load_project("p").gds_path == r"C:\elsewhere\other.gds"
+
+
+def test_every_method_the_desktop_calls_is_let_through_by_the_shell_and_answered():
+    """The shell passes only the methods it lists on to the worker. One the
+    page calls but the list lacks fails in the packaged app alone, with
+    "... is not an allowed worker method": the branch RPCs did, for a month."""
+    import re
+
+    root = Path(__file__).resolve().parent.parent
+    shell = (root / "desktop/src-tauri/src/lib.rs").read_text(encoding="utf-8")
+    listed = shell[shell.index("const WORKER_METHODS") :]
+    allowed = set(re.findall(r'"([a-z_]+)"', listed[: listed.index("];")]))
+    bridge = (root / "desktop/src/bridge/tauriBridge.ts").read_text(encoding="utf-8")
+    called = set(re.findall(r'\bcall(?:<[^()]*?>)?\(\s*"([a-z_]+)"', bridge, re.S))
+    handled = set(re.findall(r'method == "([a-z_]+)"', (root / "src/process_studio/worker/protocol.py").read_text(encoding="utf-8")))
+    assert called, "found no worker calls in the bridge"
+    assert called <= allowed, f"called but not let through: {sorted(called - allowed)}"
+    assert allowed <= handled, f"let through but not answered: {sorted(allowed - handled)}"
