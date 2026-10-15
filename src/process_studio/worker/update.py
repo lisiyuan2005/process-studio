@@ -130,12 +130,18 @@ def describe_releases(releases: list[Mapping[str, Any]], *, current: str = __ver
         ]
         if same:
             based_on = _bare(str(max(same, key=lambda item: version_key(str(item["tag_name"])))["tag_name"]))
-    return {
+    found = {
         "currentVersion": current,
         "currentChannel": channel_of(current),
         "stable": None if stable is None else describe_release(stable, current=current, based_on=based_on),
         "beta": None if beta is None else describe_release(beta, current=current),
     }
+    # A beta that a stable release has caught up with -- promoted, or
+    # overtaken -- is nothing to offer: the stable release is the same or later.
+    if found["stable"] and found["beta"]:
+        if version_key(found["beta"]["version"]) <= version_key(found["stable"]["version"]):
+            found["beta"]["available"] = False
+    return found
 
 
 @functools.lru_cache(maxsize=1)

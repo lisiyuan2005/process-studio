@@ -74,6 +74,9 @@ def test_the_newest_stable_and_the_newest_beta_are_found_with_where_the_stable_c
     assert found["stable"]["available"] and found["beta"]["available"]
     on_stable = update.describe_releases(releases, current="0.1.3")
     assert not on_stable["stable"]["available"] and on_stable["beta"]["available"]
+    # once a beta is promoted, it is the stable release that is offered, not both
+    promoted = update.describe_releases(releases[1:], current="0.1.2")
+    assert promoted["stable"]["available"] and not promoted["beta"]["available"]
     # a beta tester is not offered an older stable release
     ahead = update.describe_releases(releases, current="0.1.4-beta.1")
     assert not ahead["stable"]["available"] and not ahead["beta"]["available"]
