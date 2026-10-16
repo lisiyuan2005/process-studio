@@ -497,6 +497,38 @@ def test_a_masked_deposition_leaves_the_film_only_inside_the_opening(kernel, pro
     assert section.surface_z(0.1) == pytest.approx(0.8 + 0.04)
 
 
+def test_a_masked_film_does_not_climb_a_wall_the_resist_covers(kernel, project):
+    """A pad that stops short of the next step's riser by less than the film
+    is thick. The resist fills that gap, so the riser grows nothing; the film
+    is the pad's floor film, cut straight at the opening -- not a sheet
+    standing up beside the riser, as high as the step."""
+    materials = default_materials()
+    rect = lambda x0, x1, wide: SketchShape(
+        "rectangle", parameters={"center": ((x0 + x1) / 2, 0.0), "size": (x1 - x0, wide)}
+    )
+    # the step runs across the whole window; the pad is 0.4 wide on its low side
+    sketches = {"low": QuickSketch("low", [rect(-0.8, 0.0, 1.6)]), "pad": QuickSketch("pad", [rect(-0.3, -0.02, 0.4)])}
+    run = lambda state, the_step: kernel.run_step(
+        state, the_step, project=project, recipes={}, sketches=sketches, logger=lambda _m: None, materials=materials
+    )
+    state = kernel.initial_state(project, materials=materials)
+    state = run(state, step(
+        ProcessType.ETCH, mask_source="quick_sketch",
+        parameters={"target": 0.1, "directional_fraction": 1, "sketch_id": "low"},
+        material_responses={"Si": MaterialResponse("Si", 1.0)},
+    ))
+    for mode in ("conformal", "planar"):
+        grown = run(state, step(
+            ProcessType.DEPOSIT, mask_source="quick_sketch",
+            parameters={"target": 0.06, "mode": mode, "sketch_id": "pad"}, output_material="W",
+        ))
+        assert grown.device.volume("W") == pytest.approx(0.28 * 0.4 * 0.06, rel=1e-3)
+        floor = 0.8 - 0.1
+        section = grown.device.cross_section((-0.8, 0.0), (0.8, 0.0))
+        # 0.04 µm from the riser: the floor film, not the riser's height (distance along the cut)
+        assert section.surface_z(0.8 - 0.04) == pytest.approx(floor + 0.06)
+
+
 def test_a_masked_film_survives_a_save_and_a_later_step(tmp_path, kernel, project, sketches):
     materials = default_materials()
     state = kernel.initial_state(project, materials=materials)

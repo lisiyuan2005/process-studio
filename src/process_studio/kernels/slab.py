@@ -595,7 +595,7 @@ def _deposit(
     _masked_deposit(device, material, thickness, mode, mask, square)
 
 
-def _reached_under_mask(state, opening, ignore=None) -> list:
+def _reached_under_mask(state, opening, ignore=None, parts: bool = False):
     """For each slab of a DeviceFlow state (in its order), the open space a
     gas or an etchant gets to through the mask's ``opening``.
 
@@ -606,6 +606,10 @@ def _reached_under_mask(state, opening, ignore=None) -> list:
     the resist. Open space joined to the ambient only through resist, and
     sealed cavities, are not reached. ``ignore`` is a material counted as
     open (a film just grown, standing in the space it grew in).
+
+    With ``parts``, also each slab's reached pieces as (geometry, component):
+    pieces joined through reached space, in any slab, share a component;
+    space behind resist is joined to an opening only round the resist.
     """
     window = box(*state.bounds)
     slabs = state.slabs
@@ -624,30 +628,109 @@ def _reached_under_mask(state, opening, ignore=None) -> list:
         free[i] = state.clean(free[i].difference(exposed.difference(opening)))
     pieces = [list(getattr(f, "geoms", [f])) if not f.is_empty else [] for f in free]
     reached = [np.zeros(len(p), dtype=bool) for p in pieces]
-    queue: list[tuple[int, int]] = []
-    for i, parts in enumerate(pieces):
+    component = [np.full(len(p), -1, dtype=np.int64) for p in pieces]
+    count = 0
+    for i, slab_parts in enumerate(pieces):
         if seeds[i].is_empty:
             continue
-        for j, part in enumerate(parts):
-            if part.intersection(seeds[i]).area > tiny:
-                reached[i][j] = True
-                queue.append((i, j))
-    while queue:
-        i, j = queue.pop()
-        part = pieces[i][j]
-        for other in (i - 1, i + 1):
-            if not 0 <= other < len(slabs):
+        for j, part in enumerate(slab_parts):
+            if reached[i][j] or part.intersection(seeds[i]).area <= tiny:
                 continue
-            for jj, candidate in enumerate(pieces[other]):
-                if reached[other][jj] or not part.intersects(candidate):
-                    continue
-                if part.intersection(candidate).area > tiny:
-                    reached[other][jj] = True
-                    queue.append((other, jj))
-    return [
-        state.clean(shapely.union_all([p for p, hit in zip(parts, hits) if hit])) if hits.any() else Polygon()
-        for parts, hits in zip(pieces, reached)
+            # everything this seed joins up with is one component
+            reached[i][j] = True
+            component[i][j] = count
+            queue: list[tuple[int, int]] = [(i, j)]
+            while queue:
+                a, b = queue.pop()
+                piece = pieces[a][b]
+                for other in (a - 1, a + 1):
+                    if not 0 <= other < len(slabs):
+                        continue
+                    for jj, candidate in enumerate(pieces[other]):
+                        if reached[other][jj] or not piece.intersects(candidate):
+                            continue
+                        if piece.intersection(candidate).area > tiny:
+                            reached[other][jj] = True
+                            component[other][jj] = count
+                            queue.append((other, jj))
+            count += 1
+    joined = [
+        state.clean(shapely.union_all([p for p, hit in zip(slab_parts, hits) if hit])) if hits.any() else Polygon()
+        for slab_parts, hits in zip(pieces, reached)
     ]
+    if not parts:
+        return joined
+    labelled = [
+        [(p, int(c)) for p, c, hit in zip(slab_parts, labels, hits) if hit]
+        for slab_parts, labels, hits in zip(pieces, component, reached)
+    ]
+    return joined, labelled
+
+
+def _grown_from_reached_surfaces(state, labelled, thickness: float, ignore) -> list:
+    """For each slab, where a film ``thickness`` thick can be that grew from
+    a surface the gas reached: within ``thickness`` of the solid's faces
+    that touch reached space -- its walls in a slab, its tops and undersides
+    between slabs -- and only in the reached space joined to that face.
+
+    The film is grown over the whole wafer, as if there were no resist, and
+    then cut to the reached space; but a wall the resist covers grows film
+    too, and where the opening stops short of that wall by less than the
+    thickness, the film it grew reaches into the opening: a sheet of metal
+    standing a gap away from the wall, as high as the wall. Measured from
+    the faces the gas reached, it is not there. Buffers are square, so a
+    film with square corners (the simplified one) is not cut either.
+    """
+    slabs = state.slabs
+    count = len(slabs)
+    t = float(thickness)
+    eps = 4.0 * state.grid
+    reach = t + eps
+
+    def solid(slab):
+        geoms = [g for m, g in slab.regions.items() if m is not ignore]
+        return state.clean(shapely.union_all(geoms)) if geoms else Polygon()
+
+    real = [solid(slab) for slab in slabs]
+    by_component = []
+    for slab_parts in labelled:
+        groups: dict[int, list] = {}
+        for geom, comp in slab_parts:
+            groups.setdefault(comp, []).append(geom)
+        by_component.append({comp: shapely.union_all(geoms) for comp, geoms in groups.items()})
+
+    def grown(geom):
+        return shapely.buffer(geom, reach, cap_style="square", join_style="mitre", mitre_limit=2.0)
+
+    # (lowest z, highest z, where its film can reach, its component)
+    sources: list[tuple[float, float, Any, int]] = []
+    for j, slab in enumerate(slabs):
+        if not real[j].is_empty:
+            skin = real[j].buffer(eps, join_style="mitre")
+            for comp, geom in by_component[j].items():
+                contact = skin.intersection(geom)
+                if contact.area > 0.0:
+                    sources.append((slab.z0, slab.z1, grown(contact), comp))
+        if j + 1 < count:
+            z = slab.z1
+            for comp, geom in by_component[j + 1].items():  # a top under reached space
+                face = real[j].intersection(geom)
+                if face.area > 0.0:
+                    sources.append((z, z, grown(face), comp))
+            for comp, geom in by_component[j].items():  # an underside over it
+                face = real[j + 1].intersection(geom)
+                if face.area > 0.0:
+                    sources.append((z, z, grown(face), comp))
+    allowed = []
+    for i, slab in enumerate(slabs):
+        pieces = []
+        for low, high, where, comp in sources:
+            gap = max(0.0, slab.z0 - high, low - slab.z1)
+            if gap >= t * (1.0 - 1e-9) or comp not in by_component[i]:
+                continue
+            pieces.append(where.intersection(by_component[i][comp]))
+        allowed.append(shapely.union_all(pieces) if pieces else Polygon())
+    return allowed
 
 
 def _masked_deposit(
@@ -672,13 +755,14 @@ def _masked_deposit(
     stand_in = registry.resolve(stand_in_name)
     device.deposit(stand_in_name, thickness, mode=mode, square=square)
     state = device._state
-    reached = _reached_under_mask(state, state.clean(mask._geom), ignore=stand_in)
+    reached, labelled = _reached_under_mask(state, state.clean(mask._geom), ignore=stand_in, parts=True)
+    allowed = _grown_from_reached_surfaces(state, labelled, thickness, stand_in)
     changed = []
-    for slab, where in zip(state.slabs, reached):
+    for slab, where, near in zip(state.slabs, reached, allowed):
         grown = slab.regions.pop(stand_in, None)
         if grown is None:
             continue
-        kept = state.clean(grown.intersection(where))
+        kept = state.clean(grown.intersection(where).intersection(near))
         if not kept.is_empty:
             existing = slab.regions.get(real)
             slab.regions[real] = (
