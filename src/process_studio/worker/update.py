@@ -45,7 +45,7 @@ def version_tuple(text: str) -> tuple[int, ...]:
 
 #: The versions before the numbering was reset to 0.1.0, when the project
 #: narrowed to one kernel: they come before every later version.
-LEGACY = ((0, 9, 0), (0, 9, 8))
+LEGACY = ((0, 9, 0, 0), (0, 9, 8, 0))
 
 
 def version_key(text: str) -> tuple:
@@ -53,7 +53,8 @@ def version_key(text: str) -> tuple:
     "0.1.4-beta.1", and the versions from before the reset first of all."""
     text = text.removeprefix("v")
     base, _, pre = text.partition("-")
-    numbers = (version_tuple(base) + (0, 0, 0))[:3]
+    # a fourth number is a fix release of the third: 0.1.3 < 0.1.3.1 < 0.1.4
+    numbers = (version_tuple(base) + (0, 0, 0, 0))[:4]
     era = 0 if LEGACY[0] <= numbers <= LEGACY[1] else 1
     if not pre:
         return (era, numbers, 1, ())
@@ -106,6 +107,8 @@ def describe_release(
         # offered the stable release their beta later became, and a machine
         # still on 0.9.x is offered 0.1.x (see LEGACY).
         "available": bool(version) and version_key(version) > version_key(current),
+        # this very build: nothing to install from it
+        "installed": bool(version) and version_key(version) == version_key(current),
         "releaseUrl": str(release.get("html_url") or f"https://github.com/{REPOSITORY}/releases"),
         "publishedAt": release.get("published_at"),
         "notes": str(release.get("body") or ""),

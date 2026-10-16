@@ -175,6 +175,11 @@ export interface ProjectSummary {
    * both are stored side by side.
    */
   fidelity?: Fidelity;
+  /**
+   * The experiment record: what was done in the lab, a flow of its own that
+   * is never run (see domain/experiment). Null until a project has one.
+   */
+  experimentSteps?: ProcessStep[] | null;
 }
 
 export type Fidelity = "detailed" | "simplified";
@@ -221,6 +226,8 @@ export interface ReleaseInfo {
   channel: "stable" | "beta";
   /** It comes after this build (a beta before its release; 0.9.x before 0.1.0). */
   available: boolean;
+  /** It is this very build. Any other can be installed, newer or not. */
+  installed: boolean;
   releaseUrl: string;
   publishedAt: string | null;
   notes: string;

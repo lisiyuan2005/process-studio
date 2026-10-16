@@ -24,7 +24,10 @@ def test_versions_compare_numerically():
 
 
 def test_a_beta_comes_before_its_release_and_the_old_numbering_before_all():
-    order = ["0.9.8", "0.1.0", "0.1.2", "0.1.3-beta.1", "0.1.3-beta.2", "0.1.3-beta.10", "v0.1.3", "0.1.4-beta.1", "0.10.0"]
+    order = [
+        "0.9.8", "0.1.0", "0.1.2", "0.1.3-beta.1", "0.1.3-beta.2", "0.1.3-beta.10", "v0.1.3",
+        "0.1.3.1-beta.1", "0.1.3.1", "0.1.4-beta.1", "0.10.0",
+    ]
     assert sorted(order, key=update.version_key) == order
     assert update.channel_of("0.1.3-beta.2") == "beta" and update.channel_of("0.1.3") == "stable"
 
@@ -53,6 +56,8 @@ def test_a_release_is_described_against_this_build(monkeypatch):
     assert described["asset"] == {"name": "ProcessStudio-Windows.zip", "url": "w", "sizeBytes": 123}
     assert not update.describe_release(_release("v0.0.1"))["available"]
     assert not update.describe_release(_release(f"v{__version__}"))["available"]
+    assert update.describe_release(_release(f"v{__version__}"))["installed"]
+    assert not update.describe_release(_release("v0.0.1"))["installed"]
     # the numbering was reset: a machine on 0.9.8 is offered 0.1.x
     assert update.describe_release(_release("v0.1.2"), current="0.9.8")["available"]
 

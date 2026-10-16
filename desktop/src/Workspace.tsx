@@ -4,6 +4,7 @@ import {
   CircleAlert,
   CheckCircle2,
   Cpu,
+  FlaskConical,
   Grid3x3,
   ListChecks,
   LoaderCircle,
@@ -25,6 +26,22 @@ import { ProjectHome } from "./components/ProjectHome";
 import { FlowExportDialog } from "./components/FlowExportDialog";
 import { RecipeEditor } from "./components/RecipeEditor";
 import { SketchEditor } from "./components/SketchEditor";
+import { useTextPrompt } from "./components/TextPrompt";
+import { ExperimentList } from "./components/ExperimentList";
+import {
+  addExperimentStep,
+  duplicateExperimentStep,
+  experimentFromSimulation,
+  experimentSteps,
+  exportExperimentToBranch,
+  loadRecipeIntoExperiment,
+  moveExperimentStep,
+  recipeFromExperiment,
+  removeExperimentStep,
+  setExperimentProcessType,
+  updateExperimentParameters,
+  updateExperimentStep,
+} from "./domain/experiment";
 import { MenuBar, type Menu } from "./components/MenuBar";
 import { PROCESS_LABELS, StepList, summarizeStatuses, type LoopActions, type SelectModifiers } from "./components/StepList";
 import { Viewport, type MaterialLook, type ViewMode } from "./components/Viewport";
@@ -67,7 +84,6 @@ import {
   stepStatus,
   toggleStep,
   updateStep,
-  updateStepExperiment,
   updateStepParameters,
   upsertMaterial,
   upsertSectionLine,
@@ -211,6 +227,8 @@ export function Workspace({
   // A table export asks which columns first; a flow file carries everything.
   const [exportingTable, setExportingTable] = useState<FlowExportFormat | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  // names asked for in the window itself (the macOS webview has no prompt)
+  const [promptDialog, askText] = useTextPrompt();
   // A short message with an optional action, for menu commands that answer something.
   const [notice, setNotice] = useState<{
     title: string;
@@ -253,6 +271,10 @@ export function Workspace({
   // The recipes only: no 3D view, section or top view, and nothing fetched
   // or built for them, so the step list and the parameters have the whole
   // window and an edit never waits on geometry. This viewer's choice, kept.
+  // The simulation flow (the default) or the experiment record, which is a
+  // flow of its own with no geometry: what was done in the lab.
+  const [workMode, setWorkMode] = useState<"simulation" | "experiment">("simulation");
+  const [selectedExperimentId, setSelectedExperimentId] = useState("");
   const [recipeView, setRecipeViewState] = useState<boolean>(() => {
     try {
       return window.localStorage.getItem(RECIPE_VIEW_KEY) === "1";
@@ -689,12 +711,16 @@ export function Workspace({
     const step = steps.find((item) => item.id === stepId);
     if (!step) return;
     const suggestion = `Split ${document.branches.length + 1}`;
-    const name = window.prompt(
-      `Fork the flow after ${step.name}. The new branch keeps every step up to there, `
-        + "and what they have already computed. Name it:",
-      suggestion,
-    );
-    if (!name || !name.trim()) return;
+    const name = await askText({
+      title: `Fork after ${step.name}`,
+      label: "New branch",
+      message:
+        "The new branch keeps every step up to here, and what they have already computed; "
+        + "what follows is yours to change.",
+      initial: suggestion,
+      confirm: "Fork",
+    });
+    if (!name) return;
     try {
       if (saveState === "unsaved") await saveNow();
       const result = await bridge.createBranch(document.root, branch.id, stepId, name.trim());
@@ -713,8 +739,8 @@ export function Workspace({
 
   const renameBranch = async () => {
     if (!document || !branch) return;
-    const name = window.prompt("Name of this branch", branch.name);
-    if (!name || !name.trim() || name.trim() === branch.name) return;
+    const name = await askText({ title: `Rename ${branch.name}`, initial: branch.name, confirm: "Rename" });
+    if (!name || name === branch.name) return;
     try {
       if (saveState === "unsaved") await saveNow();
       const result = await bridge.renameBranch(document.root, branch.id, name.trim());
@@ -1054,37 +1080,66 @@ export function Workspace({
     void bridge
       .checkUpdate()
       .then((info) => {
-        const stable = info.stable?.available ? info.stable : null;
-        const beta = info.beta?.available ? info.beta : null;
-        const newest = [info.stable && `stable ${info.stable.version}`, info.beta && `beta ${info.beta.version}`]
-          .filter(Boolean)
-          .join(", ");
+        // Both channels, unless one is this build: a stable user can try the
+        // beta, and a beta user can go back to the stable release.
+        const stable = info.stable && !info.stable.installed ? info.stable : null;
+        const beta = info.beta && !info.beta.installed ? info.beta : null;
         if (!stable && !beta) {
-          setNotice({ title: "Up to date", text: `This is ${info.currentVersion}. Newest: ${newest}.` });
+          setNotice({ title: "Up to date", text: `This is ${info.currentVersion}, the newest release.` });
           return;
         }
         const line = (release: ReleaseInfo) =>
           `${release.channel === "beta" ? "Beta" : "Stable"} ${release.version}${
-            release.basedOn ? ` (promoted from ${release.basedOn})` : ""
-          }${release.asset ? size(release) : ": no packaged build for this platform, see the release page"}.`;
-        const first = stable ?? beta!;
+            release.available ? "" : " (older than this build)"
+          }${release.basedOn ? `, promoted from ${release.basedOn}` : ""}${
+            release.asset ? size(release) : ": no packaged build for this platform, see the release page"
+          }.`;
+        const newer = [stable, beta].filter((item): item is ReleaseInfo => !!item && item.available);
+        const first = newer[0] ?? stable ?? beta!;
+        const second = first === stable ? beta : stable;
+        const label = (release: ReleaseInfo) =>
+          release.channel === "beta" ? `Install beta ${release.version}` : `Install ${release.version}`;
         setNotice({
-          title: stable && beta ? "Updates are available" : `${stable ? "Stable" : "Beta"} ${first.version} is available`,
+          title: newer.length ? `${newer.length > 1 ? "Updates are" : "An update is"} available` : "Up to date",
           text: `This is ${info.currentVersion}. ${[stable, beta]
             .filter((item): item is ReleaseInfo => !!item)
             .map(line)
             .join(" ")} Installing downloads the build and restarts the application.`,
-          primary: first.asset
-            ? { label: `Install ${first.channel === "beta" ? "beta" : first.version}`, run: installRun(first) }
-            : undefined,
-          more:
-            stable && beta?.asset
-              ? [{ label: "Install beta", run: installRun(beta) }]
-              : undefined,
+          primary: first.asset ? { label: label(first), run: installRun(first) } : undefined,
+          more: second?.asset ? [{ label: label(second), run: installRun(second) }] : undefined,
           action: { label: "Release notes", run: () => void bridge.openUrl(first.releaseUrl) },
         });
       })
       .catch((reason) => setNotice({ title: "Could not check for updates", text: errorMessage(reason) }));
+  };
+
+  // The experiment record's selected step; the first when none is.
+  const selectedExperiment = document
+    ? experimentSteps(document).find((step) => step.id === selectedExperimentId) ?? experimentSteps(document)[0]
+    : undefined;
+
+  // The experiment record as a new simulation branch, made active.
+  const exportExperiment = async () => {
+    if (!document || busy) return;
+    const name = await askText({
+      title: "Export to a simulation branch",
+      label: "Branch name",
+      message:
+        "A new branch with a simulation step for each experiment step: a deposition's thickness from its "
+        + "target, cycles × rate per cycle, or time × rate; an etch by its time and each material's rate. "
+        + "Temperature, pressure and the like are left out. The flows already there are not touched.",
+      initial: `From experiment ${document.branches.length + 1}`,
+      confirm: "Export",
+    });
+    if (!name) return;
+    const { document: next, branch: made } = exportExperimentToBranch(document, name);
+    setDocument(next);
+    setWorkMode("simulation");
+    setSelectedStepId(made.steps[0]?.id ?? "");
+    setEvents((current) => [
+      ...current,
+      { kind: "log", message: `Exported ${made.steps.length} experiment step(s) to the branch ${name}.` },
+    ]);
   };
 
   // -- keyboard shortcuts -----------------------------------------------------------
@@ -1123,6 +1178,9 @@ export function Workspace({
       } else if ((mod && key === "y") || (mod && event.shiftKey && key === "z")) {
         event.preventDefault();
         redo();
+      } else if (workMode === "experiment") {
+        // the step shortcuts below are the simulation flow's
+        return;
       } else if (mod && key === "a") {
         event.preventDefault();
         selectAll();
@@ -1157,7 +1215,7 @@ export function Workspace({
     // own, and a step that has finished is stored before the next begins.
     if (!root || !branchId) return;
     const token = (viewToken.current += 1);
-    if (recipeView) {
+    if (recipeView || workMode === "experiment") {
       // nothing on screen to fill; what was loading is dropped
       setViewLoading(false);
       return;
@@ -1276,6 +1334,7 @@ export function Workspace({
     sectionIndex,
     sectionLine,
     recipeView,
+    workMode,
   ]);
 
   useEffect(() => {
@@ -1946,10 +2005,39 @@ export function Workspace({
                   : "Saved"}
           </span>
         </div>
+        <div className="work-mode-switch" role="radiogroup" aria-label="Simulation or experiment">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={workMode === "simulation"}
+            aria-label="Simulation"
+            className={workMode === "simulation" ? "active" : ""}
+            title="The simulation flow: what the kernel builds"
+            onClick={() => setWorkMode("simulation")}
+          >
+            <Cpu size={13} /> <span className="topbar-label">Simulation</span>
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={workMode === "experiment"}
+            aria-label="Experiment"
+            className={workMode === "experiment" ? "active" : ""}
+            title="The experiment record: what was done in the lab, with every tool setting. Never run."
+            onClick={() => {
+              setWorkMode("experiment");
+              if (!selectedExperimentId) setSelectedExperimentId(experimentSteps(document)[0]?.id ?? "");
+            }}
+          >
+            <FlaskConical size={13} /> <span className="topbar-label">Experiment</span>
+          </button>
+        </div>
         <button
           type="button"
+          disabled={workMode === "experiment"}
           className={`log-button recipe-view-button${recipeView ? " active" : ""}`}
           aria-pressed={recipeView}
+          aria-label="Recipes only"
           title={
             recipeView
               ? "Show the 3D view again (Ctrl+E)"
@@ -1958,7 +2046,7 @@ export function Workspace({
           onClick={() => setRecipeView(!recipeView)}
         >
           <ListChecks size={15} />
-          Recipes
+          <span className="topbar-label">Recipes</span>
         </button>
         <button type="button" className="log-button" onClick={() => setShowLog((value) => !value)}>
           <ScrollText size={15} />
@@ -2004,202 +2092,289 @@ export function Workspace({
         </div>
       ) : null}
 
-      <div className={`workspace-grid${recipeView ? " recipe-only" : ""}`}>
-        <PanelResizer
-          side="left"
-          share={(panelShares ?? DEFAULT_PANELS).steps}
-          onResize={(width) => resizePanel("steps", width)}
-          onReset={resetPanels}
-        />
-        {!recipeView && (
+      {workMode === "experiment" ? (
+        <div className="workspace-grid recipe-only">
           <PanelResizer
-            side="right"
-            share={(panelShares ?? DEFAULT_PANELS).inspector}
-            onResize={(width) => resizePanel("inspector", width)}
+            side="left"
+            share={(panelShares ?? DEFAULT_PANELS).steps}
+            onResize={(width) => resizePanel("steps", width)}
             onReset={resetPanels}
           />
-        )}
-        <StepList
-          steps={steps}
-          statuses={statuses}
-          accentFor={(step) => stepAccentColor(document, step)}
-          selectedStepId={selectedStepId}
-          selectedIds={selectedIds}
-          busy={busy}
-          canPaste={clipboardSize > 0}
-          onSelect={selectStep}
-          onClearSelection={clearSelection}
-          onBranch={branchFromStep}
-          forks={forks}
-          onDuplicateSelected={duplicateSelected}
-          onRemoveSelected={removeSelected}
-          onMoveSelected={moveSelected}
-          onEnableSelected={enableSelected}
-          onCopySelected={copySelected}
-          onPaste={() => void pasteSteps()}
-          processTypes={kernelProcessTypes}
-          onAdd={(processType) => {
-            const { document: next, step } = addStep(document, processType, selectedStepId);
-            setDocument(next);
-            setSelectedStepId(step.id);
-          }}
-          onToggle={(stepId) => setDocument(toggleStep(document, stepId))}
-          onReorder={(activeId, overId) => setDocument(reorderSteps(document, activeId, overId))}
-          onRunToHere={(stepId) => void runFlow(stepId)}
-          onDuplicate={(stepId) => {
-            const result = duplicateStep(document, stepId);
-            if (!result) return;
-            setDocument(result.document);
-            setSelectedStepId(result.step.id);
-          }}
-          onMove={(stepId, direction) => setDocument(moveStep(document, stepId, direction))}
-          onRemove={removeStepById}
-          selectedLoopId={selectedLoopId}
-          loopObstacle={loopBlocker}
-          loops={loopActions}
-          loopDialogOpen={loopDialog}
-          onLoopDialogChange={setLoopDialog}
-        />
-        {!recipeView && (
-          <Viewport
-            mode={mode}
-            onModeChange={setMode}
-            title={
-              loopSummary
-                ? `${loopSummary.loop.name} · after its last step (${loopSummary.last})`
-                : selectedStep
-                  ? `${selectedStep.name} · after step ${steps.indexOf(selectedStep) + 1}`
-                  : "Initial wafer"
-            }
-            loading={viewLoading}
-            error={viewError}
-            notice={viewNotice}
-            surfacesSupported={projectKernel?.surfaces ?? capabilities?.rendering.surfaces ?? false}
-            maximumInterpolation={capabilities?.rendering.maximumInterpolation ?? 4}
-            interpolation={interpolation}
-            onInterpolationChange={setInterpolation}
-            topSteps={topSteps}
-            onTopStepsChange={setTopSteps}
-            triangulation={triangulation}
-            onTriangulationChange={setTriangulation}
-            sectionAxis={sectionAxis}
-            onSectionAxisChange={(axis) => {
-              setSectionAxis(axis);
-              setSectionIndex(null);
-              sectionPosition.current = null;
+          <ExperimentList
+            steps={experimentSteps(document)}
+            selectedId={selectedExperiment?.id ?? ""}
+            processTypes={kernelProcessTypes}
+            accentFor={(step) => stepAccentColor(document, step)}
+            onSelect={setSelectedExperimentId}
+            onAdd={(type) => {
+              const { document: next, step } = addExperimentStep(document, type, selectedExperiment?.id);
+              setDocument(next);
+              setSelectedExperimentId(step.id);
             }}
-            sectionLines={sectionLines}
-            sectionLine={sectionLine}
-            windowBounds={{
-              xMin: document.project.grid.xMin,
-              xMax: document.project.grid.xMax,
-              yMin: document.project.grid.yMin,
-              yMax: document.project.grid.yMax,
+            onMove={(id, direction) => setDocument(moveExperimentStep(document, id, direction))}
+            onDuplicate={(id) => {
+              const result = duplicateExperimentStep(document, id);
+              if (!result) return;
+              setDocument(result.document);
+              setSelectedExperimentId(result.step.id);
             }}
-            onSelectLine={(lineId) => {
-              setActiveLineId(lineId);
-              if (lineId) setSectionAxis("line");
-              else if (sectionAxis === "line") setSectionAxis("y");
+            // no confirm(): the macOS webview may answer it without asking; Ctrl+Z brings it back
+            onRemove={(id) => setDocument(removeExperimentStep(document, id))}
+            onExport={() => void exportExperiment()}
+            onStartFromFlow={() => {
+              const record = experimentFromSimulation(steps);
+              setDocument({ ...document, project: { ...document.project, experimentSteps: record } });
+              setSelectedExperimentId(record[0]?.id ?? "");
             }}
-            onSaveLine={(line) => {
-              const isNew = !line.id;
-              const saved: SectionLine = isNew
-                ? { ...line, id: newId("line"), name: line.name || nextSectionLineName(document) }
-                : line;
-              setDocument(upsertSectionLine(document, saved));
-              setActiveLineId(saved.id);
-              setSectionAxis("line");
-              // A freshly drawn line is what the user wants to look at.
-              if (isNew) setMode("section");
-            }}
-            onRemoveLine={(lineId) => {
-              setDocument(removeSectionLine(document, lineId));
-              if (activeLineId === lineId) {
-                setActiveLineId(null);
-                if (sectionAxis === "line") setSectionAxis("y");
-              }
-            }}
-            onExportMesh={() => void exportMesh()}
-            onSaveImage={(kind, image) => void saveImage(kind, image)}
-            sectionIndex={sectionIndex ?? 0}
-            onSectionIndexChange={(index) => {
-              sectionPosition.current = section?.positions?.[index] ?? null;
-              setSectionIndex(index);
-            }}
-            materials={document.materials}
-            hiddenMaterials={hiddenMaterials}
-            onToggleMaterial={(material) =>
-              setHiddenMaterials((current) =>
-                current.includes(material)
-                  ? current.filter((name) => name !== material)
-                  : [...current, material],
-              )
-            }
-            looks={materialLooks}
-            onLookChange={(material, look) =>
-              setMaterialLooks((current) => {
-                const next = { ...current };
-                if (look) next[material] = look;
-                else delete next[material];
-                return next;
-              })
-            }
-            surfaces={surfaces}
-            section={section}
-            topView={topView}
           />
-        )}
-        <Inspector
-          step={selectedStep}
-          loop={loopSummary}
-          onLoopRename={(name) => selectedLoopId && loopActions.rename(selectedLoopId, name)}
-          onLoopRepeat={(repeat) => selectedLoopId && loopActions.setRepeat(selectedLoopId, repeat)}
-          onLoopDissolve={() => selectedLoopId && loopActions.dissolve(selectedLoopId)}
-          onLoopRemove={() => selectedLoopId && loopActions.remove(selectedLoopId)}
-          onLoopRun={() => selectedLoopId && loopActions.runToEnd(selectedLoopId)}
-          onSelectLoop={() => selectedStep?.loop && selectLoop(selectedStep.loop.id)}
-          recipes={document.recipes}
-          tools={document.tools}
-          onManageTools={() => setShowTools(true)}
-          materials={document.materials}
-          status={selectedStep ? stepStatus(document, selectedStep.id) : "dirty"}
-          sketches={document.sketches}
-          gdsPath={document.project.gdsPath}
-          kernel={projectKernel}
-          busy={busy}
-          onRename={(name) => selectedStep && setDocument(renameStep(document, selectedStep.id, name))}
-          onProcessTypeChange={(processType) =>
-            selectedStep && setDocument(setStepProcessType(document, selectedStep.id, processType))
-          }
-          onDefinitionChange={(patch) =>
-            selectedStep && setDocument(updateStep(document, selectedStep.id, patch))
-          }
-          onParameter={(patch: Record<string, ParameterValue>) =>
-            selectedStep && setDocument(updateStepParameters(document, selectedStep.id, patch))
-          }
-          onExperiment={(patch) =>
-            selectedStep && setDocument(updateStepExperiment(document, selectedStep.id, patch))
-          }
-          onLoadRecipe={(recipe) =>
-            selectedStep && setDocument(loadRecipeIntoStep(document, selectedStep.id, recipe))
-          }
-          onSaveRecipe={(name) => {
-            if (!selectedStep) return;
-            const recipe = recipeFromStep(selectedStep, name);
-            setDocument(upsertRecipe(document, recipe));
-            setEvents((current) => [
-              ...current,
-              { kind: "log", message: `Saved ${recipe.name} to the step templates.` },
-            ]);
-          }}
-          onMaskChange={(patch) =>
-            selectedStep && setDocument(updateStep(document, selectedStep.id, patch))
-          }
-          onEditSketch={(sketchId, copy) => void openSketchEditor(sketchId, copy)}
-          onRunToHere={() => selectedStep && void runFlow(selectedStep.id)}
-          onRemove={() => selectedStep && removeStepById(selectedStep.id)}
-        />
-      </div>
+          <Inspector
+            variant="experiment"
+            step={selectedExperiment}
+            loop={null}
+            onLoopRename={() => {}}
+            onLoopRepeat={() => {}}
+            onLoopDissolve={() => {}}
+            onLoopRemove={() => {}}
+            onLoopRun={() => {}}
+            onSelectLoop={() => {}}
+            recipes={document.recipes}
+            tools={document.tools}
+            onManageTools={() => setShowTools(true)}
+            materials={document.materials}
+            status="dirty"
+            sketches={document.sketches}
+            gdsPath={document.project.gdsPath}
+            kernel={projectKernel}
+            busy={busy}
+            onRename={(name) =>
+              selectedExperiment &&
+              name.trim() &&
+              setDocument(updateExperimentStep(document, selectedExperiment.id, { name: name.trim() }))
+            }
+            onProcessTypeChange={(processType) =>
+              selectedExperiment && setDocument(setExperimentProcessType(document, selectedExperiment.id, processType))
+            }
+            onDefinitionChange={(patch) =>
+              selectedExperiment && setDocument(updateExperimentStep(document, selectedExperiment.id, patch))
+            }
+            onParameter={(patch: Record<string, ParameterValue>) =>
+              selectedExperiment && setDocument(updateExperimentParameters(document, selectedExperiment.id, patch))
+            }
+            onLoadRecipe={(recipe) =>
+              selectedExperiment && setDocument(loadRecipeIntoExperiment(document, selectedExperiment.id, recipe))
+            }
+            onSaveRecipe={(name) => {
+              if (!selectedExperiment) return;
+              const recipe = recipeFromExperiment(selectedExperiment, name);
+              setDocument(upsertRecipe(document, recipe));
+              setEvents((current) => [
+                ...current,
+                { kind: "log", message: `Saved ${recipe.name} to the step templates (experiment and simulation numbers).` },
+              ]);
+            }}
+            onMaskChange={(patch) =>
+              selectedExperiment && setDocument(updateExperimentStep(document, selectedExperiment.id, patch))
+            }
+            onEditSketch={() => {}}
+            onRunToHere={() => {}}
+            onRemove={() => selectedExperiment && setDocument(removeExperimentStep(document, selectedExperiment.id))}
+          />
+        </div>
+      ) : (
+        <div className={`workspace-grid${recipeView ? " recipe-only" : ""}`}>
+          <PanelResizer
+            side="left"
+            share={(panelShares ?? DEFAULT_PANELS).steps}
+            onResize={(width) => resizePanel("steps", width)}
+            onReset={resetPanels}
+          />
+          {!recipeView && (
+            <PanelResizer
+              side="right"
+              share={(panelShares ?? DEFAULT_PANELS).inspector}
+              onResize={(width) => resizePanel("inspector", width)}
+              onReset={resetPanels}
+            />
+          )}
+          <StepList
+            steps={steps}
+            statuses={statuses}
+            accentFor={(step) => stepAccentColor(document, step)}
+            selectedStepId={selectedStepId}
+            selectedIds={selectedIds}
+            busy={busy}
+            canPaste={clipboardSize > 0}
+            onSelect={selectStep}
+            onClearSelection={clearSelection}
+            onBranch={branchFromStep}
+            forks={forks}
+            onDuplicateSelected={duplicateSelected}
+            onRemoveSelected={removeSelected}
+            onMoveSelected={moveSelected}
+            onEnableSelected={enableSelected}
+            onCopySelected={copySelected}
+            onPaste={() => void pasteSteps()}
+            processTypes={kernelProcessTypes}
+            onAdd={(processType) => {
+              const { document: next, step } = addStep(document, processType, selectedStepId);
+              setDocument(next);
+              setSelectedStepId(step.id);
+            }}
+            onToggle={(stepId) => setDocument(toggleStep(document, stepId))}
+            onReorder={(activeId, overId) => setDocument(reorderSteps(document, activeId, overId))}
+            onRunToHere={(stepId) => void runFlow(stepId)}
+            onDuplicate={(stepId) => {
+              const result = duplicateStep(document, stepId);
+              if (!result) return;
+              setDocument(result.document);
+              setSelectedStepId(result.step.id);
+            }}
+            onMove={(stepId, direction) => setDocument(moveStep(document, stepId, direction))}
+            onRemove={removeStepById}
+            selectedLoopId={selectedLoopId}
+            loopObstacle={loopBlocker}
+            loops={loopActions}
+            loopDialogOpen={loopDialog}
+            onLoopDialogChange={setLoopDialog}
+          />
+          {!recipeView && (
+            <Viewport
+              mode={mode}
+              onModeChange={setMode}
+              title={
+                loopSummary
+                  ? `${loopSummary.loop.name} · after its last step (${loopSummary.last})`
+                  : selectedStep
+                    ? `${selectedStep.name} · after step ${steps.indexOf(selectedStep) + 1}`
+                    : "Initial wafer"
+              }
+              loading={viewLoading}
+              error={viewError}
+              notice={viewNotice}
+              surfacesSupported={projectKernel?.surfaces ?? capabilities?.rendering.surfaces ?? false}
+              maximumInterpolation={capabilities?.rendering.maximumInterpolation ?? 4}
+              interpolation={interpolation}
+              onInterpolationChange={setInterpolation}
+              topSteps={topSteps}
+              onTopStepsChange={setTopSteps}
+              triangulation={triangulation}
+              onTriangulationChange={setTriangulation}
+              sectionAxis={sectionAxis}
+              onSectionAxisChange={(axis) => {
+                setSectionAxis(axis);
+                setSectionIndex(null);
+                sectionPosition.current = null;
+              }}
+              sectionLines={sectionLines}
+              sectionLine={sectionLine}
+              windowBounds={{
+                xMin: document.project.grid.xMin,
+                xMax: document.project.grid.xMax,
+                yMin: document.project.grid.yMin,
+                yMax: document.project.grid.yMax,
+              }}
+              onSelectLine={(lineId) => {
+                setActiveLineId(lineId);
+                if (lineId) setSectionAxis("line");
+                else if (sectionAxis === "line") setSectionAxis("y");
+              }}
+              onSaveLine={(line) => {
+                const isNew = !line.id;
+                const saved: SectionLine = isNew
+                  ? { ...line, id: newId("line"), name: line.name || nextSectionLineName(document) }
+                  : line;
+                setDocument(upsertSectionLine(document, saved));
+                setActiveLineId(saved.id);
+                setSectionAxis("line");
+                // A freshly drawn line is what the user wants to look at.
+                if (isNew) setMode("section");
+              }}
+              onRemoveLine={(lineId) => {
+                setDocument(removeSectionLine(document, lineId));
+                if (activeLineId === lineId) {
+                  setActiveLineId(null);
+                  if (sectionAxis === "line") setSectionAxis("y");
+                }
+              }}
+              onExportMesh={() => void exportMesh()}
+              onSaveImage={(kind, image) => void saveImage(kind, image)}
+              sectionIndex={sectionIndex ?? 0}
+              onSectionIndexChange={(index) => {
+                sectionPosition.current = section?.positions?.[index] ?? null;
+                setSectionIndex(index);
+              }}
+              materials={document.materials}
+              hiddenMaterials={hiddenMaterials}
+              onToggleMaterial={(material) =>
+                setHiddenMaterials((current) =>
+                  current.includes(material)
+                    ? current.filter((name) => name !== material)
+                    : [...current, material],
+                )
+              }
+              looks={materialLooks}
+              onLookChange={(material, look) =>
+                setMaterialLooks((current) => {
+                  const next = { ...current };
+                  if (look) next[material] = look;
+                  else delete next[material];
+                  return next;
+                })
+              }
+              surfaces={surfaces}
+              section={section}
+              topView={topView}
+            />
+          )}
+          <Inspector
+            step={selectedStep}
+            loop={loopSummary}
+            onLoopRename={(name) => selectedLoopId && loopActions.rename(selectedLoopId, name)}
+            onLoopRepeat={(repeat) => selectedLoopId && loopActions.setRepeat(selectedLoopId, repeat)}
+            onLoopDissolve={() => selectedLoopId && loopActions.dissolve(selectedLoopId)}
+            onLoopRemove={() => selectedLoopId && loopActions.remove(selectedLoopId)}
+            onLoopRun={() => selectedLoopId && loopActions.runToEnd(selectedLoopId)}
+            onSelectLoop={() => selectedStep?.loop && selectLoop(selectedStep.loop.id)}
+            recipes={document.recipes}
+            tools={document.tools}
+            onManageTools={() => setShowTools(true)}
+            materials={document.materials}
+            status={selectedStep ? stepStatus(document, selectedStep.id) : "dirty"}
+            sketches={document.sketches}
+            gdsPath={document.project.gdsPath}
+            kernel={projectKernel}
+            busy={busy}
+            onRename={(name) => selectedStep && setDocument(renameStep(document, selectedStep.id, name))}
+            onProcessTypeChange={(processType) =>
+              selectedStep && setDocument(setStepProcessType(document, selectedStep.id, processType))
+            }
+            onDefinitionChange={(patch) =>
+              selectedStep && setDocument(updateStep(document, selectedStep.id, patch))
+            }
+            onParameter={(patch: Record<string, ParameterValue>) =>
+              selectedStep && setDocument(updateStepParameters(document, selectedStep.id, patch))
+            }
+            onLoadRecipe={(recipe) =>
+              selectedStep && setDocument(loadRecipeIntoStep(document, selectedStep.id, recipe))
+            }
+            onSaveRecipe={(name) => {
+              if (!selectedStep) return;
+              const recipe = recipeFromStep(selectedStep, name);
+              setDocument(upsertRecipe(document, recipe));
+              setEvents((current) => [
+                ...current,
+                { kind: "log", message: `Saved ${recipe.name} to the step templates.` },
+              ]);
+            }}
+            onMaskChange={(patch) =>
+              selectedStep && setDocument(updateStep(document, selectedStep.id, patch))
+            }
+            onEditSketch={(sketchId, copy) => void openSketchEditor(sketchId, copy)}
+            onRunToHere={() => selectedStep && void runFlow(selectedStep.id)}
+            onRemove={() => selectedStep && removeStepById(selectedStep.id)}
+          />
+        </div>
+      )}
 
       {showTools && (
         <ToolEditor
@@ -2294,6 +2469,7 @@ export function Workspace({
         />
       )}
 
+      {promptDialog}
       {notice && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={notice.title}>
           <div className="modal-card notice-card">

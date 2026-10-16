@@ -10,7 +10,7 @@ from typing import Any, Callable, Mapping
 from ..grid import UniformGrid3D
 from ..kernels import Kernel, get_kernel
 from ..layout.quick_sketch import QuickSketch
-from ..models import FlowBranch, ProjectDefinition, Recipe
+from ..models import FlowBranch, ProjectDefinition, Recipe, new_id
 from ..storage import ProjectRepository
 from . import mesh_pool
 from .errors import Cancelled, InvalidRequest, WorkspaceError
@@ -22,6 +22,7 @@ from .serialize import (
     tool_to_json,
     project_to_json,
     recipe_to_json,
+    step_to_json,
 )
 from .workspace import (
     result_key,
@@ -53,6 +54,27 @@ def _branch_or_fail(repository: ProjectRepository, branch_id: str) -> FlowBranch
         raise InvalidRequest(f"branch {branch_id!r} was not found") from error
 
 
+def experiment_from_steps(steps, recipes: Mapping[str, Recipe]) -> list[dict[str, Any]]:
+    """The experiment record a project starts with, from a time when each
+    step carried its experiment numbers beside the simulation's: the steps
+    that had any, with those numbers, the tool, and the rest of the step."""
+    record = []
+    for step in steps:
+        payload = step_to_json(step, recipes)
+        experiment = payload.get("experimentParameters")
+        if experiment is None:
+            continue
+        record.append({
+            **payload,
+            "id": new_id(),
+            "parameters": {**payload["parameters"], **experiment},
+            "experimentParameters": None,
+            "enabled": True,
+            "loop": None,
+        })
+    return record
+
+
 def build_document(
     root: Path,
     repository: ProjectRepository,
@@ -79,9 +101,13 @@ def build_document(
         branch.id: step_statuses(repository, branch, recipes, sketches, project)
         for branch in loaded
     }
+    project_json = {**project_to_json(project), "activeBranchId": active_id}
+    if project.experiment_steps is None:
+        active = next(branch for branch in loaded if branch.id == active_id)
+        project_json["experimentSteps"] = experiment_from_steps(active.steps, recipes_by_id)
     return {
         "root": str(root),
-        "project": {**project_to_json(project), "activeBranchId": active_id},
+        "project": project_json,
         "branches": [branch_to_json(branch, recipes_by_id) for branch in loaded],
         "recipes": [recipe_to_json(recipe) for recipe in recipes],
         "materials": [material_to_json(material) for material in repository.load_materials()],

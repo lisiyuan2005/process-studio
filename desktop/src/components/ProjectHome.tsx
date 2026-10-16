@@ -7,9 +7,10 @@ function megabytes(bytes: number): string {
   return `${(bytes / 1_048_576).toFixed(bytes >= 104_857_600 ? 0 : 1)} MB`;
 }
 
-/** What the update check says about each channel, newest first: stable, then beta. */
+/** The newest stable release and the newest beta, unless one is this build:
+ * either can be installed, so a stable user can try the beta and go back. */
 function offers(info: UpdateInfo): ReleaseInfo[] {
-  return [info.stable, info.beta].filter((item): item is ReleaseInfo => !!item && item.available);
+  return [info.stable, info.beta].filter((item): item is ReleaseInfo => !!item && !item.installed);
 }
 
 function channelName(release: ReleaseInfo): string {
@@ -57,6 +58,7 @@ function UpdateCheck({
     }
   };
   const available = state.kind === "done" ? offers(state.info) : [];
+  const anyNewer = available.some((release) => release.available);
   const latest =
     state.kind === "done"
       ? [state.info.stable && `stable ${state.info.stable.version}`, state.info.beta && `beta ${state.info.beta.version}`]
@@ -73,12 +75,14 @@ function UpdateCheck({
         </span>
       ) : available.length ? (
         <div className="update-offers">
+          {!anyNewer && <span className="update-news muted">This build is the newest; you can switch:</span>}
           {available.map((release) => (
             <div key={release.channel} className="update-offer">
               <span className={`channel-tag channel-${release.channel}`}>{channelName(release)}</span>
               <span className="update-news">
-                {release.version} is available
-                {release.basedOn ? ` (promoted from ${release.basedOn})` : ""}
+                {release.version}
+                {release.available ? " is available" : " (older than this build)"}
+                {release.basedOn ? ` · promoted from ${release.basedOn}` : ""}
                 {release.asset ? "" : " (no download for this platform; see the release page)"}
               </span>
               {release.asset && (
@@ -89,7 +93,8 @@ function UpdateCheck({
                   onClick={() => void install(release)}
                 >
                   <Download size={12} />
-                  {release.channel === "beta" ? "Install beta" : "Update now"} ({megabytes(release.asset.sizeBytes)})
+                  {release.channel === "beta" ? "Install beta" : release.available ? "Update now" : "Install stable"} (
+                  {megabytes(release.asset.sizeBytes)})
                 </button>
               )}
               {release.asset && (

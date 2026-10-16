@@ -1594,3 +1594,29 @@ def test_every_method_the_desktop_calls_is_let_through_by_the_shell_and_answered
     assert called, "found no worker calls in the bridge"
     assert called <= allowed, f"called but not let through: {sorted(called - allowed)}"
     assert allowed <= handled, f"let through but not answered: {sorted(allowed - handled)}"
+
+
+def test_the_experiment_record_is_kept_apart_from_the_flow_and_starts_from_old_experiment_numbers(workspace):
+    document = call("open_workspace", root=str(workspace))
+    branch = document["branches"][0]
+    # a step from before the record existed, with experiment numbers of its own
+    first = branch["steps"][0]
+    first["tool"] = "Savannah ALD"
+    first["experimentParameters"] = {**first["parameters"], "temperature_c": 250}
+    document["project"]["experimentSteps"] = None
+    saved = call("save_document", root=str(workspace), document=document)
+    record = saved["project"]["experimentSteps"]
+    assert [step["name"] for step in record] == [first["name"]]
+    assert record[0]["tool"] == "Savannah ALD" and record[0]["parameters"]["temperature_c"] == 250
+    assert record[0]["id"] != first["id"]
+
+    # once edited, the record is the project's own: kept, and never in a run
+    record[0]["parameters"]["pressure_mtorr"] = 5
+    saved["project"]["experimentSteps"] = record
+    again = call("save_document", root=str(workspace), document=saved)
+    reopened = call("open_workspace", root=str(workspace))
+    assert reopened["project"]["experimentSteps"][0]["parameters"]["pressure_mtorr"] == 5
+    assert [s["id"] for s in again["branches"][0]["steps"]] == [s["id"] for s in branch["steps"]]
+    saved["project"]["experimentSteps"] = [{"name": "bad"}]
+    with pytest.raises(InvalidRequest):
+        call("save_document", root=str(workspace), document=saved)

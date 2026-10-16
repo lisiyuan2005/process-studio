@@ -17,12 +17,13 @@ import type {
   ToolDefinition,
 } from "../types";
 import { NumberField } from "./NumberField";
-import { ParameterSets } from "./ParameterRows";
+import { ParameterEditor } from "./ParameterRows";
 import {
   PARAMETER_SPECS,
   defaultsForNewTool,
   depositThickness,
   experimentSpecs,
+  simulationHiddenKeys,
 } from "../domain/parameters";
 
 /** What the inspector shows for a selected loop. */
@@ -38,6 +39,12 @@ export interface LoopSummary {
 
 interface InspectorProps {
   step: ProcessStep | undefined;
+  /**
+   * "simulation" (the default): what the kernel reads, nothing else -- no
+   * tool, no temperature. "experiment": a step of the experiment record,
+   * with the tool and every field the machine has, and nothing to run.
+   */
+  variant?: "simulation" | "experiment";
   /** When set, the loop's settings show instead of a step. */
   loop?: LoopSummary | null;
   onLoopRename: (name: string) => void;
@@ -62,8 +69,6 @@ interface InspectorProps {
     patch: Partial<Pick<ProcessStep, "tool" | "outputMaterial" | "materialResponses">>,
   ) => void;
   onParameter: (patch: Record<string, ParameterValue>) => void;
-  /** Edit what the tool was set to; null goes back to "the same values". */
-  onExperiment: (patch: Record<string, ParameterValue> | null) => void;
   onLoadRecipe: (recipe: Recipe) => void;
   onSaveRecipe: (name: string) => void;
   onMaskChange: (patch: {
@@ -81,17 +86,33 @@ interface InspectorProps {
   onRemove: () => void;
 }
 
-/** What a deposition's film will be, worked out the way the kernel does. */
-function ThicknessNote({ parameters }: { parameters: Record<string, ParameterValue> }) {
+/** What a deposition's film will be, worked out the way the kernel does.
+ *
+ * A step from before the simulation view showed only a thickness may still
+ * spell it as cycles × rate per cycle, or a time at a rate, which the view
+ * no longer lists: say what they come to, and offer it as the thickness. */
+function ThicknessNote({
+  parameters,
+  onUse,
+}: {
+  parameters: Record<string, ParameterValue>;
+  onUse?: (um: number) => void;
+}) {
   const resolved = depositThickness(parameters);
   if (!resolved || resolved.from === "target") return null;
   const nm = Number((resolved.um * 1000).toPrecision(6));
   return (
     <p className="numerics-note">
       {resolved.from === "cycles"
-        ? `Cycles × rate per cycle: ${nm} nm of film.`
-        : `Time × rate: ${nm} nm of film.`}{" "}
-      A target thickness, if you add one, wins over this.
+        ? `This step's film is ${nm} nm, from its cycles × rate per cycle.`
+        : `This step's film is ${nm} nm, from its time × rate.`}{" "}
+      {onUse ? (
+        <button type="button" className="link-button" onClick={() => onUse(resolved.um)}>
+          Use {nm} nm as the thickness
+        </button>
+      ) : (
+        "A target thickness, if you add one, wins over this."
+      )}
     </p>
   );
 }
@@ -232,6 +253,7 @@ function LoopInspector({
 
 export function Inspector({
   step,
+  variant = "simulation",
   loop,
   onLoopRename,
   onLoopRepeat,
@@ -252,7 +274,6 @@ export function Inspector({
   onProcessTypeChange,
   onDefinitionChange,
   onParameter,
-  onExperiment,
   onLoadRecipe,
   onSaveRecipe,
   onMaskChange,
@@ -333,10 +354,15 @@ export function Inspector({
           }
         : spec,
     );
-  const knownKeys = new Set(specs.map((spec) => spec.key));
-  const activeSpecs = specs.filter((spec) => spec.key in step.parameters);
+  const experiment = variant === "experiment";
+  const shownSpecs = experiment
+    ? experimentSpecs(step.processType, tools.find((tool) => tool.name === step.tool)?.recipes ?? [])
+    : specs;
+  const hiddenKeys = experiment ? ["sketch_id"] : simulationHiddenKeys(step.processType);
+  const knownKeys = new Set(shownSpecs.map((spec) => spec.key));
+  const activeSpecs = shownSpecs.filter((spec) => spec.key in step.parameters);
   const unknownParameters = Object.entries(step.parameters).filter(
-    ([key]) => !knownKeys.has(key) && key !== "sketch_id",
+    ([key]) => !knownKeys.has(key) && !hiddenKeys.includes(key),
   );
   const unusedResponseMaterials = materials.filter(
     (material) => !(material.name in step.materialResponses),
@@ -368,10 +394,10 @@ export function Inspector({
     <aside className="inspector-panel">
       <div className="panel-heading inspector-heading">
         <div>
-          <span className="eyebrow">STEP</span>
+          <span className="eyebrow">{experiment ? "EXPERIMENT STEP" : "STEP"}</span>
           <h2>{step.name}</h2>
         </div>
-        <span className={`status-chip status-${status}`}>{status}</span>
+        {!experiment && <span className={`status-chip status-${status}`}>{status}</span>}
       </div>
 
       <div className="inspector-scroll">
@@ -459,7 +485,8 @@ export function Inspector({
         </div>
 
         <div className="form-section">
-          <span className="section-label">PROCESS DEFINITION</span>
+          <span className="section-label">{experiment ? "WHAT WAS DONE" : "SIMULATION"}</span>
+          {experiment && (
           <label className="field-row">
             <span>Tool</span>
             <span className="tool-row">
@@ -488,6 +515,7 @@ export function Inspector({
               </button>
             </span>
           </label>
+          )}
           {(step.processType === "deposit" || step.processType === "oxidation") && (
             <label className="field-row">
               <span>{step.processType === "oxidation" ? "Oxide it becomes" : "Output material"}</span>
@@ -505,20 +533,20 @@ export function Inspector({
             </label>
           )}
 
-          <ParameterSets
+          <ParameterEditor
             key={step.id}
-            specs={specs}
+            specs={shownSpecs}
             parameters={step.parameters}
-            experimentSpecs={experimentSpecs(
-              step.processType,
-              tools.find((tool) => tool.name === step.tool)?.recipes ?? [],
-            )}
-            experiment={step.experimentParameters}
             depositionModes={depositionModes}
             onPatch={onParameter}
-            onExperimentPatch={onExperiment}
-            footer={step.processType === "deposit" ? <ThicknessNote parameters={step.parameters} /> : null}
+            hiddenKeys={hiddenKeys}
           />
+          {step.processType === "deposit" && (
+            <ThicknessNote
+              parameters={step.parameters}
+              onUse={experiment ? undefined : (um) => onParameter({ target: um })}
+            />
+          )}
           {activeSpecs.length === 0 && unknownParameters.length === 0 && (
             <div className="empty-result">
               <CircleAlert size={14} />
@@ -607,6 +635,7 @@ export function Inspector({
                   ))}
                 </select>
               </label>
+              {!experiment && (
               <div className="sketch-actions">
                 <button
                   type="button"
@@ -632,6 +661,7 @@ export function Inspector({
                   New sketch
                 </button>
               </div>
+              )}
             </>
           )}
           {step.maskSource === "gds" && (
@@ -668,9 +698,11 @@ export function Inspector({
       </div>
 
       <div className="inspector-actions">
-        <button type="button" className="secondary-button" disabled={busy} onClick={onRunToHere}>
-          <Play size={13} /> Run to here
-        </button>
+        {!experiment && (
+          <button type="button" className="secondary-button" disabled={busy} onClick={onRunToHere}>
+            <Play size={13} /> Run to here
+          </button>
+        )}
         <button type="button" className="danger-button" disabled={busy} onClick={onRemove}>
           <Trash2 size={13} /> Delete step
         </button>

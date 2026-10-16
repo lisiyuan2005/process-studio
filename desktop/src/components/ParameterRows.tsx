@@ -205,6 +205,8 @@ interface ParameterSetsProps {
   onExperimentPatch: (patch: Record<string, ParameterValue> | null) => void;
   /** Shown under the simulation rows (the thickness a deposition works out to). */
   footer?: ReactNode;
+  /** Fields the simulation rows leave out (the experiment's, kept from an old set). */
+  hiddenKeys?: string[];
 }
 
 /**
@@ -225,6 +227,7 @@ export function ParameterSets({
   onPatch,
   onExperimentPatch,
   footer,
+  hiddenKeys,
 }: ParameterSetsProps) {
   const [tab, setTab] = useState<"simulation" | "experiment">("simulation");
   const separate = experiment !== null && experiment !== undefined;
@@ -259,6 +262,7 @@ export function ParameterSets({
             parameters={parameters}
             depositionModes={depositionModes}
             onPatch={onPatch}
+            hiddenKeys={hiddenKeys}
           />
           {footer}
         </>

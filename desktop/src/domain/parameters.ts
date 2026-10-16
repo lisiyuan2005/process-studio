@@ -15,7 +15,8 @@ export interface ParameterSpec {
   kernels?: string[];
 }
 
-export const PARAMETER_SPECS: Record<ProcessType, ParameterSpec[]> = {
+/** Every field a process type has, for the experiment record: what was done. */
+export const PROCESS_SPECS: Record<ProcessType, ParameterSpec[]> = {
   deposit: [
     { key: "target", label: "Target thickness", unit: "µm", initial: 0.05 },
     { key: "cycles", label: "Cycles", initial: 100, hint: "Whole cycles of the recipe." },
@@ -110,17 +111,67 @@ const TOOL_SETTINGS: ParameterSpec[] = [
  * a machine whose recipe book is not in the library.
  */
 export function experimentSpecs(type: ProcessType, toolRecipes: string[] = []): ParameterSpec[] {
-  const own = new Set(PARAMETER_SPECS[type].map((spec) => spec.key));
+  // the grid is the simulation's business, not the machine's
+  const process = PROCESS_SPECS[type].filter((spec) => spec.key !== "resolution");
+  const own = new Set(process.map((spec) => spec.key));
   const settings = TOOL_SETTINGS.filter((spec) => !own.has(spec.key)).map((spec) =>
     spec.key === "tool_recipe" && toolRecipes.length > 0
       ? { ...spec, options: toolRecipes, hint: `Loaded on this tool: ${toolRecipes.join(", ")}.` }
       : spec,
   );
-  return [...PARAMETER_SPECS[type], ...settings];
+  return [...process, ...settings];
+}
+
+/** What the simulation of each process type reads; nothing else is shown there.
+ *
+ * A deposition is its thickness and how it lands; an etch, its time and each
+ * material's rate (or a target depth). Temperature, pressure, cycles, power
+ * and the like change nothing the kernel builds, so they live in the
+ * experiment record only.
+ */
+export const SIMULATION_KEYS: Record<ProcessType, string[]> = {
+  deposit: ["target", "mode", "resolution"],
+  etch: ["time_min", "target", "directional_fraction", "resolution"],
+  cmp: ["target_z", "removal_amount"],
+  no_geometry: [],
+  oxidation: ["time_min", "target", "resolution"],
+  flip: ["axis"],
+};
+
+const SIMULATION_HINTS: Record<string, string> = {
+  "etch.time_min": "Each material is etched for this long at its rate below.",
+  "etch.target": "Instead of a time: the depth the fastest material is etched to.",
+  "oxidation.time_min": "Each material oxidises this long at its rate below.",
+  "oxidation.target": "Instead of a time: how deep the fastest material is consumed.",
+};
+
+export const PARAMETER_SPECS: Record<ProcessType, ParameterSpec[]> = Object.fromEntries(
+  (Object.keys(PROCESS_SPECS) as ProcessType[]).map((type) => [
+    type,
+    SIMULATION_KEYS[type].map((key) => {
+      const spec = PROCESS_SPECS[type].find((item) => item.key === key) as ParameterSpec;
+      const hint = SIMULATION_HINTS[`${type}.${key}`];
+      return hint ? { ...spec, hint } : spec;
+    }),
+  ]),
+) as Record<ProcessType, ParameterSpec[]>;
+
+/** Fields a step may carry that the simulation view leaves out: the
+ * experiment's (an old project kept both in one set), never the kernel's. */
+export function simulationHiddenKeys(type: ProcessType): string[] {
+  // only what the kernel never reads for this type: a field it does read
+  // stays in sight, under its own name if it has no row
+  const inert = ["temperature_c", ...TOOL_SETTINGS.map((spec) => spec.key)];
+  const byType: Partial<Record<ProcessType, string[]>> = {
+    // read only when there is no target thickness; the note under the rows says so
+    deposit: ["cycles", "rate_per_cycle", "rate", "time_min"],
+    no_geometry: ["time_min"],
+  };
+  return ["sketch_id", ...inert, ...(byType[type] ?? [])];
 }
 
 export function specFor(type: ProcessType, key: string): ParameterSpec | undefined {
-  return PARAMETER_SPECS[type].find((spec) => spec.key === key);
+  return PROCESS_SPECS[type].find((spec) => spec.key === key);
 }
 
 /** Whether a tool name or group names a cycle-by-cycle deposition.

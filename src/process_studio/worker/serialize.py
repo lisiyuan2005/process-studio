@@ -338,7 +338,24 @@ def project_to_json(project: ProjectDefinition) -> dict[str, Any]:
         "resolutionXyUm": project.resolution_xy_um,
         "sectionLines": [dict(line) for line in project.section_lines],
         "fidelity": project.fidelity,
+        "experimentSteps": project.experiment_steps,
     }
+
+
+def experiment_steps_from_json(payload: Any) -> list[dict[str, Any]] | None:
+    """The experiment record, each step checked the way a flow's are; null
+    for none yet. A step there is never run, so it keeps whatever it holds."""
+    if payload is None:
+        return None
+    if not isinstance(payload, list):
+        raise InvalidRequest("project experimentSteps must be a list or null")
+    steps = []
+    for item in payload:
+        if not isinstance(item, Mapping):
+            raise InvalidRequest("an experiment step must be an object")
+        step = step_from_json({**item, "loop": None})
+        steps.append({**step_to_json(step, {}), "experimentParameters": None, "loop": None})
+    return steps
 
 
 def section_lines_from_json(payload: Any) -> list[dict[str, Any]]:
@@ -402,4 +419,5 @@ def project_from_json(payload: Mapping[str, Any]) -> ProjectDefinition:
         resolution_xy_um=None if resolution_xy in (None, "") else float(resolution_xy),
         section_lines=section_lines_from_json(payload.get("sectionLines")),
         fidelity=fidelity,
+        experiment_steps=experiment_steps_from_json(payload.get("experimentSteps")),
     )

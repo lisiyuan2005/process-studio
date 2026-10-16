@@ -57,7 +57,7 @@ export function hasDirtySteps(document: WorkspaceDocument): boolean {
   return getSteps(document).some((step) => stepStatus(document, step.id) !== "clean");
 }
 
-const STEP_NAMES: Record<ProcessType, string> = {
+export const STEP_NAMES: Record<ProcessType, string> = {
   deposit: "New deposition",
   etch: "New etch",
   cmp: "New CMP",

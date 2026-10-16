@@ -11,6 +11,7 @@ import {
   defaultsForNewTool,
   depositThickness,
   experimentSpecs,
+  simulationHiddenKeys,
 } from "../domain/parameters";
 
 interface RecipeEditorProps {
@@ -298,6 +299,7 @@ export function RecipeEditor({
                   )}
                   experiment={selected.experimentParameters}
                   depositionModes={depositionModes}
+                  hiddenKeys={simulationHiddenKeys(selected.processType)}
                   onPatch={(patch) => update({ parameters: merge(selected.parameters, patch) })}
                   onExperimentPatch={(patch) =>
                     update({

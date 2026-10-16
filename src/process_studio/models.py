@@ -354,6 +354,12 @@ class ProjectDefinition:
     #: start simplified: it is what this is used for, and a detailed film is
     #: a deliberate look at one step rather than how a flow is built.
     fidelity: str = "simplified"
+    #: The experiment record: what was done in the lab, step by step, with
+    #: the tool and every setting -- a flow of its own that is never run and
+    #: never read by a kernel, and can be turned into a simulation branch.
+    #: Steps in the client's JSON shape. None for a project that has never
+    #: had one (it then starts from the experiment numbers its steps carry).
+    experiment_steps: list[dict[str, Any]] | None = None
 
 
 def dataclass_dict(value: Any) -> dict[str, Any]:

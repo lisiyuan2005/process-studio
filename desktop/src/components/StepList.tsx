@@ -45,6 +45,7 @@ import {
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useTextPrompt } from "./TextPrompt";
 import type { ProcessType, ProcessStep, StepLoop, StepStatus } from "../types";
 import { flowUnits, loopIterations, type FlowUnit } from "../domain/project";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
@@ -669,6 +670,7 @@ export function StepList({
   const setLoopDialog = onLoopDialogChange;
   const loopDialog = loopDialogOpen;
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const [promptDialog, askText] = useTextPrompt();
   const [openIterations, setOpenIterations] = useState<Set<string>>(() => new Set());
   const menuIndex = menu ? steps.findIndex((step) => step.id === menu.stepId) : -1;
   const menuStep = menuIndex >= 0 ? steps[menuIndex] : undefined;
@@ -694,19 +696,23 @@ export function StepList({
       {
         label: "Times through…",
         icon: <Repeat size={13} />,
-        action: () => {
-          const answer = window.prompt(`How many times in all should ${loop.name} run?`, String(loop.repeat));
-          const repeat = answer === null ? NaN : Number(answer);
-          if (Number.isFinite(repeat) && repeat >= 1) loops.setRepeat(loop.id, Math.floor(repeat));
-        },
+        action: () =>
+          void askText({
+            title: `Times through ${loop.name}`,
+            label: "Times in all",
+            initial: String(loop.repeat),
+            minimumInteger: 1,
+          }).then((answer) => {
+            if (answer !== null) loops.setRepeat(loop.id, Math.floor(Number(answer)));
+          }),
       },
       {
         label: "Rename…",
         icon: <Pencil size={13} />,
-        action: () => {
-          const answer = window.prompt("Name of the loop", loop.name);
-          if (answer !== null && answer.trim()) loops.rename(loop.id, answer);
-        },
+        action: () =>
+          void askText({ title: "Rename the loop", initial: loop.name, confirm: "Rename" }).then((answer) => {
+            if (answer) loops.rename(loop.id, answer);
+          }),
       },
       { label: "Duplicate the loop", icon: <Copy size={13} />, action: () => loops.duplicate(loop.id), separated: true },
       { label: "Copy the loop", icon: <ClipboardList size={13} />, action: () => loops.copy(loop.id) },
@@ -753,6 +759,7 @@ export function StepList({
 
   return (
     <aside className="steps-panel">
+      {promptDialog}
       <div className="panel-heading">
         <div>
           <span className="eyebrow">FLOW</span>
