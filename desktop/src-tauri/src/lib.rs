@@ -219,6 +219,23 @@ fn installed_worker() -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
+/// The packaged macOS worker is a one-file PyInstaller build: each start
+/// unpacks it into a temporary _MEI directory and tells its own children
+/// where through `_PYI_*` variables. A shell that inherited those -- it was
+/// relaunched by the updater, which an old worker started -- would hand them
+/// to a fresh worker, which then looks for Python in a directory deleted
+/// when the old worker exited ("Failed to load Python shared library
+/// .../_MEI.../Python"). The worker is always a new program here, never one
+/// of those children.
+fn without_pyinstaller_state(command: &mut Command) {
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy();
+        if name.starts_with("_PYI_") || name.starts_with("_MEIPASS") {
+            command.env_remove(&key);
+        }
+    }
+}
+
 fn packaged_worker_command(app: &AppHandle) -> Result<Command, String> {
     if let Ok(explicit) = std::env::var("PROCESS_STUDIO_WORKER") {
         return Ok(Command::new(explicit));
@@ -315,6 +332,7 @@ impl Worker {
         events: EventSink,
         on_exit: impl FnOnce() + Send + 'static,
     ) -> Result<Arc<Worker>, String> {
+        without_pyinstaller_state(&mut command);
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

@@ -321,6 +321,31 @@ def stage_update(archive: Path, staging: Path) -> Path:
     return staging
 
 
+def updater_environment(environ: Mapping[str, str] | None = None) -> dict[str, str]:
+    """This process's environment without what a frozen build put there.
+
+    The packaged macOS worker is a one-file PyInstaller build. Its `_PYI_*`
+    variables say where it unpacked itself, for its own children; the
+    updater relaunches the application with ``open``, which passes its
+    environment on, and the new worker -- seeing them -- looked for Python
+    in the old worker's unpacked directory, deleted by then: "Failed to load
+    Python shared library .../_MEI.../Python". The library path a frozen
+    build changed is put back as it was.
+    """
+    clean = {
+        key: value
+        for key, value in (os.environ if environ is None else environ).items()
+        if not key.startswith(("_PYI_", "_MEIPASS"))
+    }
+    for name in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"):
+        original = clean.pop(f"{name}_ORIG", None)
+        if original is not None:
+            clean[name] = original
+        elif getattr(sys, "frozen", False):
+            clean.pop(name, None)
+    return clean
+
+
 def write_updater(app: Path, staged: Path, wait_for: list[int]) -> tuple[list[str], Path]:
     """The script that swaps the application once it has quit; returns its command and log.
 
@@ -495,5 +520,5 @@ def install_update(url: Any, report: Callable[[str], None] | None = None) -> dic
         quiet["creationflags"] = 0x00000008 | 0x00000200  # detached, its own process group
     else:
         quiet["start_new_session"] = True
-    subprocess.Popen(command, **quiet)
+    subprocess.Popen(command, env=updater_environment(), **quiet)
     return {"staged": str(staged), "log": str(log), "restart": True}

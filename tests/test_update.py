@@ -256,3 +256,17 @@ def test_a_certificate_failure_says_what_it_is_about():
     assert "certificate" in message and "not about the network" in message
     # Anything else keeps the plain wording.
     assert "Could not reach GitHub" in str(update._unreachable(urllib.error.URLError("refused")))
+
+
+def test_the_updater_does_not_hand_a_frozen_build_s_state_to_the_next_application():
+    environ = {
+        "HOME": "/Users/me",
+        "_PYI_APPLICATION_HOME_DIR": "/var/folders/x/T/_MEI123",
+        "_PYI_PARENT_PROCESS_LEVEL": "1",
+        "_PYI_ARCHIVE_FILE": "/Applications/Process Studio.app/worker",
+        "_MEIPASS2": "/var/folders/x/T/_MEI123",
+        "LD_LIBRARY_PATH": "/var/folders/x/T/_MEI123",
+        "LD_LIBRARY_PATH_ORIG": "/usr/local/lib",
+    }
+    clean = update.updater_environment(environ)
+    assert clean == {"HOME": "/Users/me", "LD_LIBRARY_PATH": "/usr/local/lib"}
