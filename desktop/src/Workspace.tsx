@@ -4,7 +4,9 @@ import {
   CircleAlert,
   CheckCircle2,
   Cpu,
+  Download,
   FlaskConical,
+  GitBranchPlus,
   Grid3x3,
   ListChecks,
   LoaderCircle,
@@ -27,17 +29,15 @@ import { FlowExportDialog } from "./components/FlowExportDialog";
 import { RecipeEditor } from "./components/RecipeEditor";
 import { SketchEditor } from "./components/SketchEditor";
 import { useTextPrompt } from "./components/TextPrompt";
-import { ExperimentList } from "./components/ExperimentList";
 import {
-  addExperimentStep,
-  duplicateExperimentStep,
-  experimentFromSimulation,
+  clipFor,
   experimentSteps,
+  experimentView,
   exportExperimentToBranch,
+  fromExperimentView,
+  importIntoExperiment,
   loadRecipeIntoExperiment,
-  moveExperimentStep,
   recipeFromExperiment,
-  removeExperimentStep,
   setExperimentProcessType,
   updateExperimentParameters,
   updateExperimentStep,
@@ -274,7 +274,11 @@ export function Workspace({
   // The simulation flow (the default) or the experiment record, which is a
   // flow of its own with no geometry: what was done in the lab.
   const [workMode, setWorkMode] = useState<"simulation" | "experiment">("simulation");
-  const [selectedExperimentId, setSelectedExperimentId] = useState("");
+  const workModeRef = useRef(workMode);
+  workModeRef.current = workMode;
+  // The selection of the flow that is not on screen, put back when the
+  // switch goes back to it: each flow keeps its own.
+  const otherSelection = useRef<{ stepId: string; ids: string[]; loopId: string } | null>(null);
   const [recipeView, setRecipeViewState] = useState<boolean>(() => {
     try {
       return window.localStorage.getItem(RECIPE_VIEW_KEY) === "1";
@@ -368,13 +372,23 @@ export function Workspace({
   const branch = document ? getActiveBranch(document) : undefined;
   const root = document?.root;
   const branchId = branch?.id;
-  const steps = document ? getSteps(document) : [];
+  // The flow the step list edits: the active branch, or the experiment
+  // record seen as one (see domain/experiment). Every step edit goes
+  // through `flow` and `setFlow`, so the two flows share the step list,
+  // the selection, loops, copy and paste.
+  const inExperiment = workMode === "experiment";
+  const flow = useMemo(
+    () => (document && inExperiment ? experimentView(document) : document),
+    [document, inExperiment],
+  );
+  const steps = flow ? getSteps(flow) : [];
+  const simulationSteps = document ? getSteps(document) : [];
   const sectionLines = document?.project.sectionLines ?? [];
   const sectionLine = sectionLines.find((line) => line.id === activeLineId) ?? null;
   const selectedStep = steps.find((step) => step.id === selectedStepId);
   const statuses = useMemo(
-    () => (document && branch ? document.stepStatuses[branch.id] ?? {} : {}),
-    [document, branch],
+    () => (document && branch && !inExperiment ? document.stepStatuses[branch.id] ?? {} : {}),
+    [document, branch, inExperiment],
   );
   const selectedStatus = selectedStepId ? statuses[selectedStepId] ?? "dirty" : "clean";
   const projectKernel = capabilities?.kernels.find(
@@ -405,6 +419,34 @@ export function Workspace({
     }
     setDocumentState(next);
     if (persist) setSaveState("unsaved");
+  };
+
+  /** An edit made on `flow`, into the document. */
+  const setFlow = (next: WorkspaceDocument) => {
+    if (!document) return;
+    setDocument(inExperiment ? fromExperimentView(document, next) : next);
+  };
+
+  /** Focus a simulation step, whichever flow is on screen. */
+  const focusSimulationStep = (stepId: string) => {
+    if (workModeRef.current === "simulation") setSelectedStepId(stepId);
+    else otherSelection.current = { stepId, ids: stepId ? [stepId] : [], loopId: "" };
+  };
+
+  /** Show the simulation or the experiment, each with its own selection. */
+  const switchMode = (next: "simulation" | "experiment") => {
+    if (!document || next === workMode) return;
+    const saved = otherSelection.current;
+    otherSelection.current = { stepId: selectedStepId, ids: selectedIds, loopId: selectedLoopId };
+    const there = next === "experiment" ? experimentSteps(document) : getSteps(document);
+    const kept = saved && there.some((step) => step.id === saved.stepId) ? saved : null;
+    const focus = kept?.stepId ?? there[0]?.id ?? "";
+    setSelectedStepId(focus);
+    setSelectedIds(kept ? kept.ids : focus ? [focus] : []);
+    setSelectedLoopId(kept?.loopId ?? "");
+    anchorId.current = focus;
+    setLoopDialog(false);
+    setWorkMode(next);
   };
 
   const undo = () => {
@@ -565,6 +607,8 @@ export function Workspace({
     setRecent(rememberWorkspace(next.root, next.project.name));
     const first = getSteps(next)[0]?.id ?? "";
     setSelectedStepId(first);
+    setWorkMode("simulation");
+    otherSelection.current = null;
     setSectionIndex(null);
     sectionPosition.current = null;
     setHiddenMaterials([]);
@@ -769,7 +813,7 @@ export function Workspace({
       viewCache.current.clear();
       setDocumentState(result);
       setSaveState("saved");
-      setSelectedStepId(getSteps(result)[0]?.id ?? "");
+      focusSimulationStep(getSteps(result)[0]?.id ?? "");
     } catch (reason) {
       failed("Could not delete the branch", reason);
     }
@@ -780,14 +824,18 @@ export function Workspace({
     [document, branch],
   );
 
+  // The record has no results to lose, and Ctrl+Z brings a step back; no
+  // confirm() there (the macOS webview may answer it without asking).
+  const confirmDelete = (question: string) => inExperiment || window.confirm(question);
+
   const removeStepById = (stepId: string) => {
-    if (!document) return;
+    if (!flow) return;
     const target = steps.find((step) => step.id === stepId);
     if (!target) return;
-    if (!window.confirm(`Delete ${target.name} and its stored result?`)) return;
+    if (!confirmDelete(`Delete ${target.name} and its stored result?`)) return;
     const index = steps.indexOf(target);
-    const next = removeStep(document, stepId);
-    setDocument(next);
+    const next = removeStep(flow, stepId);
+    setFlow(next);
     if (selectedStepId === stepId) {
       setSelectedStepId(getSteps(next)[Math.max(0, index - 1)]?.id ?? "");
     }
@@ -795,7 +843,7 @@ export function Workspace({
 
   // -- selection of several steps -------------------------------------------
   const selectStep = (stepId: string, modifiers: SelectModifiers) => {
-    if (!document) return;
+    if (!flow) return;
     const ids = steps.map((step) => step.id);
     if (modifiers.shift && anchorId.current && ids.includes(anchorId.current)) {
       const a = ids.indexOf(anchorId.current);
@@ -803,7 +851,7 @@ export function Workspace({
       setSelectedIds(ids.slice(Math.min(a, b), Math.max(a, b) + 1));
     } else if (modifiers.ctrl) {
       setSelectedIds((current) =>
-        current.includes(stepId) ? current.filter((id) => id !== stepId) : orderedSelection(document, [...current, stepId]),
+        current.includes(stepId) ? current.filter((id) => id !== stepId) : orderedSelection(flow, [...current, stepId]),
       );
       anchorId.current = stepId;
     } else {
@@ -825,11 +873,11 @@ export function Workspace({
   // focus set from elsewhere (the inspector, a run) collapses it.
   useEffect(() => {
     setSelectedIds((current) => {
-      const kept = document ? orderedSelection(document, current) : [];
+      const kept = flow ? orderedSelection(flow, current) : [];
       if (selectedStepId && !kept.includes(selectedStepId)) return [selectedStepId];
       return kept.length === current.length && kept.every((id, i) => id === current[i]) ? current : kept;
     });
-  }, [document, selectedStepId]);
+  }, [flow, selectedStepId]);
   const batchIds = selectedIds.length > 1 ? selectedIds : selectedStepId ? [selectedStepId] : [];
   // A selected loop stays selected only while the focus is on one of its steps.
   useEffect(() => {
@@ -838,7 +886,7 @@ export function Workspace({
   }, [steps, selectedStepId, selectedLoopId]);
 
   // -- loops ----------------------------------------------------------------------
-  const selectLoop = (loopId: string, within: WorkspaceDocument | null = document) => {
+  const selectLoop = (loopId: string, within: WorkspaceDocument | null = flow) => {
     const members = within ? loopSteps(getSteps(within), loopId) : [];
     if (members.length === 0) return;
     setSelectedIds(members.map((step) => step.id));
@@ -859,34 +907,34 @@ export function Workspace({
       : null;
   const loopActions: LoopActions = {
     create: (name, repeat) => {
-      if (!document) return;
-      const result = makeLoop(document, batchIds, name, repeat);
+      if (!flow) return;
+      const result = makeLoop(flow, batchIds, name, repeat);
       if (!result) return;
-      setDocument(result.document);
+      setFlow(result.document);
       selectLoop(result.loop.id, result.document);
     },
     select: (loopId) => selectLoop(loopId),
-    rename: (loopId, name) => document && setDocument(renameLoop(document, loopId, name)),
+    rename: (loopId, name) => flow && setFlow(renameLoop(flow, loopId, name)),
     setRepeat: (loopId, repeat) => {
-      if (!document) return;
-      const next = setLoopRepeat(document, loopId, repeat);
-      setDocument(next);
+      if (!flow) return;
+      const next = setLoopRepeat(flow, loopId, repeat);
+      setFlow(next);
       if (selectedLoopId === loopId) selectLoop(loopId, next);
     },
     dissolve: (loopId) => {
-      if (!document) return;
-      setDocument(dissolveLoop(document, loopId));
+      if (!flow) return;
+      setFlow(dissolveLoop(flow, loopId));
       setSelectedLoopId("");
       setSelectedIds(selectedStepId ? [selectedStepId] : []);
     },
     remove: (loopId) => {
-      if (!document) return;
+      if (!flow) return;
       const members = loopSteps(steps, loopId);
       if (members.length === 0) return;
-      if (!window.confirm(`Delete the loop ${members[0].loop!.name} (${members.length} steps) and its stored results?`)) return;
+      if (!confirmDelete(`Delete the loop ${members[0].loop!.name} (${members.length} steps) and its stored results?`)) return;
       const first = steps.indexOf(members[0]);
-      const next = removeSteps(document, members.map((step) => step.id));
-      setDocument(next);
+      const next = removeSteps(flow, members.map((step) => step.id));
+      setFlow(next);
       const remaining = getSteps(next);
       const focus = remaining[Math.min(Math.max(0, first - 1), remaining.length - 1)]?.id ?? "";
       setSelectedLoopId("");
@@ -894,59 +942,62 @@ export function Workspace({
       setSelectedIds(focus ? [focus] : []);
     },
     duplicate: (loopId) => {
-      if (!document) return;
+      if (!flow) return;
       const members = loopSteps(steps, loopId);
       if (members.length === 0) return;
-      const result = insertSteps(document, members, members[members.length - 1].id);
-      setDocument(result.document);
+      const result = insertSteps(flow, members, members[members.length - 1].id);
+      setFlow(result.document);
       const copy = result.steps[0]?.loop?.id;
       if (copy) selectLoop(copy, result.document);
     },
     copy: (loopId) => copyIds(loopSteps(steps, loopId).map((step) => step.id)),
     move: (loopId, direction) =>
-      document && setDocument(moveSteps(document, loopSteps(steps, loopId).map((step) => step.id), direction)),
+      flow && setFlow(moveSteps(flow, loopSteps(steps, loopId).map((step) => step.id), direction)),
     setEnabled: (loopId, enabled) =>
-      document && setDocument(setStepsEnabled(document, loopSteps(steps, loopId).map((step) => step.id), enabled)),
+      flow && setFlow(setStepsEnabled(flow, loopSteps(steps, loopId).map((step) => step.id), enabled)),
     runToEnd: (loopId) => {
+      if (inExperiment) return;
       const last = loopSteps(steps, loopId).at(-1);
       if (last) void runFlow(last.id);
     },
   };
-  const loopBlocker = document ? loopObstacle(document, batchIds) : "Open a project first.";
+  const loopBlocker = flow ? loopObstacle(flow, batchIds) : "Open a project first.";
 
   const duplicateSelected = () => {
-    if (!document || batchIds.length === 0) return;
-    const result = duplicateSteps(document, batchIds);
-    setDocument(result.document);
+    if (!flow || batchIds.length === 0) return;
+    const result = duplicateSteps(flow, batchIds);
+    setFlow(result.document);
     setSelectedIds(result.steps.map((step) => step.id));
     setSelectedStepId(result.steps.at(-1)?.id ?? "");
   };
   const removeSelected = () => {
-    if (!document || batchIds.length === 0) return;
+    if (!flow || batchIds.length === 0) return;
     const names = batchIds.map((id) => steps.find((step) => step.id === id)?.name ?? id);
     const what = names.length === 1 ? names[0] : `${names.length} steps`;
-    if (!window.confirm(`Delete ${what} and their stored results?`)) return;
+    if (!confirmDelete(`Delete ${what} and their stored results?`)) return;
     const first = steps.findIndex((step) => step.id === batchIds[0]);
-    const next = removeSteps(document, batchIds);
-    setDocument(next);
+    const next = removeSteps(flow, batchIds);
+    setFlow(next);
     const remaining = getSteps(next);
     const focus = remaining[Math.min(Math.max(0, first - 1), remaining.length - 1)]?.id ?? "";
     setSelectedStepId(focus);
     setSelectedIds(focus ? [focus] : []);
   };
   const moveSelected = (direction: -1 | 1) => {
-    if (!document || batchIds.length === 0) return;
-    setDocument(moveSteps(document, batchIds, direction));
+    if (!flow || batchIds.length === 0) return;
+    setFlow(moveSteps(flow, batchIds, direction));
   };
   const enableSelected = (enabled: boolean) => {
-    if (!document || batchIds.length === 0) return;
-    setDocument(setStepsEnabled(document, batchIds, enabled));
+    if (!flow || batchIds.length === 0) return;
+    setFlow(setStepsEnabled(flow, batchIds, enabled));
   };
   const copySelected = () => copyIds(batchIds);
   const copyIds = (ids: string[]) => {
-    if (!document || ids.length === 0) return;
-    const clip = clipFrom(document, ids);
-    if (!clip) return;
+    if (!flow || ids.length === 0) return;
+    const found = clipFrom(flow, ids);
+    if (!found) return;
+    // a paste into the other flow converts the steps (see clipFor)
+    const clip = { ...found, flow: workMode };
     rememberClip(clip);
     setClipboardSize(clip.steps.length);
     // The whole payload as JSON on the system clipboard: that is what lets
@@ -965,15 +1016,16 @@ export function Workspace({
   }, []);
 
   const pasteSteps = async () => {
-    if (!document) return;
-    const clip = await clipToPaste();
-    if (!clip) {
+    if (!document || !flow) return;
+    const copied = await clipToPaste();
+    if (!copied) {
       report("Nothing on the clipboard to paste.", true);
       setClipboardSize(0);
       return;
     }
-    const result = pasteClip(document, clip, selectedStepId || undefined);
-    setDocument(result.document);
+    const clip = clipFor(copied, workMode);
+    const result = pasteClip(flow, clip, selectedStepId || undefined);
+    setFlow(result.document);
     setSelectedIds(result.steps.map((step) => step.id));
     setSelectedStepId(result.steps.at(-1)?.id ?? "");
     const brought = [
@@ -1113,33 +1165,47 @@ export function Workspace({
       .catch((reason) => setNotice({ title: "Could not check for updates", text: errorMessage(reason) }));
   };
 
-  // The experiment record's selected step; the first when none is.
-  const selectedExperiment = document
-    ? experimentSteps(document).find((step) => step.id === selectedExperimentId) ?? experimentSteps(document)[0]
-    : undefined;
-
-  // The experiment record as a new simulation branch, made active.
+  // The experiment record as a new simulation branch, made active: the
+  // selected steps when several are selected, otherwise all of them.
   const exportExperiment = async () => {
-    if (!document || busy) return;
+    if (!document || busy || !inExperiment) return;
+    const some = selectedIds.length > 1 ? selectedIds : undefined;
     const name = await askText({
       title: "Export to a simulation branch",
       label: "Branch name",
       message:
-        "A new branch with a simulation step for each experiment step: a deposition's thickness from its "
-        + "target, cycles × rate per cycle, or time × rate; an etch by its time and each material's rate. "
-        + "Temperature, pressure and the like are left out. The flows already there are not touched.",
+        `A new branch with a simulation step for ${some ? `each of the ${some.length} selected steps` : "each experiment step"}: `
+        + "a deposition's thickness from its target, cycles × rate per cycle, or time × rate; an etch by its "
+        + "time and each material's rate. Temperature, pressure and the like are left out; loops stay loops. "
+        + "The flows already there are not touched.",
       initial: `From experiment ${document.branches.length + 1}`,
       confirm: "Export",
     });
     if (!name) return;
-    const { document: next, branch: made } = exportExperimentToBranch(document, name);
+    const { document: next, branch: made } = exportExperimentToBranch(document, name, some);
     setDocument(next);
-    setWorkMode("simulation");
-    setSelectedStepId(made.steps[0]?.id ?? "");
+    switchMode("simulation");
+    const focus = made.steps[0]?.id ?? "";
+    setSelectedStepId(focus);
+    setSelectedIds(focus ? [focus] : []);
+    setSelectedLoopId("");
     setEvents((current) => [
       ...current,
       { kind: "log", message: `Exported ${made.steps.length} experiment step(s) to the branch ${name}.` },
     ]);
+  };
+
+  // A simulation branch's steps into the record, after the selected step.
+  const importBranch = (branchIdToImport: string) => {
+    if (!document || !inExperiment) return;
+    const source = document.branches.find((item) => item.id === branchIdToImport);
+    if (!source || source.steps.length === 0) return;
+    const result = importIntoExperiment(document, source.steps, selectedStepId || undefined);
+    setDocument(result.document);
+    setSelectedIds(result.steps.map((step) => step.id));
+    setSelectedStepId(result.steps.at(-1)?.id ?? "");
+    setSelectedLoopId("");
+    report(`Imported ${result.steps.length} step(s) from the branch ${source.name} into the experiment record.`);
   };
 
   // -- keyboard shortcuts -----------------------------------------------------------
@@ -1163,6 +1229,11 @@ export function Workspace({
       } else if (event.key === "F5") {
         event.preventDefault();
         if (busy) return;
+        // the record's steps are not the flow's: only the whole flow runs
+        if (inExperiment) {
+          void runFlow();
+          return;
+        }
         // Ctrl runs the selected step again although it is up to date;
         // Shift runs the flow up to it.
         if (mod) {
@@ -1178,9 +1249,6 @@ export function Workspace({
       } else if ((mod && key === "y") || (mod && event.shiftKey && key === "z")) {
         event.preventDefault();
         redo();
-      } else if (workMode === "experiment") {
-        // the step shortcuts below are the simulation flow's
-        return;
       } else if (mod && key === "a") {
         event.preventDefault();
         selectAll();
@@ -1195,7 +1263,7 @@ export function Workspace({
         event.preventDefault();
         if (loopBlocker === null) setLoopDialog(true);
       } else if (event.key === "Delete" || event.key === "Backspace") {
-        if (batchIds.length && !busy) {
+        if (batchIds.length && (!busy || inExperiment)) {
           event.preventDefault();
           removeSelected();
         }
@@ -1407,7 +1475,7 @@ export function Workspace({
           setDocumentState((current) => (current ? markStep(current, failed, "failed") : current));
         }
       }
-      if (failed) setSelectedStepId(failed);
+      if (failed) focusSimulationStep(failed);
       setEvents((current) => [
         ...current,
         { kind: "log", message: stopped ? `Run stopped: ${message}` : `Run failed: ${message}` },
@@ -1449,7 +1517,7 @@ export function Workspace({
         setDocumentState(result.document);
         setSaveState("saved");
         const after = getSteps(result.document);
-        if (!after.some((step) => step.id === selectedStepRef.current)) {
+        if (workModeRef.current === "simulation" && !after.some((step) => step.id === selectedStepRef.current)) {
           setSelectedStepId(after[after.length - 1]?.id ?? "");
         }
         setViewNonce((nonce) => nonce + 1);
@@ -1709,7 +1777,7 @@ export function Workspace({
         { label: "Materials…", action: () => void exportLibraryAs("materials"), disabled: busy },
         { label: "Step templates…", action: () => void exportLibraryAs("recipes"), disabled: busy },
         { label: "Tools…", action: () => void exportLibraryAs("tools"), disabled: busy },
-        { label: "3D surfaces…", action: () => void exportMesh(), disabled: busy },
+        { label: "3D surfaces…", action: () => void exportMesh(), disabled: busy || inExperiment },
         { label: "Show workspace folder", action: revealFolder, separated: true },
         { label: "Close project", action: closeProject },
       ],
@@ -1724,22 +1792,27 @@ export function Workspace({
           heading: index === 0 ? "Add step after the selected one" : undefined,
           separated: index === 0,
           action: () => {
-            const { document: next, step } = addStep(document, type, selectedStepId);
-            setDocument(next);
+            const { document: next, step } = addStep(flow ?? document, type, selectedStepId);
+            setFlow(next);
             setSelectedStepId(step.id);
+            setSelectedIds([step.id]);
           },
         })),
         { label: `Duplicate${selectionCount > 1 ? ` ${selectionCount} steps` : ""}`, action: duplicateSelected, shortcut: "Ctrl+D", separated: true, disabled: selectionCount === 0 },
         { label: `Copy${selectionCount > 1 ? ` ${selectionCount} steps` : ""}`, action: copySelected, shortcut: "Ctrl+C", disabled: selectionCount === 0 },
         { label: `Paste after the selected step${clipboardSize ? ` (${clipboardSize})` : ""}`, action: () => void pasteSteps(), shortcut: "Ctrl+V" },
-        { label: `Delete${selectionCount > 1 ? ` ${selectionCount} steps` : ""}…`, action: removeSelected, shortcut: "Del", disabled: selectionCount === 0 || busy, danger: true },
+        { label: `Delete${selectionCount > 1 ? ` ${selectionCount} steps` : ""}…`, action: removeSelected, shortcut: "Del", disabled: selectionCount === 0 || (busy && !inExperiment), danger: true },
         { label: `Repeat${selectionCount > 1 ? ` ${selectionCount} steps` : " the selected step"} as a loop…`, action: () => setLoopDialog(true), shortcut: "Ctrl+G", separated: true, disabled: loopBlocker !== null },
         { label: "Take the selected loop apart", action: () => selectedLoopId && loopActions.dissolve(selectedLoopId), disabled: !selectedLoopId },
         { label: "Select all steps", action: selectAll, shortcut: "Ctrl+A", separated: true },
         { label: "Move up", action: () => moveSelected(-1), shortcut: "Alt+↑", disabled: selectionCount === 0 },
         { label: "Move down", action: () => moveSelected(1), shortcut: "Alt+↓", disabled: selectionCount === 0 },
-        { label: "Skip in the run", action: () => enableSelected(false), disabled: selectionCount === 0 },
-        { label: "Include in the run", action: () => enableSelected(true), disabled: selectionCount === 0 },
+        ...(inExperiment
+          ? []
+          : [
+              { label: "Skip in the run", action: () => enableSelected(false), disabled: selectionCount === 0 },
+              { label: "Include in the run", action: () => enableSelected(true), disabled: selectionCount === 0 },
+            ]),
       ],
     },
     {
@@ -1753,15 +1826,15 @@ export function Workspace({
           action: () => {
             const next = setActiveBranch(document, item.id);
             setDocument(next);
-            setSelectedStepId(getSteps(next)[0]?.id ?? "");
+            focusSimulationStep(getSteps(next)[0]?.id ?? "");
           },
         })),
         {
-          label: selectedStep
+          label: selectedStep && !inExperiment
             ? `Fork after ${selectedStep.name}…`
             : "Fork after the selected step…",
-          action: () => selectedStep && branchFromStep(selectedStep.id),
-          disabled: !selectedStep || busy,
+          action: () => selectedStep && !inExperiment && branchFromStep(selectedStep.id),
+          disabled: !selectedStep || busy || inExperiment,
           separated: true,
         },
         { label: `Rename ${branch.name}…`, action: renameBranch, disabled: busy },
@@ -1845,9 +1918,9 @@ export function Workspace({
           label: "Run the selected step again",
           action: () => selectedStepId && void runFlow(undefined, false, selectedStepId),
           shortcut: "Ctrl+F5",
-          disabled: busy || !selectedStepId,
+          disabled: busy || !selectedStepId || inExperiment,
         },
-        { label: "Run to the selected step", action: () => void runFlow(selectedStepId || undefined), shortcut: "Shift+F5", disabled: busy || !selectedStepId },
+        { label: "Run to the selected step", action: () => void runFlow(selectedStepId || undefined), shortcut: "Shift+F5", disabled: busy || !selectedStepId || inExperiment },
         { label: stopping ? "Stopping…" : "Stop", action: stopRun, disabled: stopping || !(busy && runRequestId.current) },
         { label: "Discard results and run everything again…", action: forceRerun, disabled: busy, separated: true },
         ...(projectKernel?.id === "slab"
@@ -1925,7 +1998,7 @@ export function Workspace({
             onChange={(event) => {
               const next = setActiveBranch(document, event.target.value);
               setDocument(next);
-              setSelectedStepId(getSteps(next)[0]?.id ?? "");
+              focusSimulationStep(getSteps(next)[0]?.id ?? "");
             }}
           >
             {document.branches.map((item) => (
@@ -2013,7 +2086,7 @@ export function Workspace({
             aria-label="Simulation"
             className={workMode === "simulation" ? "active" : ""}
             title="The simulation flow: what the kernel builds"
-            onClick={() => setWorkMode("simulation")}
+            onClick={() => switchMode("simulation")}
           >
             <Cpu size={13} /> <span className="topbar-label">Simulation</span>
           </button>
@@ -2024,10 +2097,7 @@ export function Workspace({
             aria-label="Experiment"
             className={workMode === "experiment" ? "active" : ""}
             title="The experiment record: what was done in the lab, with every tool setting. Never run."
-            onClick={() => {
-              setWorkMode("experiment");
-              if (!selectedExperimentId) setSelectedExperimentId(experimentSteps(document)[0]?.id ?? "");
-            }}
+            onClick={() => switchMode("experiment")}
           >
             <FlaskConical size={13} /> <span className="topbar-label">Experiment</span>
           </button>
@@ -2100,43 +2170,108 @@ export function Workspace({
             onResize={(width) => resizePanel("steps", width)}
             onReset={resetPanels}
           />
-          <ExperimentList
-            steps={experimentSteps(document)}
-            selectedId={selectedExperiment?.id ?? ""}
-            processTypes={kernelProcessTypes}
+          <StepList
+            variant="experiment"
+            steps={steps}
+            statuses={statuses}
             accentFor={(step) => stepAccentColor(document, step)}
-            onSelect={setSelectedExperimentId}
-            onAdd={(type) => {
-              const { document: next, step } = addExperimentStep(document, type, selectedExperiment?.id);
-              setDocument(next);
-              setSelectedExperimentId(step.id);
+            selectedStepId={selectedStepId}
+            selectedIds={selectedIds}
+            busy={busy}
+            canPaste={clipboardSize > 0}
+            onSelect={selectStep}
+            onClearSelection={clearSelection}
+            onBranch={() => {}}
+            forks={{}}
+            onDuplicateSelected={duplicateSelected}
+            onRemoveSelected={removeSelected}
+            onMoveSelected={moveSelected}
+            onEnableSelected={enableSelected}
+            onCopySelected={copySelected}
+            onPaste={() => void pasteSteps()}
+            processTypes={kernelProcessTypes}
+            onAdd={(processType) => {
+              if (!flow) return;
+              const { document: next, step } = addStep(flow, processType, selectedStepId);
+              setFlow(next);
+              setSelectedStepId(step.id);
+              setSelectedIds([step.id]);
             }}
-            onMove={(id, direction) => setDocument(moveExperimentStep(document, id, direction))}
-            onDuplicate={(id) => {
-              const result = duplicateExperimentStep(document, id);
+            onToggle={() => {}}
+            onReorder={(activeId, overId) => flow && setFlow(reorderSteps(flow, activeId, overId))}
+            onRunToHere={() => {}}
+            onDuplicate={(stepId) => {
+              if (!flow) return;
+              const result = duplicateStep(flow, stepId);
               if (!result) return;
-              setDocument(result.document);
-              setSelectedExperimentId(result.step.id);
+              setFlow(result.document);
+              setSelectedStepId(result.step.id);
             }}
-            // no confirm(): the macOS webview may answer it without asking; Ctrl+Z brings it back
-            onRemove={(id) => setDocument(removeExperimentStep(document, id))}
-            onExport={() => void exportExperiment()}
-            onStartFromFlow={() => {
-              const record = experimentFromSimulation(steps);
-              setDocument({ ...document, project: { ...document.project, experimentSteps: record } });
-              setSelectedExperimentId(record[0]?.id ?? "");
-            }}
+            onMove={(stepId, direction) => flow && setFlow(moveStep(flow, stepId, direction))}
+            onRemove={removeStepById}
+            selectedLoopId={selectedLoopId}
+            loopObstacle={loopBlocker}
+            loops={loopActions}
+            loopDialogOpen={loopDialog}
+            onLoopDialogChange={setLoopDialog}
+            empty={
+              <div className="experiment-empty">
+                <FlaskConical size={20} />
+                <p>
+                  The experiment record is a flow of its own: each step with its tool and every setting the
+                  machine had. It is never run, and nothing in it changes the simulation. Add steps, import a
+                  simulation branch below, or paste steps copied from one.
+                </p>
+              </div>
+            }
+            footer={
+              <div className="experiment-footer">
+                <label className="add-step-control">
+                  <Download size={14} />
+                  <span>Import a branch</span>
+                  <select
+                    aria-label="Import a simulation branch into the experiment record"
+                    value=""
+                    onChange={(event) => {
+                      if (event.target.value) importBranch(event.target.value);
+                      event.target.value = "";
+                    }}
+                  >
+                    <option value="" disabled>
+                      Its steps, after the selected one…
+                    </option>
+                    {document.branches.map((item) => (
+                      <option key={item.id} value={item.id} disabled={item.steps.length === 0}>
+                        {item.name} ({item.steps.length} step{item.steps.length === 1 ? "" : "s"})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="secondary-button export-experiment"
+                  disabled={steps.length === 0 || busy}
+                  title="A new simulation branch with these steps: thickness from the target, cycles × rate per cycle or time × rate; etches by time and each material's rate. The flows already there are left as they are."
+                  onClick={() => void exportExperiment()}
+                >
+                  <GitBranchPlus size={13} />
+                  {selectedIds.length > 1
+                    ? `Export ${selectedIds.length} steps to a simulation branch`
+                    : "Export to a simulation branch"}
+                </button>
+              </div>
+            }
           />
           <Inspector
             variant="experiment"
-            step={selectedExperiment}
-            loop={null}
-            onLoopRename={() => {}}
-            onLoopRepeat={() => {}}
-            onLoopDissolve={() => {}}
-            onLoopRemove={() => {}}
+            step={selectedStep}
+            loop={loopSummary}
+            onLoopRename={(name) => selectedLoopId && loopActions.rename(selectedLoopId, name)}
+            onLoopRepeat={(repeat) => selectedLoopId && loopActions.setRepeat(selectedLoopId, repeat)}
+            onLoopDissolve={() => selectedLoopId && loopActions.dissolve(selectedLoopId)}
+            onLoopRemove={() => selectedLoopId && loopActions.remove(selectedLoopId)}
             onLoopRun={() => {}}
-            onSelectLoop={() => {}}
+            onSelectLoop={() => selectedStep?.loop && selectLoop(selectedStep.loop.id)}
             recipes={document.recipes}
             tools={document.tools}
             onManageTools={() => setShowTools(true)}
@@ -2147,25 +2282,25 @@ export function Workspace({
             kernel={projectKernel}
             busy={busy}
             onRename={(name) =>
-              selectedExperiment &&
+              selectedStep &&
               name.trim() &&
-              setDocument(updateExperimentStep(document, selectedExperiment.id, { name: name.trim() }))
+              setDocument(updateExperimentStep(document, selectedStep.id, { name: name.trim() }))
             }
             onProcessTypeChange={(processType) =>
-              selectedExperiment && setDocument(setExperimentProcessType(document, selectedExperiment.id, processType))
+              selectedStep && setDocument(setExperimentProcessType(document, selectedStep.id, processType))
             }
             onDefinitionChange={(patch) =>
-              selectedExperiment && setDocument(updateExperimentStep(document, selectedExperiment.id, patch))
+              selectedStep && setDocument(updateExperimentStep(document, selectedStep.id, patch))
             }
             onParameter={(patch: Record<string, ParameterValue>) =>
-              selectedExperiment && setDocument(updateExperimentParameters(document, selectedExperiment.id, patch))
+              selectedStep && setDocument(updateExperimentParameters(document, selectedStep.id, patch))
             }
             onLoadRecipe={(recipe) =>
-              selectedExperiment && setDocument(loadRecipeIntoExperiment(document, selectedExperiment.id, recipe))
+              selectedStep && setDocument(loadRecipeIntoExperiment(document, selectedStep.id, recipe))
             }
             onSaveRecipe={(name) => {
-              if (!selectedExperiment) return;
-              const recipe = recipeFromExperiment(selectedExperiment, name);
+              if (!selectedStep) return;
+              const recipe = recipeFromExperiment(selectedStep, name);
               setDocument(upsertRecipe(document, recipe));
               setEvents((current) => [
                 ...current,
@@ -2173,11 +2308,11 @@ export function Workspace({
               ]);
             }}
             onMaskChange={(patch) =>
-              selectedExperiment && setDocument(updateExperimentStep(document, selectedExperiment.id, patch))
+              selectedStep && setDocument(updateExperimentStep(document, selectedStep.id, patch))
             }
             onEditSketch={() => {}}
             onRunToHere={() => {}}
-            onRemove={() => selectedExperiment && setDocument(removeExperimentStep(document, selectedExperiment.id))}
+            onRemove={() => selectedStep && removeStepById(selectedStep.id)}
           />
         </div>
       ) : (
@@ -2553,8 +2688,8 @@ export function Workspace({
         <CliPanel
           cli={capabilities?.cli}
           root={document.root}
-          steps={steps}
-          selectedStepId={selectedStepId}
+          steps={simulationSteps}
+          selectedStepId={inExperiment ? "" : selectedStepId}
           sectionLine={sectionLine}
           busy={busy}
           onRun={runCli}

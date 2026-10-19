@@ -353,8 +353,9 @@ def experiment_steps_from_json(payload: Any) -> list[dict[str, Any]] | None:
     for item in payload:
         if not isinstance(item, Mapping):
             raise InvalidRequest("an experiment step must be an object")
-        step = step_from_json({**item, "loop": None})
-        steps.append({**step_to_json(step, {}), "experimentParameters": None, "loop": None})
+        # a loop is kept the way a flow keeps one: every time through is a step
+        step = step_from_json(item)
+        steps.append({**step_to_json(step, {}), "experimentParameters": None})
     return steps
 
 

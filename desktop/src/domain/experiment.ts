@@ -1,20 +1,81 @@
 import type { FlowBranch, ParameterValue, ProcessStep, ProcessType, Recipe, WorkspaceDocument } from "../types";
+import type { StepClip } from "./clipboard";
 import { SIMULATION_KEYS, defaultParameters, depositThickness } from "./parameters";
-import { STEP_NAMES, newId } from "./project";
+import {
+  addStep,
+  duplicateStep,
+  getActiveBranch,
+  getSteps,
+  insertSteps,
+  moveStep,
+  newId,
+  orderedSelection,
+  removeStep,
+  updateStep,
+  updateStepParameters,
+} from "./project";
 
 /**
  * The experiment record: what was done in the lab, step by step, with the
  * tool and every setting. It is a flow of its own, kept with the project
  * and apart from the simulation's -- nothing here is run, nothing here makes
  * a result stale -- and it can be turned into a simulation branch.
+ *
+ * It is edited with the same step helpers as a branch (loops, several
+ * steps at once, paste), through a view of the document in which the
+ * record is the active branch; what the edit did to the record is taken
+ * back out of the view, and the branches and their results are never
+ * touched.
  */
 
 export function experimentSteps(document: WorkspaceDocument): ProcessStep[] {
   return document.project.experimentSteps ?? [];
 }
 
-function withExperiment(document: WorkspaceDocument, steps: ProcessStep[]): WorkspaceDocument {
-  return { ...document, project: { ...document.project, experimentSteps: steps } };
+/** The id the record has as the view's only branch. */
+export const EXPERIMENT_FLOW = "experiment-record";
+
+/** The document with the experiment record as its only, active branch. */
+export function experimentView(document: WorkspaceDocument): WorkspaceDocument {
+  const record: FlowBranch = {
+    id: EXPERIMENT_FLOW,
+    name: "Experiment",
+    parentBranchId: null,
+    parentStepId: null,
+    steps: experimentSteps(document),
+  };
+  return {
+    ...document,
+    branches: [record],
+    stepStatuses: {},
+    project: { ...document.project, activeBranchId: EXPERIMENT_FLOW },
+  };
+}
+
+/**
+ * An edit made on the view, back in the document: the record from the
+ * view, and whatever else the edit changed there (a material or a tool a
+ * paste brought in); the branches and their results as they were.
+ */
+export function fromExperimentView(document: WorkspaceDocument, view: WorkspaceDocument): WorkspaceDocument {
+  return {
+    ...view,
+    branches: document.branches,
+    stepStatuses: document.stepStatuses,
+    project: {
+      ...view.project,
+      activeBranchId: document.project.activeBranchId,
+      experimentSteps: getSteps(view),
+    },
+  };
+}
+
+/** Apply a branch edit to the experiment record. */
+export function onExperiment(
+  document: WorkspaceDocument,
+  edit: (view: WorkspaceDocument) => WorkspaceDocument,
+): WorkspaceDocument {
+  return fromExperimentView(document, edit(experimentView(document)));
 }
 
 function copyResponses(responses: ProcessStep["materialResponses"]) {
@@ -26,37 +87,17 @@ export function addExperimentStep(
   processType: ProcessType,
   afterId?: string,
 ): { document: WorkspaceDocument; step: ProcessStep } {
-  const step: ProcessStep = {
-    id: newId("exp"),
-    name: STEP_NAMES[processType].replace(/^New /, ""),
-    processType,
-    tool: "",
-    outputMaterial: processType === "oxidation" ? "SiO2" : null,
-    parameters: defaultParameters(processType),
-    experimentParameters: null,
-    materialResponses: {},
-    maskSource: "none",
-    layer: null,
-    datatype: null,
-    keep: "inside",
-    enabled: true,
-    loop: null,
-  };
-  const steps = experimentSteps(document);
-  const at = afterId ? steps.findIndex((item) => item.id === afterId) : -1;
-  const next = at < 0 ? [...steps, step] : [...steps.slice(0, at + 1), step, ...steps.slice(at + 1)];
-  return { document: withExperiment(document, next), step };
+  const result = addStep(experimentView(document), processType, afterId);
+  return { document: fromExperimentView(document, result.document), step: result.step };
 }
 
+/** Change a step; inside a loop, every time through gets the change. */
 export function updateExperimentStep(
   document: WorkspaceDocument,
   id: string,
   patch: Partial<Omit<ProcessStep, "id">>,
 ): WorkspaceDocument {
-  return withExperiment(
-    document,
-    experimentSteps(document).map((step) => (step.id === id ? { ...step, ...patch } : step)),
-  );
+  return onExperiment(document, (view) => updateStep(view, id, patch));
 }
 
 /** Merge into a step's numbers; null removes one (the row's remove button). */
@@ -65,11 +106,7 @@ export function updateExperimentParameters(
   id: string,
   patch: Record<string, ParameterValue>,
 ): WorkspaceDocument {
-  const step = experimentSteps(document).find((item) => item.id === id);
-  if (!step) return document;
-  const merged: Record<string, ParameterValue> = { ...step.parameters, ...patch };
-  for (const [key, value] of Object.entries(patch)) if (value === null) delete merged[key];
-  return updateExperimentStep(document, id, { parameters: merged });
+  return onExperiment(document, (view) => updateStepParameters(view, id, patch));
 }
 
 export function setExperimentProcessType(
@@ -91,33 +128,19 @@ export function setExperimentProcessType(
 }
 
 export function removeExperimentStep(document: WorkspaceDocument, id: string): WorkspaceDocument {
-  return withExperiment(document, experimentSteps(document).filter((step) => step.id !== id));
+  return onExperiment(document, (view) => removeStep(view, id));
 }
 
 export function moveExperimentStep(document: WorkspaceDocument, id: string, direction: -1 | 1): WorkspaceDocument {
-  const steps = [...experimentSteps(document)];
-  const at = steps.findIndex((step) => step.id === id);
-  const to = at + direction;
-  if (at < 0 || to < 0 || to >= steps.length) return document;
-  [steps[at], steps[to]] = [steps[to], steps[at]];
-  return withExperiment(document, steps);
+  return onExperiment(document, (view) => moveStep(view, id, direction));
 }
 
 export function duplicateExperimentStep(
   document: WorkspaceDocument,
   id: string,
 ): { document: WorkspaceDocument; step: ProcessStep } | null {
-  const steps = experimentSteps(document);
-  const at = steps.findIndex((step) => step.id === id);
-  if (at < 0) return null;
-  const source = steps[at];
-  const step: ProcessStep = {
-    ...source,
-    id: newId("exp"),
-    parameters: { ...source.parameters },
-    materialResponses: copyResponses(source.materialResponses),
-  };
-  return { document: withExperiment(document, [...steps.slice(0, at + 1), step, ...steps.slice(at + 1)]), step };
+  const result = duplicateStep(experimentView(document), id);
+  return result && { document: fromExperimentView(document, result.document), step: result.step };
 }
 
 /** A step template into an experiment step: its experiment numbers, or its
@@ -196,43 +219,71 @@ export function simulationStepFrom(step: ProcessStep): ProcessStep {
     layer: step.layer,
     datatype: step.datatype,
     keep: step.keep,
-    enabled: true,
-    loop: null,
+    enabled: step.enabled,
+    loop: step.loop ? { ...step.loop } : null,
   };
 }
 
-/** A new simulation branch made from the experiment record, made active;
- * the flows already there are left as they are. */
+/**
+ * A new simulation branch made from the experiment record -- the steps
+ * `ids` names, or all of them -- and made active; the flows already there
+ * are left as they are. Loops come along as loops.
+ */
 export function exportExperimentToBranch(
   document: WorkspaceDocument,
   name: string,
+  ids?: Iterable<string>,
 ): { document: WorkspaceDocument; branch: FlowBranch } {
-  const branch: FlowBranch = {
-    id: newId("branch"),
-    name,
-    parentBranchId: null,
-    parentStepId: null,
-    steps: experimentSteps(document).map(simulationStepFrom),
+  const record = experimentSteps(document);
+  const wanted = ids === undefined ? null : new Set(orderedSelection(experimentView(document), ids));
+  const sources = record.filter((step) => !wanted || wanted.has(step.id)).map(simulationStepFrom);
+  const empty: FlowBranch = { id: newId("branch"), name, parentBranchId: null, parentStepId: null, steps: [] };
+  const withBranch: WorkspaceDocument = {
+    ...document,
+    branches: [...document.branches, empty],
+    project: { ...document.project, activeBranchId: empty.id },
   };
+  const filled = insertSteps(withBranch, sources, undefined).document;
+  return { document: filled, branch: getActiveBranch(filled) };
+}
+
+/** A simulation step as an experiment step: its numbers and its experiment
+ * numbers in one set, since the record keeps every setting. */
+export function experimentStepFrom(step: ProcessStep): ProcessStep {
   return {
-    document: {
-      ...document,
-      branches: [...document.branches, branch],
-      project: { ...document.project, activeBranchId: branch.id },
-    },
-    branch,
+    ...step,
+    id: newId("step"),
+    parameters: { ...step.parameters, ...(step.experimentParameters ?? {}) },
+    experimentParameters: null,
+    materialResponses: copyResponses(step.materialResponses),
+    loop: step.loop ? { ...step.loop } : null,
   };
 }
 
 /** Experiment steps, in the shape a step template or a pasted step has. */
 export function experimentFromSimulation(steps: ProcessStep[]): ProcessStep[] {
-  return steps.map((step) => ({
-    ...step,
-    id: newId("exp"),
-    parameters: { ...step.parameters, ...(step.experimentParameters ?? {}) },
-    experimentParameters: null,
-    materialResponses: copyResponses(step.materialResponses),
-    enabled: true,
-    loop: null,
-  }));
+  return steps.map(experimentStepFrom);
+}
+
+/**
+ * Simulation steps into the record after `afterId` (at the end when it is
+ * not there): a whole branch or some of its steps. Loops stay loops.
+ */
+export function importIntoExperiment(
+  document: WorkspaceDocument,
+  sources: ProcessStep[],
+  afterId?: string,
+): { document: WorkspaceDocument; steps: ProcessStep[] } {
+  const result = insertSteps(experimentView(document), experimentFromSimulation(sources), afterId);
+  return { document: fromExperimentView(document, result.document), steps: result.steps };
+}
+
+/** A clipboard's steps for the flow they are pasted into: copied from the
+ * simulation and pasted into the record, or the other way, they are
+ * converted the way an import or an export would. */
+export function clipFor(clip: StepClip, flow: "simulation" | "experiment"): StepClip {
+  const from = clip.flow ?? "simulation";
+  if (from === flow) return clip;
+  const steps = flow === "experiment" ? clip.steps.map(experimentStepFrom) : clip.steps.map(simulationStepFrom);
+  return { ...clip, flow, steps };
 }

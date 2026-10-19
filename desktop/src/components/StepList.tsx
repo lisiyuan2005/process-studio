@@ -97,6 +97,15 @@ interface StepListProps {
   /** The "repeat as a loop" dialog, opened here or by the Edit menu. */
   loopDialogOpen: boolean;
   onLoopDialogChange: (open: boolean) => void;
+  /**
+   * The experiment record rather than a simulation branch: nothing in it
+   * runs, so there is no status, no run, no skip and no fork.
+   */
+  variant?: "simulation" | "experiment";
+  /** Shown instead of the list when there are no steps. */
+  empty?: ReactNode;
+  /** Below the add-step control: the record's import and export. */
+  footer?: ReactNode;
 }
 
 /** What the list can do with loops; each acts on the loop's id. */
@@ -176,6 +185,8 @@ interface StepCardProps {
   onMenu: (x: number, y: number) => void;
   /** Names of the branches that fork after this step, if any. */
   forkedInto?: string[];
+  /** A step of the experiment record: its tool, and no run state. */
+  experiment?: boolean;
 }
 
 /** A step in the list. Outside a loop it is wrapped to be dragged; inside one it sits still. */
@@ -190,6 +201,7 @@ function StepCard({
   onToggle,
   onMenu,
   forkedInto,
+  experiment,
   handle,
   nodeRef,
   style,
@@ -233,8 +245,9 @@ function StepCard({
         </div>
         <div className="step-subtitle">
           {step.processType.replace("_", " ")}
+          {experiment && step.tool ? ` · ${step.tool}` : ""}
           {mask ? ` · ${mask}` : ""}
-          {step.enabled ? "" : " · skipped"}
+          {step.enabled || experiment ? "" : " · skipped"}
           {forkedInto?.length ? (
             // The flow carries on elsewhere as well, which the list of one
             // branch cannot otherwise show.
@@ -245,6 +258,7 @@ function StepCard({
           ) : null}
         </div>
       </div>
+      {!experiment && (
       <button
         type="button"
         role="switch"
@@ -265,10 +279,13 @@ function StepCard({
       >
         {step.enabled ? <SquareCheck size={14} /> : <Square size={14} />}
       </button>
-      <div className={`status-chip status-${status}`}>
-        <StatusIcon status={status} />
-        <span>{STATUS_LABELS[status]}</span>
-      </div>
+      )}
+      {!experiment && (
+        <div className={`status-chip status-${status}`}>
+          <StatusIcon status={status} />
+          <span>{STATUS_LABELS[status]}</span>
+        </div>
+      )}
       <button
         type="button"
         className="step-menu-button"
@@ -329,7 +346,9 @@ function SortableLoop({
   onSelect,
   onMenu,
   renderStep,
+  experiment,
 }: {
+  experiment: boolean;
   unit: FlowUnit;
   firstIndex: number;
   statuses: Record<string, StepStatus>;
@@ -346,7 +365,7 @@ function SortableLoop({
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: unit.id });
   const iterations = loopIterations(unit.steps, loop.id);
   const status = summarizeStatuses(unit.steps.map((step) => statuses[step.id] ?? "dirty"));
-  const allSkipped = unit.steps.every((step) => !step.enabled);
+  const allSkipped = !experiment && unit.steps.every((step) => !step.enabled);
   let index = firstIndex;
 
   return (
@@ -390,10 +409,12 @@ function SortableLoop({
             {allSkipped ? " · skipped" : ""}
           </div>
         </div>
-        <div className={`status-chip status-${status}`}>
-          <StatusIcon status={status} />
-          <span>{STATUS_LABELS[status]}</span>
-        </div>
+        {!experiment && (
+          <div className={`status-chip status-${status}`}>
+            <StatusIcon status={status} />
+            <span>{STATUS_LABELS[status]}</span>
+          </div>
+        )}
         <button
           type="button"
           className="step-menu-button loop-menu-button"
@@ -427,7 +448,7 @@ function SortableLoop({
                   {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                   <span>Iteration {iteration + 1} of {loop.repeat}</span>
                   <span className="step-index">{start + 1}–{start + steps.length}</span>
-                  {!open && (
+                  {!open && !experiment && (
                     <span className={`status-dot status-${own}`} title={STATUS_LABELS[own]} />
                   )}
                 </button>
@@ -514,7 +535,9 @@ function StepMenu({
   onBranch,
   onLoop,
   loopObstacle,
+  experiment,
 }: {
+  experiment: boolean;
   step: ProcessStep;
   index: number;
   count: number;
@@ -603,7 +626,7 @@ function StepMenu({
         <span className="step-index">{index + 1}</span>
         <span>{step.name}</span>
       </div>
-      {item("Run to here", <Play size={13} />, onRunToHere, { disabled: busy })}
+      {!experiment && item("Run to here", <Play size={13} />, onRunToHere, { disabled: busy })}
       {item("Duplicate", <Copy size={13} />, onDuplicate)}
       {item("Copy", <ClipboardList size={13} />, onCopy)}
       {item("Paste after", <ClipboardList size={13} />, onPaste, { disabled: !canPaste })}
@@ -611,23 +634,25 @@ function StepMenu({
       {item("Move down", <ArrowDown size={13} />, () => onMove(1), {
         disabled: index === count - 1,
       })}
-      {item(
-        step.enabled ? "Skip in the run" : "Include in the run",
-        step.enabled ? <Square size={13} /> : <SquareCheck size={13} />,
-        onToggle,
-      )}
-      {item("Fork a branch here…", <GitBranch size={13} />, onBranch, {
-        disabled: busy,
-        title:
-          "A process split: a new branch with every step up to here, and their results, "
-          + "to carry on differently",
-      })}
+      {!experiment &&
+        item(
+          step.enabled ? "Skip in the run" : "Include in the run",
+          step.enabled ? <Square size={13} /> : <SquareCheck size={13} />,
+          onToggle,
+        )}
+      {!experiment &&
+        item("Fork a branch here…", <GitBranch size={13} />, onBranch, {
+          disabled: busy,
+          title:
+            "A process split: a new branch with every step up to here, and their results, "
+            + "to carry on differently",
+        })}
       {item("Repeat as a loop…", <Repeat size={13} />, onLoop, {
         disabled: loopObstacle !== null,
-        title: loopObstacle ?? "Run this step several times in a row",
+        title: loopObstacle ?? (experiment ? "This step done several times in a row" : "Run this step several times in a row"),
       })}
       <div className="context-menu-divider" />
-      {item("Delete…", <Trash size={13} />, onRemove, { danger: true, disabled: busy })}
+      {item("Delete…", <Trash size={13} />, onRemove, { danger: true, disabled: busy && !experiment })}
     </div>,
     document.body,
   );
@@ -664,7 +689,13 @@ export function StepList({
   loops,
   loopDialogOpen,
   onLoopDialogChange,
+  variant = "simulation",
+  empty,
+  footer,
 }: StepListProps) {
+  const experiment = variant === "experiment";
+  // nothing in the record runs, so a run going on blocks nothing here
+  const blocked = busy && !experiment;
   const [menu, setMenu] = useState<MenuAnchor | null>(null);
   const [loopMenu, setLoopMenu] = useState<{ loopId: string; x: number; y: number } | null>(null);
   const setLoopDialog = onLoopDialogChange;
@@ -691,8 +722,10 @@ export function StepList({
     const at = units.indexOf(unit);
     const enabled = unit.steps.some((step) => step.enabled);
     const isCollapsed = collapsed.has(loop.id);
-    return [
-      { label: "Run to the end of the loop", icon: <Play size={13} />, action: () => loops.runToEnd(loop.id), disabled: busy },
+    const items: (MenuItem | null)[] = [
+      experiment
+        ? null
+        : { label: "Run to the end of the loop", icon: <Play size={13} />, action: () => loops.runToEnd(loop.id), disabled: busy },
       {
         label: "Times through…",
         icon: <Repeat size={13} />,
@@ -718,11 +751,13 @@ export function StepList({
       { label: "Copy the loop", icon: <ClipboardList size={13} />, action: () => loops.copy(loop.id) },
       { label: "Move up", icon: <ArrowUp size={13} />, action: () => loops.move(loop.id, -1), disabled: at <= 0 },
       { label: "Move down", icon: <ArrowDown size={13} />, action: () => loops.move(loop.id, 1), disabled: at >= units.length - 1 },
-      {
-        label: enabled ? "Skip in the run" : "Include in the run",
-        icon: enabled ? <Square size={13} /> : <SquareCheck size={13} />,
-        action: () => loops.setEnabled(loop.id, !enabled),
-      },
+      experiment
+        ? null
+        : {
+            label: enabled ? "Skip in the run" : "Include in the run",
+            icon: enabled ? <Square size={13} /> : <SquareCheck size={13} />,
+            action: () => loops.setEnabled(loop.id, !enabled),
+          },
       {
         label: isCollapsed ? "Expand" : "Collapse",
         icon: isCollapsed ? <ChevronDown size={13} /> : <ChevronRight size={13} />,
@@ -730,8 +765,9 @@ export function StepList({
         separated: true,
       },
       { label: "Take the loop apart", icon: <Ungroup size={13} />, action: () => loops.dissolve(loop.id) },
-      { label: "Delete the loop…", icon: <Trash size={13} />, action: () => loops.remove(loop.id), danger: true, disabled: busy, separated: true },
+      { label: "Delete the loop…", icon: <Trash size={13} />, action: () => loops.remove(loop.id), danger: true, disabled: blocked, separated: true },
     ];
+    return items.filter((item): item is MenuItem => item !== null);
   };
   const renderStep = (step: ProcessStep, index: number, sortable: boolean) => {
     const props: StepCardProps = {
@@ -745,6 +781,7 @@ export function StepList({
       onToggle: () => onToggle(step.id),
       onMenu: (x, y) => setMenu({ stepId: step.id, x, y }),
       forkedInto: forks[step.id],
+      experiment,
     };
     return sortable ? <SortableStep key={step.id} {...props} /> : <StepCard key={step.id} {...props} />;
   };
@@ -758,12 +795,12 @@ export function StepList({
   };
 
   return (
-    <aside className="steps-panel">
+    <aside className={`steps-panel${experiment ? " experiment-panel" : ""}`}>
       {promptDialog}
       <div className="panel-heading">
         <div>
-          <span className="eyebrow">FLOW</span>
-          <h2>Process steps</h2>
+          <span className="eyebrow">{experiment ? "EXPERIMENT" : "FLOW"}</span>
+          <h2>{experiment ? "What was done" : "Process steps"}</h2>
         </div>
         <span className="count-badge">{steps.length}</span>
       </div>
@@ -783,7 +820,7 @@ export function StepList({
           <button type="button" title={loopObstacle ?? "Repeat the selected steps as a loop (Ctrl+G)"} onClick={() => setLoopDialog(true)} disabled={loopObstacle !== null}>
             Loop…
           </button>
-          <button type="button" title="Delete the selected steps (Delete)" onClick={onRemoveSelected} disabled={busy}>
+          <button type="button" title="Delete the selected steps (Delete)" onClick={onRemoveSelected} disabled={blocked}>
             Delete
           </button>
           <button type="button" title="Keep only the focused step selected (Esc)" onClick={onClearSelection}>
@@ -816,12 +853,11 @@ export function StepList({
                     onSelect={() => loops.select(loopId)}
                     onMenu={(x, y) => setLoopMenu({ loopId, x, y })}
                     renderStep={(step, index) => renderStep(step, index, false)}
+                    experiment={experiment}
                   />
                 );
               })}
-              {steps.length === 0 && (
-                <p className="step-subtitle">This branch has no steps yet.</p>
-              )}
+              {steps.length === 0 && (empty ?? <p className="step-subtitle">This branch has no steps yet.</p>)}
             </div>
           </SortableContext>
         </DndContext>
@@ -857,13 +893,17 @@ export function StepList({
             { label: `Repeat ${selectedIds.length} steps as a loop…`, icon: <Repeat size={13} />, action: () => setLoopDialog(true), disabled: loopObstacle !== null, shortcut: "Ctrl+G" },
             { label: "Move up", icon: <ArrowUp size={13} />, action: () => onMoveSelected(-1), shortcut: "Alt+↑" },
             { label: "Move down", icon: <ArrowDown size={13} />, action: () => onMoveSelected(1), shortcut: "Alt+↓" },
-            {
-              label: allEnabled ? "Skip in the run" : "Include in the run",
-              icon: allEnabled ? <Square size={13} /> : <SquareCheck size={13} />,
-              action: () => onEnableSelected(!allEnabled),
-            },
+            ...(experiment
+              ? []
+              : [
+                  {
+                    label: allEnabled ? "Skip in the run" : "Include in the run",
+                    icon: allEnabled ? <Square size={13} /> : <SquareCheck size={13} />,
+                    action: () => onEnableSelected(!allEnabled),
+                  },
+                ]),
             { label: "Clear selection", icon: <Check size={13} />, action: onClearSelection, shortcut: "Esc", separated: true },
-            { label: `Delete ${selectedIds.length} steps…`, icon: <Trash size={13} />, action: onRemoveSelected, danger: true, disabled: busy, shortcut: "Del" },
+            { label: `Delete ${selectedIds.length} steps…`, icon: <Trash size={13} />, action: onRemoveSelected, danger: true, disabled: blocked, shortcut: "Del" },
           ]}
         />
       )}
@@ -886,13 +926,14 @@ export function StepList({
           onBranch={() => onBranch(menuStep.id)}
           onLoop={() => setLoopDialog(true)}
           loopObstacle={loopObstacle}
+          experiment={experiment}
         />
       )}
 
       <div className="add-step-wrap">
         <label className="add-step-control">
           <Plus size={15} />
-          <span>Add process</span>
+          <span>{experiment ? "Add step" : "Add process"}</span>
           <select
             aria-label="Add a process step"
             value=""
@@ -911,6 +952,7 @@ export function StepList({
             ))}
           </select>
         </label>
+        {footer}
       </div>
     </aside>
   );

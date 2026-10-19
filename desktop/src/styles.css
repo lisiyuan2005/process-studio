@@ -927,16 +927,9 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 .link-button { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; text-decoration: underline; cursor: pointer; }
 
-/* The experiment record: a list of its own, nothing to run. */
-.experiment-card { grid-template-columns: 22px 3px minmax(0, 1fr) auto; padding-left: 8px; }
-.experiment-index { text-align: right; }
-.experiment-actions { display: inline-flex; gap: 2px; opacity: 0.35; transition: opacity 120ms; }
-.experiment-card:hover .experiment-actions, .experiment-card.selected .experiment-actions { opacity: 1; }
-.experiment-actions button { width: 22px; height: 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; }
-.experiment-actions button:hover:not(:disabled) { background: var(--accent-soft); color: var(--text); }
-.experiment-actions button:disabled { opacity: 0.3; cursor: default; }
+/* The experiment record: the flow's list, with nothing to run. */
 .experiment-empty { display: grid; justify-items: center; gap: 10px; padding: 28px 12px; color: var(--muted); text-align: center; font-size: 12px; line-height: 1.5; }
-.experiment-footer { display: grid; gap: 8px; }
+.experiment-footer { display: grid; gap: 8px; margin-top: 8px; }
 .export-experiment { height: 32px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; }
 .work-mode-switch { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
 .work-mode-switch button { height: 30px; display: inline-flex; align-items: center; gap: 5px; padding: 0 10px; border: 0; border-radius: 0; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; }

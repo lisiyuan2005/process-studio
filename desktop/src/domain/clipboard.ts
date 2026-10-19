@@ -32,6 +32,9 @@ export interface StepClip {
   version: 1;
   /** Where it was copied from, for the person reading the JSON. */
   project?: string;
+  /** Which flow the steps came from: a simulation branch (the default) or
+   * the experiment record. A paste into the other one converts them. */
+  flow?: "simulation" | "experiment";
   steps: ProcessStep[];
   materials: MaterialDefinition[];
   tools: ToolDefinition[];
@@ -76,6 +79,7 @@ export function parseClip(text: string): StepClip | null {
       kind: CLIP_KIND,
       version: 1,
       project: typeof parsed.project === "string" ? parsed.project : undefined,
+      flow: parsed.flow === "experiment" ? "experiment" : "simulation",
       steps: parsed.steps,
       materials: Array.isArray(parsed.materials) ? parsed.materials : [],
       tools: Array.isArray(parsed.tools) ? parsed.tools : [],

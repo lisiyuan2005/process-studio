@@ -1616,6 +1616,14 @@ def test_the_experiment_record_is_kept_apart_from_the_flow_and_starts_from_old_e
     again = call("save_document", root=str(workspace), document=saved)
     reopened = call("open_workspace", root=str(workspace))
     assert reopened["project"]["experimentSteps"][0]["parameters"]["pressure_mtorr"] == 5
+    # a loop in the record is kept, as it is in a flow
+    loop = {"id": "loop-exp", "name": "ALD pair", "repeat": 2, "iteration": 0}
+    record[0]["loop"] = loop
+    record.append({**record[0], "id": "exp-second", "loop": {**loop, "iteration": 1}})
+    saved["project"]["experimentSteps"] = record
+    call("save_document", root=str(workspace), document=saved)
+    looped = call("open_workspace", root=str(workspace))["project"]["experimentSteps"]
+    assert [step["loop"] for step in looped] == [loop, {**loop, "iteration": 1}]
     assert [s["id"] for s in again["branches"][0]["steps"]] == [s["id"] for s in branch["steps"]]
     saved["project"]["experimentSteps"] = [{"name": "bad"}]
     with pytest.raises(InvalidRequest):

@@ -168,9 +168,12 @@ function LoopInspector({
   onDissolve,
   onRemove,
   onRun,
+  experiment,
 }: {
   summary: LoopSummary;
   busy: boolean;
+  /** The experiment record's loop: nothing in it runs or has a result. */
+  experiment: boolean;
   onRename: (name: string) => void;
   onRepeat: (repeat: number) => void;
   onDissolve: () => void;
@@ -193,10 +196,10 @@ function LoopInspector({
     <aside className="inspector-panel">
       <div className="panel-heading inspector-heading">
         <div>
-          <span className="eyebrow">LOOP</span>
+          <span className="eyebrow">{experiment ? "EXPERIMENT LOOP" : "LOOP"}</span>
           <h2>{loop.name}</h2>
         </div>
-        <span className={`status-chip status-${summary.status}`}>{summary.status}</span>
+        {!experiment && <span className={`status-chip status-${summary.status}`}>{summary.status}</span>}
       </div>
       <div className="inspector-scroll">
         <label className="field-row">
@@ -221,29 +224,36 @@ function LoopInspector({
           />
           <small>
             More times add copies of the first time through after the last one; fewer drop the
-            last ones, with their results.
+            last ones{experiment ? "" : ", with their results"}.
           </small>
         </label>
         <p className="loop-facts">
           <Repeat size={13} />
           <span>
             {summary.stepsPerIteration} step{summary.stepsPerIteration === 1 ? "" : "s"} each time, {loop.repeat} times: steps{" "}
-            {summary.first}–{summary.last} of the flow. Every time through is a real step with its own result, so
-            selecting one shows the wafer after it. An edit to any of them changes all of them.
+            {summary.first}–{summary.last} of the {experiment ? "record" : "flow"}.{" "}
+            {experiment
+              ? "Every time through is a step of its own in the record."
+              : "Every time through is a real step with its own result, so selecting one shows the wafer after it."}{" "}
+            An edit to any of them changes all of them.
           </span>
         </p>
         <div className="form-section">
           <button type="button" className="secondary-button" onClick={onDissolve}>
             <Ungroup size={13} /> Take the loop apart
           </button>
-          <small className="field-hint">The steps stay, as ordinary steps, and keep their results.</small>
+          <small className="field-hint">
+            The steps stay, as ordinary steps{experiment ? "" : ", and keep their results"}.
+          </small>
         </div>
       </div>
       <div className="inspector-actions">
-        <button type="button" className="secondary-button" disabled={busy} onClick={onRun}>
-          <Play size={13} /> Run to its end
-        </button>
-        <button type="button" className="danger-button" disabled={busy} onClick={onRemove}>
+        {!experiment && (
+          <button type="button" className="secondary-button" disabled={busy} onClick={onRun}>
+            <Play size={13} /> Run to its end
+          </button>
+        )}
+        <button type="button" className="danger-button" disabled={busy && !experiment} onClick={onRemove}>
           <Trash2 size={13} /> Delete loop
         </button>
       </div>
@@ -320,6 +330,7 @@ export function Inspector({
         onDissolve={onLoopDissolve}
         onRemove={onLoopRemove}
         onRun={onLoopRun}
+        experiment={variant === "experiment"}
       />
     );
   }
