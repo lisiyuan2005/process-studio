@@ -928,6 +928,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .link-button { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; text-decoration: underline; cursor: pointer; }
 
 /* The experiment record: the flow's list, with nothing to run. */
+.duration-field { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.duration-field .number-input-wrap input { padding-right: 36px; }
 .experiment-empty { display: grid; justify-items: center; gap: 10px; padding: 28px 12px; color: var(--muted); text-align: center; font-size: 12px; line-height: 1.5; }
 .experiment-footer { display: grid; gap: 8px; margin-top: 8px; }
 .export-experiment { height: 32px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; }

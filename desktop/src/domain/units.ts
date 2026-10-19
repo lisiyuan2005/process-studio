@@ -57,9 +57,31 @@ export function inUnit(canonical: number, unit: UnitOption): number {
   return Number(shown.toPrecision(12));
 }
 
-/** What a typed number means in the canonical unit. */
+/**
+ * What a typed number means in the canonical unit.
+ *
+ * Rounded at the fifteenth digit only, which clears the binary litter
+ * (50 nm is 0.05 µm, not 0.05000000000000001) and keeps everything else:
+ * 70 s is 1.16666666666667 min, which reads back as 70 s. Rounded at the
+ * twelfth, as the display is, it would read back as 70.0000000002 s.
+ */
 export function fromUnit(shown: number, unit: UnitOption): number {
-  return Number((shown * unit.factor).toPrecision(12));
+  return Number((shown * unit.factor).toPrecision(15));
+}
+
+/** A time held in minutes, as hours, minutes and seconds (the seconds may
+ * have a fraction); a whole number of seconds comes out whole. */
+export function splitMinutes(minutes: number): { h: number; min: number; s: number } {
+  const total = Number((Math.max(0, minutes) * 60).toPrecision(12));
+  const h = Math.floor(total / 3600);
+  const min = Math.floor((total - h * 3600) / 60);
+  const s = Number((total - h * 3600 - min * 60).toPrecision(12));
+  return { h, min, s };
+}
+
+/** Hours, minutes and seconds as the minutes a time is held in. */
+export function joinMinutes(h: number, min: number, s: number): number {
+  return Number(((h * 3600 + min * 60 + s) / 60).toPrecision(15));
 }
 
 const STORAGE_KEY = "process-studio:units";

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { fromUnit, inUnit, preferredUnit, rememberUnit, unitOption, unitsFor } from "./units";
+import { fromUnit, inUnit, joinMinutes, preferredUnit, rememberUnit, splitMinutes, unitOption, unitsFor } from "./units";
 
 /** The tests run on node, which has no localStorage; this is the one part of
  * a browser these functions touch. */
@@ -41,6 +41,20 @@ describe("units", () => {
     expect(fromUnit(90, seconds)).toBe(1.5);
     const hours = unitOption("min", "h")!;
     expect(fromUnit(2, hours)).toBe(120);
+    // a value that is not a round number of minutes comes back as typed
+    for (const typed of [70, 7, 45.5, 3599, 0.1]) {
+      expect(inUnit(fromUnit(typed, seconds), seconds)).toBe(typed);
+    }
+  });
+
+  it("splits a time into hours, minutes and seconds and back", () => {
+    expect(splitMinutes(joinMinutes(0, 0, 70))).toEqual({ h: 0, min: 1, s: 10 });
+    expect(splitMinutes(joinMinutes(1, 30, 5))).toEqual({ h: 1, min: 30, s: 5 });
+    expect(splitMinutes(joinMinutes(0, 0, 2.5))).toEqual({ h: 0, min: 0, s: 2.5 });
+    expect(splitMinutes(1.5)).toEqual({ h: 0, min: 1, s: 30 });
+    expect(splitMinutes(fromUnit(70, unitOption("min", "s")!))).toEqual({ h: 0, min: 1, s: 10 });
+    expect(joinMinutes(0, 1, 30)).toBe(1.5);
+    expect(joinMinutes(2, 0, 0)).toBe(120);
   });
 
   it("reads a rate in the unit it was typed in", () => {

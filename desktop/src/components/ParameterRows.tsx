@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import { DurationField } from "./DurationField";
 import { UnitNumber } from "./UnitNumber";
 import type { ParameterSpec } from "../domain/parameters";
 import type { ParameterValue } from "../types";
@@ -65,6 +66,13 @@ function ParameterRow({
             </datalist>
           )}
         </>
+      ) : spec.unit === "min" ? (
+        // a time: hours, minutes and seconds, held in minutes
+        <DurationField
+          aria-label={spec.label}
+          value={Array.isArray(value) ? value[0] : (value as number | null)}
+          onCommit={(next) => onChange(next)}
+        />
       ) : (
         <UnitNumber
           field={spec.key}
