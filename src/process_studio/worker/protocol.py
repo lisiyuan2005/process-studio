@@ -40,6 +40,7 @@ from .files import (
     import_flow,
     import_library,
     reveal_path,
+    write_report,
 )
 from .update import check_update, install_update, open_url
 from .runner import (
@@ -797,6 +798,10 @@ def dispatch(
             _root(parameters), _destination(parameters), str(parameters.get("format") or "xlsx"),
             parameters.get("projectId"), parameters.get("columns"),
             str(parameters.get("values") or "simulation"),
+        )
+    if method == "write_report":
+        return write_report(
+            _root(parameters), _destination(parameters), parameters.get("report"), parameters.get("log", "")
         )
     if method == "import_flow":
         return import_flow(_root(parameters), _source(parameters), output)

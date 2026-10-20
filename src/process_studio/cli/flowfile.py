@@ -114,6 +114,10 @@ def flow_from_document(document: Mapping[str, Any]) -> dict[str, Any]:
         for sketch in document.get("sketches", [])
     }
     flow["steps"] = nest_loops(Session.steps(document))
+    # the experiment record: a flow of its own, never run
+    record = project.get("experimentSteps")
+    if record:
+        flow["experiment"] = nest_loops(record)
     return flow
 
 
@@ -378,5 +382,10 @@ def apply_flow(session: Session, flow: Mapping[str, Any]) -> dict[str, Any]:
         branch["steps"] = [
             step_from_spec(spec, step_id=existing[index]["id"] if index < len(existing) else None)
             for index, spec in enumerate(expand_loops(specs))
+        ]
+    record = flow.get("experiment")
+    if isinstance(record, list):
+        document["project"]["experimentSteps"] = [
+            {**step_from_spec(spec), "experimentParameters": None} for spec in expand_loops(record)
         ]
     return session.save(document)

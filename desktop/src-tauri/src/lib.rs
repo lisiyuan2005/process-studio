@@ -49,6 +49,7 @@ const WORKER_METHODS: &[&str] = &[
     "create_branch",
     "rename_branch",
     "delete_branch",
+    "write_report",
 ];
 
 /// Methods that may name a directory that does not exist yet.

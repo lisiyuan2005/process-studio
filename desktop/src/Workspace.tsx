@@ -29,6 +29,8 @@ import { FlowExportDialog } from "./components/FlowExportDialog";
 import { RecipeEditor } from "./components/RecipeEditor";
 import { SketchEditor } from "./components/SketchEditor";
 import { useTextPrompt } from "./components/TextPrompt";
+import { ReportDialog } from "./components/ReportDialog";
+import { baseName, issueUrl } from "./domain/report";
 import {
   clipFor,
   experimentSteps,
@@ -227,6 +229,9 @@ export function Workspace({
   // A table export asks which columns first; a flow file carries everything.
   const [exportingTable, setExportingTable] = useState<FlowExportFormat | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  // Help > Report a problem: the dialog, and the issue page it last opened
+  const [showReport, setShowReport] = useState(false);
+  const reportUrl = useRef("");
   // names asked for in the window itself (the macOS webview has no prompt)
   const [promptDialog, askText] = useTextPrompt();
   // A short message with an optional action, for menu commands that answer something.
@@ -1208,6 +1213,42 @@ export function Workspace({
     report(`Imported ${result.steps.length} step(s) from the branch ${source.name} into the experiment record.`);
   };
 
+  // -- reporting a problem ------------------------------------------------------------
+  // The report is packed by the worker from what is stored, so pending edits
+  // are saved first; then the issue page opens filled in, and the user
+  // attaches the report and posts it from their own account.
+  const submitReport = async (description: string, stepIds: string[]): Promise<string | null> => {
+    if (!document || !branch) return null;
+    try {
+      if (saveState !== "saved") await saveNow();
+      const log = events.slice(-200).map((event) => `[${event.kind}] ${event.message}`).join("\n");
+      const result = await bridge.writeReport(
+        document.root,
+        { description, flow: workMode, stepIds },
+        log,
+        `${document.project.name}-report`,
+      );
+      if (!result) return null;
+      reportUrl.current = issueUrl({
+        description,
+        flow: workMode,
+        branch: branch.name,
+        version: capabilities?.workerVersion ?? "",
+        kernel: document.project.kernel,
+        marked: result.markedSteps,
+        fileName: baseName(result.path),
+      });
+      report(`Saved the problem report to ${result.path}.`);
+      await bridge.openUrl(reportUrl.current).catch((reason) =>
+        report(`Could not open the issue page: ${errorMessage(reason)}`, true),
+      );
+      return result.path;
+    } catch (reason) {
+      report(`Could not write the problem report: ${errorMessage(reason)}`, true);
+      return null;
+    }
+  };
+
   // -- keyboard shortcuts -----------------------------------------------------------
   useEffect(() => {
     if (!document) return;
@@ -1946,6 +1987,7 @@ export function Workspace({
       items: [
         { label: "Documentation", action: () => void bridge.openUrl("https://github.com/lisiyuan2005/process-studio/") },
         { label: "Keyboard shortcuts", action: () => setShowShortcuts(true) },
+        { label: "Report a problem…", action: () => setShowReport(true), separated: true },
         { label: "Check for updates", action: checkUpdateFromMenu, separated: true },
         { label: `About Process Studio ${capabilities?.workerVersion ?? ""}`, action: () => setNotice({ title: `Process Studio ${capabilities?.workerVersion ?? ""}`, text: `Kernel build: ${capabilities?.buildVariant ?? "full"}. Workspace: ${document.root}` }) },
       ],
@@ -2536,6 +2578,7 @@ export function Workspace({
           format={exportingTable}
           columns={capabilities?.flowColumns ?? []}
           busy={busy}
+          initialValues={workMode}
           onExport={(columns, values) => {
             const format = exportingTable;
             setExportingTable(null);
@@ -2639,6 +2682,21 @@ export function Workspace({
             </div>
           </div>
         </div>
+      )}
+
+      {showReport && (
+        <ReportDialog
+          steps={steps}
+          flow={workMode}
+          initialIds={batchIds}
+          busy={busy}
+          onSubmit={submitReport}
+          onReveal={(path) =>
+            void bridge.revealPath(path).catch((reason) => report(`Could not open the folder: ${errorMessage(reason)}`, true))
+          }
+          onReopen={() => reportUrl.current && void bridge.openUrl(reportUrl.current)}
+          onClose={() => setShowReport(false)}
+        />
       )}
 
       {showShortcuts && (

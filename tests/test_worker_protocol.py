@@ -1332,28 +1332,57 @@ def test_the_experiment_values_travel_but_never_reach_the_kernel(tmp_path):
         "experimentParameters"
     ]["tool_recipe"] == "Siva_HZO_300C"
 
-    # A table can be written from either set. The experiment row shows the
-    # tool's own time; the simulation row shows what was built.
-    def first_row(which: str) -> str:
+    # The experiment record is a flow of its own: what was done in the lab.
+    reopened = call("open_workspace", root=root)
+    record_step = {
+        **reopened["branches"][0]["steps"][0],
+        "id": "exp-1",
+        "name": "HZO in the lab",
+        "tool": "Savannah ALD",
+        "parameters": {"cycles": 100, "temperature_c": 300, "power_w": 300},
+        "experimentParameters": None,
+        "loop": {"id": "loop-1", "name": "Twice", "repeat": 2, "iteration": 0},
+    }
+    reopened["project"]["experimentSteps"] = [
+        record_step,
+        {**record_step, "id": "exp-2", "loop": {**record_step["loop"], "iteration": 1}},
+    ]
+    call("save_document", root=root, document=reopened)
+
+    # A table can be written from either flow: the experiment table is the
+    # record's own steps, the simulation table the branch's.
+    def rows(which: str) -> list[str]:
         destination = str(tmp_path / f"{which}.csv")
         call("export_flow", root=root, destination=destination, format="csv",
-             columns=["name", "other"], values=which)
-        return Path(destination).read_text(encoding="utf-8-sig").splitlines()[1]
+             columns=["name", "tool", "other", "status"], values=which)
+        return Path(destination).read_text(encoding="utf-8-sig").splitlines()[1:]
 
-    assert "power_w" in first_row("experiment")
-    assert "power_w" not in first_row("simulation")
+    experiment = rows("experiment")
+    assert len(experiment) == 2 and all("HZO in the lab" in row and "Savannah ALD" in row for row in experiment)
+    assert "power_w" in experiment[0] and not experiment[0].endswith("ready")
+    simulation = rows("simulation")
+    assert len(simulation) == len(reopened["branches"][0]["steps"])
+    assert not any("HZO in the lab" in row for row in simulation)
 
     with pytest.raises(InvalidRequest, match="simulation or experiment"):
         call("export_flow", root=root, destination=str(tmp_path / "x.csv"),
              format="csv", values="both")
 
-    # A flow file carries both sets, whatever the table was asked for.
+    # A flow file carries both flows, whatever the table was asked for, and
+    # brings the record back, loop and all.
     flow = str(tmp_path / "flow.json")
     call("export_flow", root=root, destination=flow, format="json")
-    text = Path(flow).read_text()
-    assert "experiment" in text and "Siva_HZO_300C" in text
-    applied = call("import_flow", root=root, source=flow)
-    assert applied["document"]["branches"][0]["steps"][0]["experimentParameters"]["power_w"] == 300
+    written = json.loads(Path(flow).read_text())
+    assert written["experiment"][0]["loop"] == "Twice"
+    assert "Siva_HZO_300C" in Path(flow).read_text()
+    reopened["project"]["experimentSteps"] = []
+    call("save_document", root=root, document=reopened)
+    applied = call("import_flow", root=root, source=flow)["document"]
+    assert applied["branches"][0]["steps"][0]["experimentParameters"]["power_w"] == 300
+    record = applied["project"]["experimentSteps"]
+    assert [step["name"] for step in record] == ["HZO in the lab", "HZO in the lab"]
+    assert [step["loop"]["iteration"] for step in record] == [0, 1]
+    assert record[0]["tool"] == "Savannah ALD" and record[0]["parameters"]["power_w"] == 300
 
 
 def test_a_flow_table_carries_the_columns_that_were_asked_for(tmp_path):
@@ -1628,3 +1657,47 @@ def test_the_experiment_record_is_kept_apart_from_the_flow_and_starts_from_old_e
     saved["project"]["experimentSteps"] = [{"name": "bad"}]
     with pytest.raises(InvalidRequest):
         call("save_document", root=str(workspace), document=saved)
+
+
+def test_a_problem_report_holds_the_flow_the_marked_steps_and_the_log(tmp_path):
+    """Report a problem: one zip someone else can rebuild the workspace from."""
+    import zipfile
+
+    root = str(tmp_path / "reported")
+    document = call("create_workspace", root=root, name="Reported", kernel="slab")
+    steps = document["branches"][0]["steps"]
+    document["project"]["experimentSteps"] = [{**steps[0], "id": "exp-1", "name": "In the lab", "tool": "ALD"}]
+    call("save_document", root=root, document=document)
+
+    written = call(
+        "write_report",
+        root=root,
+        destination=str(tmp_path / "report"),
+        report={"description": "the film climbs the resist", "flow": "simulation", "stepIds": [steps[1]["id"], "gone"]},
+        log="Run failed: something",
+    )
+    assert written["path"].endswith("report.zip")
+    assert [item["index"] for item in written["markedSteps"]] == [2]
+    with zipfile.ZipFile(written["path"]) as bundle:
+        assert set(bundle.namelist()) >= {"report.json", "flow.json", "log.txt"}
+        summary = json.loads(bundle.read("report.json"))
+        flow = json.loads(bundle.read("flow.json"))
+        assert bundle.read("log.txt").decode() == "Run failed: something"
+    assert summary["description"] == "the film climbs the resist"
+    assert summary["markedSteps"][0]["name"] == steps[1]["name"]
+    assert summary["markedSteps"][0]["status"] == "dirty"
+    assert summary["project"]["kernel"] == "slab" and summary["app"]["version"]
+    # the flow file rebuilds both flows
+    assert len(flow["steps"]) == len(steps)
+    assert flow["experiment"][0]["name"] == "In the lab"
+
+    # a step of the experiment record is named from the record
+    record = call(
+        "write_report", root=root, destination=str(tmp_path / "exp.zip"),
+        report={"description": "", "flow": "experiment", "stepIds": ["exp-1"]},
+    )
+    assert record["markedSteps"] == [
+        {"index": 1, "id": "exp-1", "name": "In the lab", "type": steps[0]["processType"], "loop": None}
+    ]
+    with pytest.raises(InvalidRequest):
+        call("write_report", root=root, destination=str(tmp_path / "x.zip"), report={"flow": "both"})

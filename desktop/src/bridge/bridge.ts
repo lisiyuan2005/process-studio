@@ -1,5 +1,7 @@
 import type {
   CliResult,
+  ProblemReport,
+  ReportResult,
   FlowExportFormat,
   LibraryKind,
   GdsImportResult,
@@ -154,6 +156,12 @@ export interface DesktopBridge {
   getTopView(root: string, request: ViewRequest): Promise<TopViewDocument>;
   /** Ask where to save, then write the 3D surfaces there; null when the dialog is dismissed. */
   exportMesh(root: string, request: ViewRequest, defaultName: string): Promise<string | null>;
+  /**
+   * Ask where to save, then pack a problem report there (a zip with the
+   * report, the workspace as a flow file, the layout and the log); null
+   * when the dialog is dismissed.
+   */
+  writeReport(root: string, report: ProblemReport, log: string, defaultName: string): Promise<ReportResult | null>;
   /** Ask where to save, then write a PNG there; null when the dialog is dismissed. */
   saveImage(defaultName: string, imageBase64: string): Promise<string | null>;
   importGds(root: string): Promise<GdsImportResult | null>;

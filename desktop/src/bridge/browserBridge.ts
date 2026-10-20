@@ -1,3 +1,4 @@
+import type { ProblemReport, ReportResult } from "../types";
 import type { DesktopBridge, RunOptions, ViewRequest } from "./bridge";
 import type {
   CliResult,
@@ -184,6 +185,12 @@ export class BrowserBridge implements DesktopBridge {
 
   async exportMesh(): Promise<string | null> {
     throw new Error(NO_KERNEL);
+  }
+
+  // the preview has no worker to pack anything; it answers as if it had,
+  // so the rest of the report (the issue page) can be tried
+  async writeReport(_root: string, report: ProblemReport): Promise<ReportResult | null> {
+    return { path: "process-studio-report.zip", files: ["report.json", "flow.json", "log.txt"], markedSteps: report.stepIds.map((id, index) => ({ index: index + 1, id, name: id, type: "etch", loop: null })) };
   }
 
   async saveImage(): Promise<string | null> {

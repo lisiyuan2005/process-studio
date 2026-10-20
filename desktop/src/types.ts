@@ -435,3 +435,20 @@ export interface WorkerCapabilities {
   /** How to run this same worker as the command-line tool: the program and its leading arguments. */
   cli?: { command: string[]; packaged: boolean };
 }
+
+/** What a user says about a problem: what went wrong and where. */
+export interface ProblemReport {
+  description: string;
+  /** The flow they were looking at. */
+  flow: "simulation" | "experiment";
+  /** The steps they marked, in that flow. */
+  stepIds: string[];
+}
+
+export interface ReportResult {
+  /** Where the zip was written. */
+  path: string;
+  files: string[];
+  /** The marked steps as the worker found them, numbered in their flow. */
+  markedSteps: { index: number; id: string; name: string; type: string; loop: StepLoop | null; status?: string }[];
+}

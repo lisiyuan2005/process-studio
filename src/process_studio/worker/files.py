@@ -99,26 +99,27 @@ def flow_rows(
 ) -> list[list[Any]]:
     """One row per step, holding the chosen columns in canonical order.
 
-    ``which`` picks the set of numbers written: the simulation values the
-    kernel was asked to build, or the experiment values the tool is set to.
-    A step that has not been given its own experiment values has the same
-    numbers in both, so the two tables differ only where somebody said they
-    do.
+    ``which`` picks what is written: the active branch, with the numbers
+    the kernel was asked to build, or the experiment record -- what was done
+    in the lab, each step with its tool and every setting. The record is a
+    flow of its own, so its table has its own steps, not the branch's.
     """
     _, Session = _cli()
     fields = _chosen_fields(columns)
     if which not in ("simulation", "experiment"):
         raise InvalidRequest("export_flow values must be simulation or experiment.")
+    steps = (
+        list(document["project"].get("experimentSteps") or [])
+        if which == "experiment"
+        else Session.steps(document)
+    )
     rows = []
-    for index, step in enumerate(Session.steps(document), start=1):
-        settings = step.get("experimentParameters") if which == "experiment" else None
-        parameters = dict(step.get("parameters", {}) if settings is None else settings)
+    for index, step in enumerate(steps, start=1):
+        parameters = dict(step.get("parameters", {}))
         parameters.pop("sketch_id", None)
         mode = parameters.pop("mode", None)
         target = parameters.pop("target", None)
         fraction = parameters.pop("directional_fraction", None)
-        # A mask is geometry: it is the same in both tables, and the sketch
-        # it names lives with the simulation values.
         sketch_id = dict(step.get("parameters", {})).get("sketch_id")
         source = step.get("maskSource", "none")
         if source == "quick_sketch":
@@ -149,7 +150,8 @@ def flow_rows(
             "stops": stops,
             "other": json.dumps(parameters, ensure_ascii=False) if parameters else "",
             "enabled": bool(step.get("enabled", True)),
-            "status": _status_word(document, step["id"]),
+            # the record is never run
+            "status": "" if which == "experiment" else _status_word(document, step["id"]),
             "loop": _loop_word(step),
         }
         rows.append([values[field] for field, _heading, _width in fields])
@@ -174,9 +176,9 @@ def export_flow(
     """Write the flow as a table (xlsx, csv) or a flow file (json, yaml).
 
     ``columns`` names the table columns to write (see ``FLOW_FIELDS``) and
-    ``which`` the set of values -- simulation or experiment. The flow-file
-    formats carry the whole flow, both sets included, and ignore both: a
-    flow file is what the workspace is rebuilt from.
+    ``which`` the flow -- the active branch or the experiment record. The
+    flow-file formats carry both, the record under ``experiment``, and
+    ignore both: a flow file is what the workspace is rebuilt from.
     """
     flowfile, Session = _cli()
     repository = open_repository(root)
@@ -390,3 +392,104 @@ def reveal_path(path: Any) -> dict[str, Any]:
     except OSError as error:
         raise WorkspaceError(f"Could not open {folder}: {error}") from error
     return {"path": str(folder)}
+
+
+# -- a problem report ------------------------------------------------------------
+
+#: A layout larger than this stays out of a report; the report says so.
+REPORT_LAYOUT_LIMIT = 20 * 1024 * 1024
+
+
+def write_report(
+    root: Path,
+    destination: Path,
+    report: Any,
+    log: Any = "",
+) -> dict[str, Any]:
+    """Pack what is needed to see a problem again into one zip.
+
+    ``report`` is what the user said: a description, which flow they were
+    looking at (``simulation`` or ``experiment``) and the ids of the steps
+    they marked. The zip holds that, with the marked steps named and placed;
+    the workspace as a flow file (both flows, materials, sketches, the
+    window and the resolution), from which ``flow apply`` rebuilds it; the
+    GDS layout when there is one; this build's version and platform; and the
+    worker log the window had.
+    """
+    import platform
+    import zipfile
+    from datetime import datetime, timezone
+
+    from .. import __version__
+
+    if not isinstance(report, Mapping):
+        raise InvalidRequest("write_report requires the report as an object.")
+    which = str(report.get("flow") or "simulation")
+    if which not in ("simulation", "experiment"):
+        raise InvalidRequest("a report's flow must be simulation or experiment.")
+    marked_ids = report.get("stepIds") or []
+    if not isinstance(marked_ids, list) or not all(isinstance(item, str) for item in marked_ids):
+        raise InvalidRequest("a report's stepIds must be a list of step ids.")
+
+    flowfile, Session = _cli()
+    repository = open_repository(root)
+    project = load_project(repository)
+    document = build_document(root, repository, project)
+    branch = Session.branch(document)
+    steps = list(document["project"].get("experimentSteps") or []) if which == "experiment" else Session.steps(document)
+    statuses = document.get("stepStatuses", {}).get(branch["id"], {})
+    wanted = set(marked_ids)
+    marked = [
+        {
+            "index": index,
+            "id": step["id"],
+            "name": step["name"],
+            "type": step["processType"],
+            "loop": step.get("loop"),
+            **({} if which == "experiment" else {"status": statuses.get(step["id"], "dirty")}),
+        }
+        for index, step in enumerate(steps, start=1)
+        if step["id"] in wanted
+    ]
+    grid = document["project"]["grid"]
+    summary = {
+        "description": str(report.get("description") or ""),
+        "flow": which,
+        "branch": branch["name"],
+        "markedSteps": marked,
+        "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "app": {
+            "version": __version__,
+            "platform": platform.platform(),
+            "python": platform.python_version(),
+            "frozen": bool(getattr(sys, "frozen", False)),
+        },
+        "project": {
+            "name": document["project"]["name"],
+            "kernel": document["project"]["kernel"],
+            "fidelity": document["project"].get("fidelity"),
+            "resolutionUm": document["project"].get("resolutionUm"),
+            "window": {key: grid[key] for key in ("xMin", "xMax", "yMin", "yMax", "zMin", "zMax")},
+            "branches": [item["name"] for item in document["branches"]],
+            "stepStatuses": {
+                step["name"] if step["name"] else step["id"]: statuses.get(step["id"], "dirty")
+                for step in Session.steps(document)
+            },
+        },
+    }
+    layout = Path(project.gds_path) if project.gds_path else None
+    if layout is not None and layout.is_file() and layout.stat().st_size > REPORT_LAYOUT_LIMIT:
+        summary["layoutLeftOut"] = f"{layout.name} is {layout.stat().st_size // (1024 * 1024)} MB"
+        layout = None
+
+    destination = destination if destination.suffix else destination.with_suffix(".zip")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    names = ["report.json", "flow.json", "log.txt"]
+    with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as bundle:
+        bundle.writestr("report.json", json.dumps(summary, indent=2, ensure_ascii=False))
+        bundle.writestr("flow.json", json.dumps(flowfile.flow_from_document(document), indent=2, ensure_ascii=False))
+        bundle.writestr("log.txt", str(log or ""))
+        if layout is not None and layout.is_file():
+            bundle.write(layout, f"layout/{layout.name}")
+            names.append(f"layout/{layout.name}")
+    return {"path": str(destination), "files": names, "markedSteps": marked}

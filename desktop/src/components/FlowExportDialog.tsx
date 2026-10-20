@@ -50,6 +50,8 @@ interface FlowExportDialogProps {
   columns: FlowColumn[];
   busy: boolean;
   onExport: (columns: string[], values: "simulation" | "experiment") => void;
+  /** Which flow is picked when the dialog opens: the one on screen. */
+  initialValues?: "simulation" | "experiment";
   onClose: () => void;
 }
 
@@ -61,9 +63,16 @@ interface FlowExportDialogProps {
  * wants neither. So the columns are chosen here rather than fixed, and the
  * choice is remembered for the next export.
  */
-export function FlowExportDialog({ format, columns, busy, onExport, onClose }: FlowExportDialogProps) {
+export function FlowExportDialog({
+  format,
+  columns,
+  busy,
+  initialValues = "simulation",
+  onExport,
+  onClose,
+}: FlowExportDialogProps) {
   const offered = columns.length > 0 ? columns : DEFAULT_COLUMNS.map((id) => ({ id, label: id }));
-  const [values, setValues] = useState<"simulation" | "experiment">("simulation");
+  const [values, setValues] = useState<"simulation" | "experiment">(initialValues);
   const [chosen, setChosen] = useState<string[]>(() => {
     const saved = remembered();
     const known = new Set(offered.map((column) => column.id));
@@ -115,8 +124,8 @@ export function FlowExportDialog({ format, columns, busy, onExport, onClose }: F
           </div>
           <p className="numerics-note">
             {values === "simulation"
-              ? "What the kernel was asked to build."
-              : "What the tools were set to. A step with no separate experiment values has the same numbers in both."}
+              ? "The active branch: what the kernel was asked to build."
+              : "The experiment record: what was done in the lab, each step with its tool and every setting."}
           </p>
           <span className="section-label">COLUMNS</span>
           <div className="column-grid">

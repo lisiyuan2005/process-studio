@@ -3,6 +3,8 @@ import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import type { DesktopBridge, RunOptions, ViewRequest } from "./bridge";
 import type {
+  ProblemReport,
+  ReportResult,
   CliResult,
   FlowExportFormat,
   LibraryKind,
@@ -266,6 +268,16 @@ export class TauriBridge implements DesktopBridge {
     if (!destination) return null;
     const result = await call<{ path: string }>("export_mesh", { root, ...request, destination });
     return result.path;
+  }
+
+  async writeReport(root: string, report: ProblemReport, log: string, defaultName: string): Promise<ReportResult | null> {
+    const destination = await save({
+      title: "Save the problem report",
+      defaultPath: `${safeFileName(defaultName)}.zip`,
+      filters: [{ name: "Zip archive", extensions: ["zip"] }],
+    });
+    if (!destination) return null;
+    return call<ReportResult>("write_report", { root, destination, report, log });
   }
 
   async saveImage(defaultName: string, imageBase64: string): Promise<string | null> {

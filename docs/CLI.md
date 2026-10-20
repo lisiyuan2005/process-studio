@@ -119,7 +119,11 @@ steps:
     steps:
       - {name: Oxide, type: deposit, material: SiO2, parameters: {target: 0.02, mode: conformal}}
       - {name: Nitride, type: deposit, material: SiN, parameters: {target: 0.03, mode: conformal}}
+experiment:                  # 实验记录：实验室里实际做了什么，单独的一条流程，从不运行
+  - {name: HZO, type: deposit, material: HZO, tool: Savannah ALD, parameters: {cycles: 240, rate_per_cycle: 0.0009, temperature_c: 300, tool_recipe: Siva_HZO_300C}}
 ```
+
+`experiment` 和 `steps` 写法一样（也可以有 loop），`flow dump` 和桌面端导出的流程文件都会带上它，`flow apply` 读回来替换工程里的实验记录；文件里没有 `experiment` 就不动实验记录。
 
 循环（`loop` 条目）在工作目录里展开成真实的步骤：每一次都是列表里的一步，带着 `loop: {id, name, repeat, iteration}` 标记，`steps list` 的 Loop 列显示「ON pair 2/4」。`flow dump` 把同一个循环折回一个条目（只写第 1 次）；文件里循环可以嵌套，展开时内层并入外层。
 
