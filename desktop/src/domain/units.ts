@@ -96,12 +96,20 @@ function readAll(): Record<string, string> {
   }
 }
 
-/** The unit this parameter was last typed in, or the canonical one. */
-export function preferredUnit(field: string, canonical: string | undefined): UnitOption | undefined {
+/** The unit this parameter was last typed in, or `fallback`, or the canonical one. */
+export function preferredUnit(
+  field: string,
+  canonical: string | undefined,
+  fallback?: string,
+): UnitOption | undefined {
   const options = unitsFor(canonical);
   if (options.length === 0) return undefined;
   const chosen = readAll()[`${field}:${canonical}`];
-  return options.find((unit) => unit.id === chosen) ?? options.find((unit) => unit.id === canonical);
+  return (
+    options.find((unit) => unit.id === chosen) ??
+    options.find((unit) => unit.id === fallback) ??
+    options.find((unit) => unit.id === canonical)
+  );
 }
 
 /** Remember a choice for every field that shows this parameter. */

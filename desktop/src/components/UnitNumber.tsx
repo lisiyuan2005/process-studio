@@ -8,6 +8,8 @@ interface UnitNumberProps {
   unit?: string;
   /** Which parameter this is, so a chosen unit is remembered for it. */
   field: string;
+  /** The unit shown until one is chosen, when it is not the canonical one. */
+  defaultUnit?: string;
   onCommit: (value: number) => void;
   autoFocus?: boolean;
   placeholder?: string;
@@ -27,6 +29,7 @@ export function UnitNumber({
   value,
   unit,
   field,
+  defaultUnit,
   onCommit,
   autoFocus,
   placeholder,
@@ -34,7 +37,7 @@ export function UnitNumber({
 }: UnitNumberProps) {
   const options = unitsFor(unit);
   const [chosen, setChosen] = useState(
-    () => preferredUnit(field, unit)?.id ?? unit ?? "",
+    () => preferredUnit(field, unit, defaultUnit)?.id ?? unit ?? "",
   );
   const active = unitOption(unit, chosen);
   const shown = (canonical: number | null | undefined) =>

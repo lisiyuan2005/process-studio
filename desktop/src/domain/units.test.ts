@@ -70,6 +70,10 @@ describe("units", () => {
     expect(preferredUnit("target", "µm")?.id).toBe("nm");
     // Another parameter of the same family is untouched.
     expect(preferredUnit("rate_per_cycle", "µm/cycle")?.id).toBe("µm/cycle");
+    // A field can start in another unit than the canonical one (etch rates in nm/s)
+    expect(preferredUnit("material_rate", "µm/min", "nm/s")?.id).toBe("nm/s");
+    rememberUnit("material_rate", "µm/min", "nm/min");
+    expect(preferredUnit("material_rate", "µm/min", "nm/s")?.id).toBe("nm/min");
     // A parameter with no alternatives has no unit to remember.
     rememberUnit("temperature_c", "°C", "K");
     expect(preferredUnit("temperature_c", "°C")).toBeUndefined();

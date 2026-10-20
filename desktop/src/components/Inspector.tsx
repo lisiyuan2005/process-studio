@@ -16,7 +16,7 @@ import type {
   StepStatus,
   ToolDefinition,
 } from "../types";
-import { NumberField } from "./NumberField";
+import { MaterialRates } from "./MaterialRates";
 import { ParameterEditor } from "./ParameterRows";
 import {
   PARAMETER_SPECS,
@@ -575,29 +575,12 @@ export function Inspector({
             <span className="section-label">
               {step.processType === "oxidation" ? "MATERIALS THAT OXIDISE" : "MATERIAL ETCH RESPONSES"}
             </span>
-            {Object.values(step.materialResponses).map((response) => (
-              <div className="response-row" key={response.material}>
-                <input value={response.material} readOnly />
-                <NumberField
-                  min={0}
-                  step={0.001}
-                  value={response.rateUmPerMin}
-                  onChange={(rateUmPerMin) => setResponse(response.material, { rateUmPerMin })}
-                />
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={response.stopLayer}
-                    onChange={(event) =>
-                      setResponse(response.material, { stopLayer: event.target.checked })
-                    }
-                  /> stop
-                </label>
-                <button type="button" onClick={() => removeResponse(response.material)}>
-                  <Trash2 size={12} />
-                </button>
-              </div>
-            ))}
+            <MaterialRates
+              responses={Object.values(step.materialResponses)}
+              rateLabel={step.processType === "oxidation" ? "Oxidation rate" : "Etch rate"}
+              onChange={setResponse}
+              onRemove={removeResponse}
+            />
             <select
               value=""
               onChange={(event) => event.target.value && setResponse(event.target.value, {})}
@@ -610,7 +593,7 @@ export function Inspector({
             <small className="field-hint">
               {step.processType === "oxidation"
                 ? "The exposed skin of each listed material, the consumed thickness deep (scaled by its rate), becomes the oxide in place; nothing swells."
-                : "Rates are µm/min. A stop layer is stored as zero rate."}
+                : "Each material's etch rate; pick its unit beside it. A stop layer is stored as zero rate."}
             </small>
           </div>
         )}

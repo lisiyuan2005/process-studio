@@ -677,7 +677,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .recipe-list button.active { border-color: #b8d0e8; background: #eaf3fc; }
 .recipe-list small { display: block; color: var(--muted); font-size: 10px; }
 .recipe-form { overflow-y: auto; padding: 20px 22px; }
-.response-row { display: grid; grid-template-columns: minmax(0, 1fr) 92px auto auto; align-items: center; gap: 6px; margin-bottom: 6px; }
+.response-row { display: grid; grid-template-columns: minmax(48px, 0.7fr) minmax(0, 1.6fr) 30px 26px; align-items: center; gap: 6px; margin-bottom: 6px; }
+.response-row .number-input-wrap { display: block; min-width: 0; }
+.response-row .number-input-wrap input { width: 100%; box-sizing: border-box; }
+.response-head { margin-bottom: 2px; color: var(--muted); font-size: 10.5px; }
+.response-head span:nth-child(3), .response-stop { justify-content: center; text-align: center; }
 .response-row input:not([type="checkbox"]), .field-row .response-row input:not([type="checkbox"]) { height: 28px; padding: 0 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--text); font-size: 11.5px; }
 .response-row label { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 10.5px; }
 .response-row button { width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: #a05960; cursor: pointer; }

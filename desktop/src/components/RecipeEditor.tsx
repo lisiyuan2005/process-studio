@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { groupRecipes, newId, type RecipeGroup } from "../domain/project";
 import { ToolPicker } from "./ToolPicker";
 import type { MaterialDefinition, ParameterValue, ProcessType, Recipe, ToolDefinition } from "../types";
-import { NumberField } from "./NumberField";
+import { MaterialRates } from "./MaterialRates";
 import { ParameterSets } from "./ParameterRows";
 import {
   PARAMETER_SPECS,
@@ -319,34 +319,12 @@ export function RecipeEditor({
 
               <div className="form-section">
                 <span className="section-label">MATERIAL RESPONSES</span>
-                {Object.values(selected.materialResponses).map((response) => (
-                  <div className="response-row" key={response.material}>
-                    <input type="text" value={response.material} readOnly />
-                    <NumberField
-                      step={0.001}
-                      min={0}
-                      value={response.rateUmPerMin}
-                      onChange={(rateUmPerMin) => setResponse(response.material, { rateUmPerMin })}
-                    />
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={response.stopLayer}
-                        onChange={(event) =>
-                          setResponse(response.material, { stopLayer: event.target.checked })
-                        }
-                      />
-                      stop
-                    </label>
-                    <button
-                      type="button"
-                      aria-label={`Remove ${response.material}`}
-                      onClick={() => removeResponse(response.material)}
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
-                ))}
+                <MaterialRates
+                  responses={Object.values(selected.materialResponses)}
+                  rateLabel={selected.processType === "oxidation" ? "Oxidation rate" : "Etch rate"}
+                  onChange={setResponse}
+                  onRemove={removeResponse}
+                />
                 <div className="chip-row">
                   {unusedMaterials.map((material) => (
                     <button
@@ -359,8 +337,8 @@ export function RecipeEditor({
                   ))}
                 </div>
                 <p className="numerics-note">
-                  Rates are in µm/min and only apply to etch templates. A stop layer is a zero rate,
-                  not a modelled reaction.
+                  Each material's rate, in the unit picked beside it; it only applies to etch and
+                  oxidation templates. A stop layer is a zero rate, not a modelled reaction.
                 </p>
               </div>
 

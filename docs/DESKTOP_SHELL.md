@@ -278,7 +278,7 @@ RPC：`create_branch`（root、branchId=要分的分支、stepId=分叉点、nam
 
 **Step 和 Recipe 用同一批参数行**（`components/ParameterRows.tsx`）：工艺类型认得的参数各一行，`Add a parameter…` 加上没填的，流程文件或导入带来的别的键按 JSON 显示。Recipe 编辑器原来是一整块 JSON 文本框，现在和 Inspector 一样。参数表（哪种工艺有哪些参数、各自的单位和初值）在 `domain/parameters.ts` 一处。
 
-**单位是打字的人的事，不是流程的事**（`domain/units.ts`）：存下来的值永远是内核读的那个单位——长度 µm、时间 min、速率 µm/min、每周期 µm/cycle。字段旁边的下拉只改**显示和输入**：nm/µm、nm/min · µm/min · nm/s · µm/h、nm/cycle · µm/cycle。时间（Time）是 **h / min / s 三个框**（`components/DurationField.tsx`），空的算 0，超了自动进位（90 s 离开输入框后显示成 1 min 30 s），存下来仍是分钟。换算存值只在第 15 位有效数字取整（去掉 0.05000000000000001 这类二进制尾巴），显示在第 12 位取整，所以 70 s 存进去读出来还是 70 s。选择按参数记在 `localStorage` 里，所有显示这个参数的地方一起跟着。因为存的值没变，**换单位不会让步骤过期**——顺手一提，输入框只在数字真的变了时才上报（一个编辑会让这一步及其之后全部 stale，所以"点进去又出来"不能算编辑）。
+**单位是打字的人的事，不是流程的事**（`domain/units.ts`）：存下来的值永远是内核读的那个单位——长度 µm、时间 min、速率 µm/min、每周期 µm/cycle。字段旁边的下拉只改**显示和输入**：nm/µm、nm/min · µm/min · nm/s · µm/h、nm/cycle · µm/cycle。刻蚀（和氧化）每种材料的速率一栏写着 Etch rate，旁边有单位下拉，默认 **nm/s**（选别的会记住）。时间（Time）是 **h / min / s 三个框**（`components/DurationField.tsx`），空的算 0，超了自动进位（90 s 离开输入框后显示成 1 min 30 s），存下来仍是分钟。换算存值只在第 15 位有效数字取整（去掉 0.05000000000000001 这类二进制尾巴），显示在第 12 位取整，所以 70 s 存进去读出来还是 70 s。选择按参数记在 `localStorage` 里，所有显示这个参数的地方一起跟着。因为存的值没变，**换单位不会让步骤过期**——顺手一提，输入框只在数字真的变了时才上报（一个编辑会让这一步及其之后全部 stale，所以"点进去又出来"不能算编辑）。
 
 **两套参数：Simulation 和 Experiment**。参数区上方多了一排两个标签：
 
