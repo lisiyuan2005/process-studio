@@ -1761,3 +1761,50 @@ def test_the_workspace_keeps_one_result_per_step_and_nothing_left_behind(tmp_pat
     assert sum(1 for path in snapshots.iterdir() if ".mesh-" not in path.name) == detailed_results + 1
     statuses = tidied["document"]["stepStatuses"][branch["id"]]
     assert all(status == "clean" for status in statuses.values())
+
+
+def test_a_project_travels_as_one_zip_with_or_without_its_results(tmp_path):
+    import zipfile
+
+    root = tmp_path / "travels"
+    document = call("create_workspace", root=str(root), name="Travels: 1T1C", kernel="slab")
+    branch = document["branches"][0]
+    call("run_flow", root=str(root), branchId=branch["id"])
+    for step in branch["steps"]:
+        call("get_surfaces", root=str(root), branchId=branch["id"], stepId=step["id"])
+    (root / "layouts").mkdir(exist_ok=True)
+    (root / "layouts" / "1-replaced.gds").write_bytes(b"old")
+
+    light = call("export_workspace_zip", root=str(root), destination=str(tmp_path / "light"))
+    full = call("export_workspace_zip", root=str(root), destination=str(tmp_path / "full.zip"), results=True)
+    assert light["path"].endswith("light.zip") and full["size"] > light["size"]
+    with zipfile.ZipFile(full["path"]) as bundle:
+        names = bundle.namelist()
+    assert "Travels_ 1T1C/process_studio.sqlite3" in names
+    assert any(name.startswith("Travels_ 1T1C/sketches/") for name in names)
+    assert any(name.endswith(".dfz") for name in names)
+    assert not any(".mesh-" in name or "replaced" in name for name in names)
+    with pytest.raises(InvalidRequest, match="outside"):
+        call("export_workspace_zip", root=str(root), destination=str(root / "inside.zip"))
+
+    # opened elsewhere: with its results the copy is up to date ...
+    opened = call("import_workspace_zip", source=full["path"], destination=str(tmp_path / "copy-full"))
+    statuses = opened["document"]["stepStatuses"][branch["id"]]
+    assert set(statuses.values()) == {"clean"}
+    assert opened["document"]["project"]["name"] == "Travels: 1T1C"
+    # ... without them it has the same flow and nothing run
+    bare = call("import_workspace_zip", source=light["path"], destination=str(tmp_path / "copy-light"))["document"]
+    assert [s["name"] for s in bare["branches"][0]["steps"]] == [s["name"] for s in branch["steps"]]
+    assert set(bare["stepStatuses"][branch["id"]].values()) == {"dirty"}
+    # the original is untouched
+    assert set(call("open_workspace", root=str(root))["stepStatuses"][branch["id"]].values()) == {"clean"}
+
+    with pytest.raises(InvalidRequest, match="not empty"):
+        call("import_workspace_zip", source=full["path"], destination=str(tmp_path / "copy-full"))
+    evil = tmp_path / "evil.zip"
+    with zipfile.ZipFile(evil, "w") as bundle:
+        bundle.writestr("p/process_studio.sqlite3", b"")
+        bundle.writestr("p/../../escape.txt", b"x")
+    with pytest.raises(InvalidRequest, match="unsafe"):
+        call("import_workspace_zip", source=str(evil), destination=str(tmp_path / "evil-out"))
+    assert not (tmp_path / "escape.txt").exists()

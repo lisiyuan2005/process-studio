@@ -493,3 +493,140 @@ def write_report(
             bundle.write(layout, f"layout/{layout.name}")
             names.append(f"layout/{layout.name}")
     return {"path": str(destination), "files": names, "markedSteps": marked}
+
+
+# -- a whole project as one zip ---------------------------------------------------
+
+def _zip_folder(name: str) -> str:
+    """The folder a project zip holds everything under: the project's name."""
+    cleaned = "".join(ch if ch.isalnum() or ch in " -_." else "_" for ch in name).strip(" .")
+    return cleaned or "Process Studio project"
+
+
+def export_workspace_zip(root: Path, destination: Path, results: bool = False) -> dict[str, Any]:
+    """The whole workspace as one zip, to send or to keep.
+
+    Inside, one folder: the database (a consistent copy, taken with
+    SQLite's backup, so a save going on cannot tear it), the sketches, the
+    layout the project uses, and -- with ``results`` -- every step's stored
+    result, so the copy opens with nothing to run. The 3D meshes kept
+    beside results are left out (opening a 3D view builds them again), and
+    so is anything nothing needs (old layouts, leftovers). Without results
+    the copy's database forgets them too, so its steps open as not run
+    rather than pointing at files that are not there.
+    """
+    import tempfile
+    import zipfile
+
+    from .workspace import DATABASE_NAME, SKETCH_DIRECTORY
+
+    root = root.resolve()
+    repository = open_repository(root)
+    project = load_project(repository)
+    destination = destination if destination.suffix else destination.with_suffix(".zip")
+    if destination.resolve() == root or root in destination.resolve().parents:
+        raise InvalidRequest("Save the zip outside the workspace directory.")
+    folder = _zip_folder(project.name)
+    snapshots = repository.snapshot_directory
+    with tempfile.TemporaryDirectory(prefix="process-studio-export-") as scratch:
+        copy = Path(scratch) / DATABASE_NAME
+        with sqlite3.connect(repository.database_path) as source, sqlite3.connect(copy) as target:
+            source.backup(target)
+        files: list[tuple[Path, str]] = []
+        layouts: dict[str, str] = {}
+        with sqlite3.connect(copy) as connection:
+            connection.row_factory = sqlite3.Row
+            # the layout each project uses, under layouts/ whatever its path was
+            for row in connection.execute("SELECT id, gds_path FROM projects").fetchall():
+                found = repository.on_disk(row["gds_path"], repository.layouts_directory)
+                if found and Path(found).is_file():
+                    name = Path(found).name
+                    layouts[str(Path(found).resolve())] = name
+                    connection.execute(
+                        "UPDATE projects SET gds_path=? WHERE id=?", (f"layouts/{name}", row["id"])
+                    )
+                elif row["gds_path"]:
+                    connection.execute("UPDATE projects SET gds_path=NULL WHERE id=?", (row["id"],))
+            if results:
+                rows = connection.execute("SELECT id, path FROM snapshots").fetchall()
+                for row in rows:
+                    found = repository.on_disk(row["path"], snapshots)
+                    if found and Path(found).is_file():
+                        name = Path(found).name
+                        files.append((Path(found), f"{snapshots.name}/{name}"))
+                        connection.execute(
+                            "UPDATE snapshots SET path=? WHERE id=?", (f"{snapshots.name}/{name}", row["id"])
+                        )
+                    else:
+                        connection.execute("DELETE FROM branch_snapshots WHERE snapshot_id=?", (row["id"],))
+                        connection.execute("DELETE FROM snapshots WHERE id=?", (row["id"],))
+            else:
+                connection.execute("DELETE FROM branch_snapshots")
+                connection.execute("DELETE FROM snapshots")
+                exists = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='worker_step_digests'"
+                ).fetchone()
+                if exists:
+                    connection.execute("DELETE FROM worker_step_digests")
+        with sqlite3.connect(copy) as connection:
+            connection.execute("VACUUM")
+        for source, name in layouts.items():
+            files.append((Path(source), f"layouts/{name}"))
+        sketches = root / SKETCH_DIRECTORY
+        if sketches.is_dir():
+            files += [(path, f"{SKETCH_DIRECTORY}/{path.name}") for path in sketches.iterdir() if path.is_file()]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as bundle:
+            bundle.write(copy, f"{folder}/{DATABASE_NAME}")
+            for source, name in files:
+                bundle.write(source, f"{folder}/{name}")
+    return {
+        "path": str(destination),
+        "size": destination.stat().st_size,
+        "results": results,
+        "files": len(files) + 1,
+    }
+
+
+def import_workspace_zip(source: Path, destination: Path) -> dict[str, Any]:
+    """Unpack a project zip into ``destination`` (a new or empty folder) and open it."""
+    import zipfile
+
+    from .workspace import DATABASE_NAME
+
+    if not source.is_file():
+        raise InvalidRequest("The selected project zip does not exist.")
+    destination = destination.expanduser().resolve()
+    if destination.exists() and any(destination.iterdir()):
+        raise InvalidRequest(f"{destination} is not empty; choose a new or empty folder.")
+    try:
+        bundle = zipfile.ZipFile(source)
+    except zipfile.BadZipFile as error:
+        raise InvalidRequest(f"{source.name} is not a zip file.") from error
+    with bundle:
+        names = [name for name in bundle.namelist() if not name.endswith("/")]
+        databases = [name for name in names if name.rsplit("/", 1)[-1] == DATABASE_NAME]
+        if len(databases) != 1:
+            raise InvalidRequest(f"{source.name} does not hold one Process Studio project.")
+        prefix = databases[0][: -len(DATABASE_NAME)]
+        wanted = [name for name in names if name.startswith(prefix)]
+        for name in wanted:
+            # nothing may land outside the folder it is unpacked into
+            if destination not in (destination / name[len(prefix):]).resolve().parents:
+                raise InvalidRequest(f"{source.name} holds an unsafe path: {name}")
+        created = not destination.exists()
+        destination.mkdir(parents=True, exist_ok=True)
+        try:
+            for name in wanted:
+                target = destination / name[len(prefix):]
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with bundle.open(name) as data, target.open("wb") as out:
+                    shutil.copyfileobj(data, out)
+            repository = open_repository(destination)
+            document = build_document(destination, repository, load_project(repository))
+        except Exception:
+            # a half-unpacked project is no use to anyone
+            if created:
+                shutil.rmtree(destination, ignore_errors=True)
+            raise
+    return {"root": str(destination), "document": document}

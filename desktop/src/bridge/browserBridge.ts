@@ -171,6 +171,14 @@ export class BrowserBridge implements DesktopBridge {
     throw new Error(NO_KERNEL);
   }
 
+  async exportWorkspaceZip(): Promise<{ path: string; size: number } | null> {
+    throw new Error(NO_KERNEL);
+  }
+
+  async importWorkspaceZip(): Promise<WorkspaceDocument | null> {
+    throw new Error(NO_KERNEL);
+  }
+
   async revealPath(): Promise<void> {
     throw new Error(NO_KERNEL);
   }

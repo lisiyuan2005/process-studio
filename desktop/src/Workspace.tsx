@@ -673,6 +673,20 @@ export function Workspace({
     }
   };
 
+  const handleOpenZip = async () => {
+    setBusy(true);
+    setHomeError(undefined);
+    try {
+      const opened = await bridge.importWorkspaceZip();
+      if (opened && mayOpen(opened.root)) openDocument(opened);
+    } catch (reason) {
+      setHomeError(errorMessage(reason));
+      if (document) report(`Could not open the project zip: ${errorMessage(reason)}`, true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleOpenRecent = async (rootPath: string) => {
     if (!mayOpen(rootPath)) return;
     setBusy(true);
@@ -1106,6 +1120,23 @@ export function Workspace({
     withWorkspace(`Export flow (${format})`, (root) =>
       bridge.exportFlow(root, format, document!.project.name, columns, values),
     );
+  // The project as one zip: saved first, since the zip is taken from what is stored.
+  const exportProjectZip = async (results: boolean) => {
+    if (!document) return;
+    try {
+      if (saveState !== "saved") await saveNow();
+      const written = await bridge.exportWorkspaceZip(document.root, document.project.name, results);
+      if (written) {
+        report(
+          `Exported the project${results ? " with its results" : ""} to ${written.path} ` +
+            `(${Math.max(0.1, Math.round(written.size / 100_000) / 10)} MB).`,
+          true,
+        );
+      }
+    } catch (reason) {
+      report(`Could not export the project: ${errorMessage(reason)}`, true);
+    }
+  };
   const importFlowFile = () => withWorkspace("Apply flow file", (root) => bridge.importFlow(root));
   const exportLibraryAs = (kind: LibraryKind) =>
     withWorkspace(`Export ${kind}`, (root) => bridge.exportLibrary(root, kind, document!.project.name));
@@ -1776,6 +1807,7 @@ export function Workspace({
         recent={recent}
         onCreate={handleCreate}
         onOpen={handleOpen}
+        onOpenZip={() => void handleOpenZip()}
         onOpenRecent={(rootPath) => void handleOpenRecent(rootPath)}
         onForgetRecent={(rootPath) => setRecent(forgetWorkspace(rootPath))}
         version={capabilities?.workerVersion}
@@ -1801,6 +1833,7 @@ export function Workspace({
         { label: "New tab", action: () => onOpenInNewTab(""), shortcut: "Ctrl+T" },
         { label: "Close tab", action: onClose, shortcut: "Ctrl+W" },
         { label: "Open project…", action: () => void handleOpen(), shortcut: "Ctrl+O", separated: true },
+        { label: "Open a project zip…", action: () => void handleOpenZip(), disabled: busy },
         ...recent
           .filter((item) => item.root !== document.root)
           .slice(0, 5)
@@ -1824,6 +1857,8 @@ export function Workspace({
         { label: "Step templates…", action: () => void exportLibraryAs("recipes"), disabled: busy },
         { label: "Tools…", action: () => void exportLibraryAs("tools"), disabled: busy },
         { label: "3D surfaces…", action: () => void exportMesh(), disabled: busy || inExperiment },
+        { label: "Project as zip…", action: () => void exportProjectZip(false), separated: true, disabled: busy },
+        { label: "Project as zip, with results…", action: () => void exportProjectZip(true), disabled: busy },
         { label: "Show workspace folder", action: revealFolder, separated: true },
         { label: "Workspace storage…", action: () => setShowStorage(true) },
         { label: "Close project", action: closeProject },

@@ -40,6 +40,8 @@ from .files import (
     export_library,
     import_flow,
     import_library,
+    export_workspace_zip,
+    import_workspace_zip,
     reveal_path,
     write_report,
 )
@@ -842,6 +844,12 @@ def dispatch(
         return import_library(
             _root(parameters), str(parameters.get("kind") or ""), _source(parameters), parameters.get("projectId")
         )
+    if method == "export_workspace_zip":
+        return export_workspace_zip(
+            _root(parameters), _destination(parameters), results=parameters.get("results") is True
+        )
+    if method == "import_workspace_zip":
+        return import_workspace_zip(_source(parameters), _destination(parameters))
     if method == "copy_workspace":
         return copy_workspace(_root(parameters), _destination(parameters))
     if method == "reveal_path":

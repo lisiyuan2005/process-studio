@@ -973,3 +973,4 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .storage-control label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
 .storage-freed { margin: 6px 0 0; color: var(--accent); font-size: 12.5px; }
 .invalid-note { margin: 6px 0 0; color: #c0565e; font-size: 12px; }
+.open-button + .open-button { margin-top: 6px; }

@@ -52,6 +52,8 @@ const WORKER_METHODS: &[&str] = &[
     "write_report",
     "workspace_storage",
     "tidy_workspace",
+    "export_workspace_zip",
+    "import_workspace_zip",
 ];
 
 /// Methods that may name a directory that does not exist yet.

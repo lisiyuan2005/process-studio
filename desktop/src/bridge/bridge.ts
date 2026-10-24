@@ -146,6 +146,14 @@ export interface DesktopBridge {
   importLibrary(root: string, kind: LibraryKind): Promise<WorkspaceDocument | null>;
   /** Copy the workspace to a directory the user picks and open the copy. Null when they cancel. */
   saveWorkspaceAs(root: string, projectName: string): Promise<WorkspaceDocument | null>;
+  /**
+   * The whole project as one zip the user saves: the flow, the libraries,
+   * the sketches, the layout, and with `results` every step's stored result.
+   * Null when the dialog is dismissed.
+   */
+  exportWorkspaceZip(root: string, projectName: string, results: boolean): Promise<{ path: string; size: number } | null>;
+  /** Pick a project zip, then a new folder to unpack it into, and open it there. Null when cancelled. */
+  importWorkspaceZip(): Promise<WorkspaceDocument | null>;
   /** Show a workspace directory in the system file manager. */
   revealPath(path: string): Promise<void>;
   /** Open one of the repository's own pages (a release, a download) in the browser. */

@@ -1,4 +1,4 @@
-import { ArrowRight, Boxes, Clock3, Download, FolderOpen, Layers3, Lock, Plus, RefreshCw, X } from "lucide-react";
+import { ArrowRight, Boxes, Clock3, Download, FileArchive, FolderOpen, Layers3, Lock, Plus, RefreshCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { RecentWorkspace } from "../domain/recent";
 import type { KernelDescription, ReleaseInfo, UpdateInfo } from "../types";
@@ -150,6 +150,8 @@ interface ProjectHomeProps {
   recent: RecentWorkspace[];
   onCreate: (name: string, kernel: string) => void;
   onOpen: () => void;
+  /** Unpack a project zip into a new folder and open it. */
+  onOpenZip: () => void;
   onOpenRecent: (root: string) => void;
   onForgetRecent: (root: string) => void;
   /** The worker's version, which is the application's. */
@@ -169,6 +171,7 @@ export function ProjectHome({
   recent,
   onCreate,
   onOpen,
+  onOpenZip,
   onOpenRecent,
   onForgetRecent,
   version,
@@ -295,6 +298,10 @@ export function ProjectHome({
           <button type="button" className="open-button" disabled={busy} onClick={onOpen}>
             <FolderOpen size={16} />
             Open existing workspace
+          </button>
+          <button type="button" className="open-button" disabled={busy} onClick={onOpenZip}>
+            <FileArchive size={16} />
+            Open a project zip
           </button>
           {recent.length > 0 && (
             <div className="recent-list">

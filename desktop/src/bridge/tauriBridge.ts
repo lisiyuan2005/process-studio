@@ -233,6 +233,38 @@ export class TauriBridge implements DesktopBridge {
     return result.document;
   }
 
+  async exportWorkspaceZip(
+    root: string,
+    projectName: string,
+    results: boolean,
+  ): Promise<{ path: string; size: number } | null> {
+    const destination = await save({
+      title: results ? "Export the project with its results" : "Export the project",
+      defaultPath: `${safeFileName(projectName)}${results ? "-with-results" : ""}.zip`,
+      filters: [{ name: "Zip archive", extensions: ["zip"] }],
+    });
+    if (!destination) return null;
+    return call<{ path: string; size: number }>("export_workspace_zip", { root, destination, results });
+  }
+
+  async importWorkspaceZip(): Promise<WorkspaceDocument | null> {
+    const source = await open({
+      directory: false,
+      multiple: false,
+      title: "Open a project zip",
+      filters: [{ name: "Zip archive", extensions: ["zip"] }],
+    });
+    if (!source || Array.isArray(source)) return null;
+    const name = source.split(/[\\/]/).pop()?.replace(/\.zip$/i, "") ?? "Project";
+    const destination = await save({
+      title: "Where to unpack the project (a new folder)",
+      defaultPath: safeFileName(name),
+    });
+    if (!destination) return null;
+    const result = await call<{ document: WorkspaceDocument }>("import_workspace_zip", { source, destination });
+    return result.document;
+  }
+
   async revealPath(path: string): Promise<void> {
     await call<{ path: string }>("reveal_path", { path });
   }
