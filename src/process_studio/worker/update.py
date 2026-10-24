@@ -244,6 +244,7 @@ def open_url(url: Any) -> dict[str, Any]:
 # starts it again. In a source checkout there is nothing to install over.
 
 import os
+import time
 import shutil
 import subprocess
 import tempfile
@@ -525,3 +526,113 @@ def install_update(url: Any, report: Callable[[str], None] | None = None) -> dic
         quiet["start_new_session"] = True
     subprocess.Popen(command, env=updater_environment(), **quiet)
     return {"staged": str(staged), "log": str(log), "restart": True}
+
+
+# -- tidying what earlier runs and updates left behind ---------------------------
+
+#: The file a packaged worker leaves in the directory it unpacked itself
+#: into, naming its process, so a later worker can tell a live one from
+#: one left behind.
+UNPACKED_MARKER = ".process-studio-worker.pid"
+
+#: An unpacked directory from before the marker, or a staging directory of
+#: a failed update, is removed only once it is this old.
+STALE_AFTER_SECONDS = 2 * 24 * 3600
+
+#: The updater appends to its log; past this it starts again.
+UPDATE_LOG_LIMIT = 1 << 20
+
+
+def _alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if sys.platform.startswith("win"):
+        try:
+            found = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True, timeout=10
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            return True  # cannot tell: treat it as running
+        return str(pid) in found
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True
+    return True
+
+
+def _ours(unpacked: Path) -> bool:
+    """Whether an unpacked one-file build is this application's worker:
+    it carries the packages only this worker bundles together."""
+    return all((unpacked / name).is_dir() for name in ("gdstk", "trimesh", "certifi"))
+
+
+def sweep_unpacked(own: Path | None, now: float | None = None) -> list[Path]:
+    """Remove the directories earlier workers unpacked themselves into and
+    did not get to remove: a worker ended by force (the shell stops one
+    that is still building a mesh when the window closes) leaves its whole
+    unpacked build, a couple of hundred megabytes, in the temporary folder.
+
+    Only this application's are touched, never the running worker's own,
+    never one whose worker is still alive, and one from before workers
+    marked theirs only once it is :data:`STALE_AFTER_SECONDS` old.
+    """
+    if own is None:
+        return []
+    now = time.time() if now is None else now
+    removed = []
+    for path in own.parent.glob("_MEI*"):
+        if not path.is_dir() or path.resolve() == own.resolve() or not _ours(path):
+            continue
+        marker = path / UNPACKED_MARKER
+        try:
+            if marker.is_file():
+                if _alive(int(marker.read_text().strip() or 0)):
+                    continue
+            elif now - path.stat().st_mtime < STALE_AFTER_SECONDS:
+                continue
+        except (OSError, ValueError):
+            continue
+        shutil.rmtree(path, ignore_errors=True)
+        if not path.exists():
+            removed.append(path)
+    return removed
+
+
+def housekeeping() -> None:
+    """What a worker tidies as it starts, never failing for it.
+
+    Marks its own unpacked directory, removes those of workers that are
+    gone, the staging directory of an update that failed (once old enough
+    that nobody is copying from it by hand), the application bundle a macOS
+    update moved aside and did not get to delete, and an updater log that
+    has grown past :data:`UPDATE_LOG_LIMIT`.
+    """
+    own = getattr(sys, "_MEIPASS", None)
+    own_path = Path(own) if own else None
+    try:
+        if own_path is not None:
+            (own_path / UNPACKED_MARKER).write_text(str(os.getpid()))
+            sweep_unpacked(own_path)
+    except OSError:
+        pass
+    app = application_root()
+    if app is None:
+        return
+    try:
+        now = time.time()
+        for path in app.parent.glob(f"{STAGING_PREFIX}*"):
+            if path.is_dir() and now - path.stat().st_mtime > STALE_AFTER_SECONDS:
+                shutil.rmtree(path, ignore_errors=True)
+        previous = Path(f"{app}.previous")
+        if sys.platform == "darwin" and previous.is_dir() and app.is_dir():
+            shutil.rmtree(previous, ignore_errors=True)
+        log = app.parent / "process-studio-update.log"
+        if log.is_file() and log.stat().st_size > UPDATE_LOG_LIMIT:
+            log.write_text("", encoding="utf-8")
+    except OSError:
+        pass

@@ -1728,10 +1728,14 @@ def test_the_workspace_keeps_one_result_per_step_and_nothing_left_behind(tmp_pat
     etch["parameters"]["target"] *= 1.1
     call("save_document", root=str(root), document=edited)
     second = run_and_look()
-    # as many files as before: the replaced results took their meshes along
-    assert len(second) == len(first)
-    owners = {name.split(".", 1)[0] for name in second if ".mesh-" not in name}
+    # one result per step still, and every mesh belongs to one of them: the
+    # replaced results took their meshes along. (How many meshes there are
+    # depends on how far the background builds have got.)
+    results = [name for name in second if ".mesh-" not in name]
+    assert len(results) == len([name for name in first if ".mesh-" not in name])
+    owners = {name.split(".", 1)[0] for name in results}
     assert all(name.split(".", 1)[0] in owners for name in second)
+    assert len(second) - len(results) <= 2 * len(results)
 
     # leftovers: an old file nothing owns, an old layout an import replaced
     stray = snapshots / "0123456789abcdef.dfz.mesh-ears-free.npz"
@@ -1751,7 +1755,7 @@ def test_the_workspace_keeps_one_result_per_step_and_nothing_left_behind(tmp_pat
     assert young.exists()  # a run might be writing it
 
     # on request: the meshes (built again when looked at) and the other film model
-    detailed_results = sum(1 for name in second if ".mesh-" not in name)
+    detailed_results = len(results)
     tidied = call("tidy_workspace", root=str(root), meshes=True)
     assert tidied["after"]["meshes"] == 0 and tidied["freed"] > 0
     assert sum(1 for path in snapshots.iterdir() if ".mesh-" not in path.name) == detailed_results + 1

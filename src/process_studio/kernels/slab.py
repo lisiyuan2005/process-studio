@@ -368,12 +368,18 @@ def _load_or_build_meshes(state: SlabState, engine: str, buried: bool) -> Displa
                 arrays[f"{index}.faces"] = faces
                 arrays[f"{index}.interface"] = interface
                 arrays[f"{index}.neighbour"] = neighbour
-            try:
-                # compressed: a mesh is mostly coordinates and indices, and
-                # shrinks to about a third; reading it back costs little
-                np.savez_compressed(sidecar, **arrays)
-            except OSError:
-                pass  # the view still works; it is only not remembered
+            # A mesh built in the background can finish after its result
+            # was replaced or deleted; one written then would belong to no
+            # result, so it is only kept while the result is there.
+            if state.path is not None and state.path.is_file():
+                try:
+                    # compressed: a mesh is mostly coordinates and indices,
+                    # and shrinks to about a third; reading it back costs little
+                    np.savez_compressed(sidecar, **arrays)
+                except OSError:
+                    pass  # the view still works; it is only not remembered
+                if not state.path.is_file():
+                    sidecar.unlink(missing_ok=True)
     return meshes
 
 

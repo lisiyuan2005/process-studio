@@ -228,4 +228,8 @@ class Server:
 
 
 def serve(input_stream: IO[str] = sys.stdin, output_stream: IO[str] = sys.stdout) -> int:
+    from .update import housekeeping
+
+    # leftovers of earlier runs and updates, off the request path
+    threading.Thread(target=housekeeping, name="housekeeping", daemon=True).start()
     return Server(input_stream, output_stream).run()

@@ -275,3 +275,60 @@ def test_the_updater_does_not_hand_a_frozen_build_s_state_to_the_next_applicatio
     }
     clean = update.updater_environment(environ)
     assert clean == {"HOME": "/Users/me", "LD_LIBRARY_PATH": "/usr/local/lib"}
+
+
+def test_a_worker_removes_what_dead_workers_unpacked_and_leaves_the_rest(tmp_path):
+    import os
+    import time as clock
+
+    from process_studio.worker import update
+
+    def unpacked(name: str, *, ours: bool = True, pid: int | None = None, age: float = 0) -> Path:
+        path = tmp_path / name
+        for package in (("gdstk", "trimesh", "certifi") if ours else ("numpy",)):
+            (path / package).mkdir(parents=True)
+        if pid is not None:
+            (path / update.UNPACKED_MARKER).write_text(str(pid))
+        stamp = clock.time() - age
+        os.utime(path, (stamp, stamp))
+        return path
+
+    own = unpacked("_MEIown", pid=os.getpid())
+    dead = unpacked("_MEIdead", pid=999_999_999)
+    alive = unpacked("_MEIalive", pid=os.getpid())
+    legacy_old = unpacked("_MEIlegacyold", age=update.STALE_AFTER_SECONDS + 60)
+    legacy_new = unpacked("_MEIlegacynew", age=60)
+    other_app = unpacked("_MEIother", ours=False, age=update.STALE_AFTER_SECONDS + 60)
+
+    removed = update.sweep_unpacked(own)
+    assert sorted(path.name for path in removed) == ["_MEIdead", "_MEIlegacyold"]
+    assert not dead.exists() and not legacy_old.exists()
+    assert own.exists() and alive.exists() and legacy_new.exists() and other_app.exists()
+    assert update.sweep_unpacked(None) == []
+
+
+def test_housekeeping_clears_a_failed_update_and_a_bundle_moved_aside(tmp_path, monkeypatch):
+    import os
+    import time as clock
+
+    from process_studio.worker import update
+
+    app = tmp_path / "Process Studio.app"
+    app.mkdir()
+    monkeypatch.setenv("PROCESS_STUDIO_APP_ROOT", str(app))
+    monkeypatch.setattr(update.sys, "platform", "darwin")
+    old_staging = tmp_path / f"{update.STAGING_PREFIX}old"
+    new_staging = tmp_path / f"{update.STAGING_PREFIX}new"
+    for path in (old_staging, new_staging):
+        path.mkdir()
+    stamp = clock.time() - update.STALE_AFTER_SECONDS - 60
+    os.utime(old_staging, (stamp, stamp))
+    previous = tmp_path / "Process Studio.app.previous"
+    previous.mkdir()
+    log = tmp_path / "process-studio-update.log"
+    log.write_text("x" * (update.UPDATE_LOG_LIMIT + 1))
+
+    update.housekeeping()
+    assert not old_staging.exists() and new_staging.exists()
+    assert not previous.exists() and app.exists()
+    assert log.read_text() == ""
