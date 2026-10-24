@@ -132,7 +132,7 @@ def test_the_kernel_keeps_a_mesh_per_triangulator(tmp_path):
     kernel = get_kernel("slab")
     project = ProjectDefinition("mesh", grid_dict(default_grid()), kernel="slab", resolution_um=0.01)
     state = SlabState(device=_stack(), z_offset=0.0)
-    state.path = tmp_path / "step.dfz"
+    state.save(tmp_path / "step.dfz")  # a mesh is only kept beside a stored result
 
     ears = kernel.surfaces(state, project=project)
     assert ears["triangulation"] == "ears"  # the default
@@ -160,7 +160,7 @@ def test_a_sidecar_from_before_the_engine_was_recorded_is_rebuilt(tmp_path):
     from process_studio.kernels.slab import SlabState, display_meshes
 
     state = SlabState(device=_stack(), z_offset=0.0)
-    state.path = tmp_path / "step.dfz"
+    state.save(tmp_path / "step.dfz")  # a mesh is only kept beside a stored result
     sidecar = tmp_path / "step.dfz.mesh-ears-free.npz"
     np.savez(sidecar, materials=np.array(["Nonsense"], dtype=str))
     meshes = display_meshes(state)
@@ -249,7 +249,7 @@ def test_the_kernel_keeps_the_free_and_the_full_mesh_apart(tmp_path):
     kernel = get_kernel("slab")
     project = ProjectDefinition("mesh", grid_dict(default_grid()), kernel="slab", resolution_um=0.01)
     state = SlabState(device=_stack_with_a_buried_layer(), z_offset=0.0)
-    state.path = tmp_path / "step.dfz"
+    state.save(tmp_path / "step.dfz")  # a mesh is only kept beside a stored result
 
     opened = kernel.surfaces(state, project=project)
     behind = kernel.surfaces(state, project=project, buried=True)
