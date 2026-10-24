@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import sqlite3
+from contextlib import closing
 import subprocess
 import sys
 from pathlib import Path
@@ -530,11 +531,14 @@ def export_workspace_zip(root: Path, destination: Path, results: bool = False) -
     snapshots = repository.snapshot_directory
     with tempfile.TemporaryDirectory(prefix="process-studio-export-") as scratch:
         copy = Path(scratch) / DATABASE_NAME
-        with sqlite3.connect(repository.database_path) as source, sqlite3.connect(copy) as target:
+        # Every connection is closed by hand: `with` on one only commits,
+        # and on Windows a database still open cannot be deleted, so the
+        # scratch folder could not be cleaned up after the zip was written.
+        with closing(sqlite3.connect(repository.database_path)) as source, closing(sqlite3.connect(copy)) as target:
             source.backup(target)
         files: list[tuple[Path, str]] = []
         layouts: dict[str, str] = {}
-        with sqlite3.connect(copy) as connection:
+        with closing(sqlite3.connect(copy)) as connection, connection:
             connection.row_factory = sqlite3.Row
             # the layout each project uses, under layouts/ whatever its path was
             for row in connection.execute("SELECT id, gds_path FROM projects").fetchall():
@@ -568,7 +572,7 @@ def export_workspace_zip(root: Path, destination: Path, results: bool = False) -
                 ).fetchone()
                 if exists:
                     connection.execute("DELETE FROM worker_step_digests")
-        with sqlite3.connect(copy) as connection:
+        with closing(sqlite3.connect(copy)) as connection:
             connection.execute("VACUUM")
         for source, name in layouts.items():
             files.append((Path(source), f"layouts/{name}"))
