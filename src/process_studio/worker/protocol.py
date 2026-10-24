@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import sqlite3
 import math
 import shutil
 import sys
@@ -219,7 +220,33 @@ def _open(parameters: Mapping[str, Any]) -> dict[str, Any]:
     # was shown -- is brought up to date here and nowhere else.
     repository.refresh_library_copy()
     project = load_project(repository, parameters.get("projectId"))
+    # What nothing needs any more goes as the workspace opens: results of
+    # deleted steps, 3D meshes a replaced result left behind, layouts an
+    # import replaced. Opening is the one moment no undo can still point at
+    # an old layout. A failure here must never keep the workspace shut.
+    try:
+        repository.tidy(project)
+    except (OSError, sqlite3.Error):
+        pass
     return build_document(root, repository, project)
+
+
+def _storage(parameters: Mapping[str, Any]) -> dict[str, Any]:
+    repository = open_repository(_root(parameters))
+    return repository.storage(load_project(repository, parameters.get("projectId")))
+
+
+def _tidy(parameters: Mapping[str, Any]) -> dict[str, Any]:
+    root = _root(parameters)
+    repository = open_repository(root)
+    project = load_project(repository, parameters.get("projectId"))
+    result = repository.tidy(
+        project,
+        meshes=parameters.get("meshes") is True,
+        other_fidelity=parameters.get("otherFidelity") is True,
+        compact=True,
+    )
+    return {**result, "document": build_document(root, repository, load_project(repository, project.id))}
 
 
 def _branch_name(parameters: Mapping[str, Any], repository, project, *, keeping: str = "") -> str:
@@ -744,6 +771,10 @@ def dispatch(
         return _open(parameters)
     if method == "save_document":
         return _persist_document(parameters)
+    if method == "workspace_storage":
+        return _storage(parameters)
+    if method == "tidy_workspace":
+        return _tidy(parameters)
     if method == "create_branch":
         return _create_branch(parameters)
     if method == "rename_branch":

@@ -30,6 +30,7 @@ import { RecipeEditor } from "./components/RecipeEditor";
 import { SketchEditor } from "./components/SketchEditor";
 import { useTextPrompt } from "./components/TextPrompt";
 import { ReportDialog } from "./components/ReportDialog";
+import { StorageDialog } from "./components/StorageDialog";
 import { baseName, issueUrl } from "./domain/report";
 import {
   clipFor,
@@ -231,6 +232,7 @@ export function Workspace({
   const [showShortcuts, setShowShortcuts] = useState(false);
   // Help > Report a problem: the dialog, and the issue page it last opened
   const [showReport, setShowReport] = useState(false);
+  const [showStorage, setShowStorage] = useState(false);
   const reportUrl = useRef("");
   // names asked for in the window itself (the macOS webview has no prompt)
   const [promptDialog, askText] = useTextPrompt();
@@ -1213,6 +1215,9 @@ export function Workspace({
     report(`Imported ${result.steps.length} step(s) from the branch ${source.name} into the experiment record.`);
   };
 
+  // the storage dialog asks once each time it opens
+  const loadStorage = useCallback(() => bridge.workspaceStorage(document?.root ?? ""), [document?.root]);
+
   // -- reporting a problem ------------------------------------------------------------
   // The report is packed by the worker from what is stored, so pending edits
   // are saved first; then the issue page opens filled in, and the user
@@ -1820,6 +1825,7 @@ export function Workspace({
         { label: "Tools…", action: () => void exportLibraryAs("tools"), disabled: busy },
         { label: "3D surfaces…", action: () => void exportMesh(), disabled: busy || inExperiment },
         { label: "Show workspace folder", action: revealFolder, separated: true },
+        { label: "Workspace storage…", action: () => setShowStorage(true) },
         { label: "Close project", action: closeProject },
       ],
     },
@@ -2682,6 +2688,19 @@ export function Workspace({
             </div>
           </div>
         </div>
+      )}
+
+      {showStorage && (
+        <StorageDialog
+          busy={busy}
+          load={loadStorage}
+          tidy={async (options) => {
+            const result = await bridge.tidyWorkspace(document.root, options);
+            report(`Workspace cleaned up: freed ${Math.round(result.freed / 100_000) / 10} MB.`);
+            return result;
+          }}
+          onClose={() => setShowStorage(false)}
+        />
       )}
 
       {showReport && (

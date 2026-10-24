@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,7 +12,10 @@ from typing import Any
 from uuid import uuid4
 
 from .models import (
+    FIDELITIES,
+    RETIRED_FIDELITIES,
     known_fidelity,
+    result_key,
     result_keys,
     FlowBranch,
     MaterialDefinition,
@@ -23,6 +27,20 @@ from .models import (
     ToolDefinition,
 )
 from .shared_library import SharedLibrary, recipe_from_payload
+
+
+#: Process-log lines a workspace keeps; older ones are dropped when it is tidied.
+KEPT_LOG_LINES = 5000
+
+#: A file in the results folder that no stored result owns is only removed
+#: once it is this old: a run may be writing it right now.
+ORPHAN_AGE_SECONDS = 600
+
+
+def snapshot_files(path: Path) -> list[Path]:
+    """A stored result's file and every file kept beside it under its name
+    (the 3D meshes built from it, one per triangulator and face set)."""
+    return [path, *path.parent.glob(f"{path.name}.*")]
 
 
 class ProjectRepository:
@@ -677,7 +695,209 @@ class ProjectRepository:
         if row is not None:
             found = self.on_disk(row["path"], self.snapshot_directory)
             if found:
-                Path(found).unlink(missing_ok=True)
+                for path in snapshot_files(Path(found)):
+                    path.unlink(missing_ok=True)
+
+    # -- what the workspace holds on disk, and tidying it -------------------------
+
+    def storage(self, project: ProjectDefinition) -> dict[str, Any]:
+        """How much each kind of thing in the workspace takes, in bytes."""
+        return self._survey(project)["sizes"]
+
+    def tidy(
+        self,
+        project: ProjectDefinition,
+        *,
+        meshes: bool = False,
+        other_fidelity: bool = False,
+        layouts: bool = True,
+        compact: bool = False,
+    ) -> dict[str, Any]:
+        """Remove what nothing needs, and on request what can be rebuilt.
+
+        Always: results of steps that are no longer on their branch, of film
+        models there no longer are, files no stored result owns (a 3D mesh
+        left behind by a result that was replaced, a file from a run that
+        was cut short), and process-log lines past the newest
+        :data:`KEPT_LOG_LINES`. With ``layouts``, GDS files in the
+        workspace's layouts folder no project uses (every import keeps a
+        copy). With ``meshes``, every 3D mesh kept beside a result; they are
+        built again when a step's 3D view is opened. With
+        ``other_fidelity``, the results of the film model the project is not
+        set to. ``compact`` gives the database's free pages back to the disk.
+        """
+        before = self._survey(project)
+        with self.connect() as connection:
+            wanted_steps = {
+                row["branch_id"]: set()
+                for row in connection.execute("SELECT id AS branch_id FROM branches")
+            }
+            for row in connection.execute("SELECT branch_id, step_id FROM branch_steps"):
+                wanted_steps.setdefault(row["branch_id"], set()).add(row["step_id"])
+            current = known_fidelity(project.fidelity)
+            kept_suffixes = {result_key("", fidelity) for fidelity in FIDELITIES}
+            if other_fidelity:
+                kept_suffixes = {result_key("", current)}
+            dropped: list[tuple[str, str]] = []
+            for row in connection.execute("SELECT branch_id, step_id FROM branch_snapshots"):
+                step, _, suffix = row["step_id"].partition("~")
+                key_suffix = f"~{suffix}" if suffix else ""
+                if step not in wanted_steps.get(row["branch_id"], set()) or key_suffix not in kept_suffixes:
+                    dropped.append((row["branch_id"], row["step_id"]))
+            for branch_id, key in dropped:
+                connection.execute(
+                    "DELETE FROM branch_snapshots WHERE branch_id=? AND step_id=?", (branch_id, key)
+                )
+            self._forget_digests(connection, dropped)
+            unreferenced = [
+                row["id"]
+                for row in connection.execute(
+                    """SELECT id FROM snapshots WHERE id NOT IN
+                    (SELECT snapshot_id FROM branch_snapshots)"""
+                )
+            ]
+            connection.execute(
+                """DELETE FROM process_logs WHERE id NOT IN
+                (SELECT id FROM process_logs ORDER BY id DESC LIMIT ?)""",
+                (KEPT_LOG_LINES,),
+            )
+        for snapshot_id in unreferenced:
+            self._delete_snapshot_if_unreferenced(snapshot_id)
+
+        # files no stored result owns; a young one may belong to a run
+        # that is writing it right now
+        owned = self._owned_snapshot_names()
+        cutoff = time.time() - ORPHAN_AGE_SECONDS
+        for path in self.snapshot_directory.iterdir():
+            if not path.is_file():
+                continue
+            base = path.name.split(".", 1)[0]
+            if base not in owned:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink(missing_ok=True)
+            elif meshes and ".mesh-" in path.name:
+                path.unlink(missing_ok=True)
+
+        if layouts:
+            for path in self._unused_layouts():
+                path.unlink(missing_ok=True)
+        if compact:
+            with self.connect() as connection:
+                connection.execute("VACUUM")
+        after = self._survey(project)
+        return {
+            "before": before["sizes"],
+            "after": after["sizes"],
+            "freed": max(0, before["sizes"]["total"] - after["sizes"]["total"]),
+            "droppedResults": len(dropped),
+        }
+
+    def _forget_digests(self, connection: sqlite3.Connection, keys: list[tuple[str, str]]) -> None:
+        """The worker's record of what produced a result goes with the result."""
+        exists = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='worker_step_digests'"
+        ).fetchone()
+        if exists:
+            connection.executemany(
+                "DELETE FROM worker_step_digests WHERE branch_id=? AND step_id=?", keys
+            )
+
+    def _owned_snapshot_names(self) -> set[str]:
+        with self.connect() as connection:
+            rows = connection.execute("SELECT id, path FROM snapshots").fetchall()
+        names = set()
+        for row in rows:
+            names.add(row["id"])
+            names.add(Path(str(row["path"]).replace("\\", "/")).name.split(".", 1)[0])
+        return names
+
+    def _layout_paths_in_use(self) -> set[Path]:
+        with self.connect() as connection:
+            rows = connection.execute("SELECT gds_path FROM projects").fetchall()
+        used = set()
+        for row in rows:
+            found = self.on_disk(row["gds_path"], self.layouts_directory)
+            if found:
+                used.add(Path(found).resolve())
+        return used
+
+    def _unused_layouts(self) -> list[Path]:
+        if not self.layouts_directory.is_dir():
+            return []
+        used = self._layout_paths_in_use()
+        return [
+            path
+            for path in self.layouts_directory.iterdir()
+            if path.is_file() and path.resolve() not in used
+        ]
+
+    def _survey(self, project: ProjectDefinition) -> dict[str, Any]:
+        """Bytes per kind: results of this film model and of the other one,
+        3D meshes, files nothing owns, layouts in use and not, the database."""
+        current = known_fidelity(project.fidelity)
+        with self.connect() as connection:
+            links = connection.execute(
+                """SELECT branch_snapshots.step_id AS key, snapshots.id AS id, snapshots.path AS path
+                FROM branch_snapshots JOIN snapshots ON snapshots.id = branch_snapshots.snapshot_id"""
+            ).fetchall()
+        fidelity_of: dict[str, str] = {}
+        for row in links:
+            _, _, suffix = row["key"].partition("~")
+            fidelity = suffix or "detailed"
+            # a result shared by two keys counts once, as the current model's if either is
+            if fidelity_of.get(row["id"]) != current:
+                fidelity_of[row["id"]] = fidelity
+        owned = self._owned_snapshot_names()
+        sizes = {
+            "results": 0,
+            "otherFidelity": 0,
+            "retired": 0,
+            "meshes": 0,
+            "leftovers": 0,
+            "layouts": 0,
+            "unusedLayouts": 0,
+            "database": 0,
+        }
+        counts = {"results": 0, "otherFidelity": 0, "meshes": 0, "leftovers": 0, "unusedLayouts": 0}
+        for path in self.snapshot_directory.iterdir() if self.snapshot_directory.is_dir() else []:
+            if not path.is_file():
+                continue
+            size = path.stat().st_size
+            base = path.name.split(".", 1)[0]
+            if base not in owned:
+                sizes["leftovers"] += size
+                counts["leftovers"] += 1
+            elif ".mesh-" in path.name:
+                sizes["meshes"] += size
+                counts["meshes"] += 1
+            else:
+                fidelity = fidelity_of.get(base)
+                if fidelity == current:
+                    sizes["results"] += size
+                    counts["results"] += 1
+                elif fidelity is None:
+                    # a result no step links to any more
+                    sizes["leftovers"] += size
+                    counts["leftovers"] += 1
+                elif fidelity in RETIRED_FIDELITIES:
+                    sizes["retired"] += size
+                else:
+                    sizes["otherFidelity"] += size
+                    counts["otherFidelity"] += 1
+        unused = set(self._unused_layouts())
+        if self.layouts_directory.is_dir():
+            for path in self.layouts_directory.iterdir():
+                if path.is_file():
+                    key = "unusedLayouts" if path in unused else "layouts"
+                    sizes[key] += path.stat().st_size
+                    if path in unused:
+                        counts["unusedLayouts"] += 1
+        for suffix in ("", "-wal", "-shm"):
+            database = Path(f"{self.database_path}{suffix}")
+            if database.is_file():
+                sizes["database"] += database.stat().st_size
+        sizes["total"] = sum(value for value in sizes.values())
+        return {"sizes": {**sizes, "counts": counts, "fidelity": current}}
 
     def log(
         self,

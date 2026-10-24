@@ -5,6 +5,8 @@ import type { DesktopBridge, RunOptions, ViewRequest } from "./bridge";
 import type {
   ProblemReport,
   ReportResult,
+  TidyResult,
+  WorkspaceStorage,
   CliResult,
   FlowExportFormat,
   LibraryKind,
@@ -268,6 +270,14 @@ export class TauriBridge implements DesktopBridge {
     if (!destination) return null;
     const result = await call<{ path: string }>("export_mesh", { root, ...request, destination });
     return result.path;
+  }
+
+  workspaceStorage(root: string): Promise<WorkspaceStorage> {
+    return call<WorkspaceStorage>("workspace_storage", { root });
+  }
+
+  tidyWorkspace(root: string, options: { meshes: boolean; otherFidelity: boolean }): Promise<TidyResult> {
+    return call<TidyResult>("tidy_workspace", { root, ...options });
   }
 
   async writeReport(root: string, report: ProblemReport, log: string, defaultName: string): Promise<ReportResult | null> {

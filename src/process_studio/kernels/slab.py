@@ -369,7 +369,9 @@ def _load_or_build_meshes(state: SlabState, engine: str, buried: bool) -> Displa
                 arrays[f"{index}.interface"] = interface
                 arrays[f"{index}.neighbour"] = neighbour
             try:
-                np.savez(sidecar, **arrays)
+                # compressed: a mesh is mostly coordinates and indices, and
+                # shrinks to about a third; reading it back costs little
+                np.savez_compressed(sidecar, **arrays)
             except OSError:
                 pass  # the view still works; it is only not remembered
     return meshes

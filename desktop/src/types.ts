@@ -452,3 +452,29 @@ export interface ReportResult {
   /** The marked steps as the worker found them, numbered in their flow. */
   markedSteps: { index: number; id: string; name: string; type: string; loop: StepLoop | null; status?: string }[];
 }
+
+/** Bytes per kind of thing a workspace holds on disk. */
+export interface WorkspaceStorage {
+  /** Results of the film model the project is set to. */
+  results: number;
+  /** Results of the other film model, kept for switching back. */
+  otherFidelity: number;
+  /** Results of a film model there no longer is. */
+  retired: number;
+  /** 3D meshes kept beside results; built again when a 3D view is opened. */
+  meshes: number;
+  /** Files no stored result owns. */
+  leftovers: number;
+  layouts: number;
+  unusedLayouts: number;
+  database: number;
+  total: number;
+  counts: { results: number; otherFidelity: number; meshes: number; leftovers: number; unusedLayouts: number };
+  fidelity: string;
+}
+
+export interface TidyResult {
+  before: WorkspaceStorage;
+  after: WorkspaceStorage;
+  freed: number;
+}

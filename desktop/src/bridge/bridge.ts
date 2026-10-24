@@ -2,6 +2,8 @@ import type {
   CliResult,
   ProblemReport,
   ReportResult,
+  TidyResult,
+  WorkspaceStorage,
   FlowExportFormat,
   LibraryKind,
   GdsImportResult,
@@ -161,6 +163,10 @@ export interface DesktopBridge {
    * report, the workspace as a flow file, the layout and the log); null
    * when the dialog is dismissed.
    */
+  /** How much each kind of thing in the workspace takes on disk. */
+  workspaceStorage(root: string): Promise<WorkspaceStorage>;
+  /** Remove what nothing needs, and the 3D meshes or the other film model's results on request. */
+  tidyWorkspace(root: string, options: { meshes: boolean; otherFidelity: boolean }): Promise<TidyResult>;
   writeReport(root: string, report: ProblemReport, log: string, defaultName: string): Promise<ReportResult | null>;
   /** Ask where to save, then write a PNG there; null when the dialog is dismissed. */
   saveImage(defaultName: string, imageBase64: string): Promise<string | null>;

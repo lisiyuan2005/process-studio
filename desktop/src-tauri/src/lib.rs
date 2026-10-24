@@ -50,6 +50,8 @@ const WORKER_METHODS: &[&str] = &[
     "rename_branch",
     "delete_branch",
     "write_report",
+    "workspace_storage",
+    "tidy_workspace",
 ];
 
 /// Methods that may name a directory that does not exist yet.

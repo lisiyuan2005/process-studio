@@ -1,4 +1,12 @@
-import type { ProblemReport, ReportResult } from "../types";
+import type { ProblemReport, ReportResult, TidyResult, WorkspaceStorage } from "../types";
+
+// what the preview shows for a workspace's storage: made up, for the dialog
+const PREVIEW_STORAGE: WorkspaceStorage = {
+  results: 48_000_000, otherFidelity: 31_000_000, retired: 0, meshes: 112_000_000, leftovers: 260_000_000,
+  layouts: 4_000_000, unusedLayouts: 12_000_000, database: 600_000, total: 467_600_000,
+  counts: { results: 24, otherFidelity: 24, meshes: 96, leftovers: 210, unusedLayouts: 3 },
+  fidelity: "simplified",
+};
 import type { DesktopBridge, RunOptions, ViewRequest } from "./bridge";
 import type {
   CliResult,
@@ -189,6 +197,22 @@ export class BrowserBridge implements DesktopBridge {
 
   // the preview has no worker to pack anything; it answers as if it had,
   // so the rest of the report (the issue page) can be tried
+  async workspaceStorage(): Promise<WorkspaceStorage> {
+    return PREVIEW_STORAGE;
+  }
+
+  async tidyWorkspace(_root: string, options: { meshes: boolean; otherFidelity: boolean }): Promise<TidyResult> {
+    const after = {
+      ...PREVIEW_STORAGE,
+      leftovers: 0,
+      unusedLayouts: 0,
+      meshes: options.meshes ? 0 : PREVIEW_STORAGE.meshes,
+      otherFidelity: options.otherFidelity ? 0 : PREVIEW_STORAGE.otherFidelity,
+    };
+    after.total = after.results + after.otherFidelity + after.meshes + after.layouts + after.database;
+    return { before: PREVIEW_STORAGE, after, freed: PREVIEW_STORAGE.total - after.total };
+  }
+
   async writeReport(_root: string, report: ProblemReport): Promise<ReportResult | null> {
     return { path: "process-studio-report.zip", files: ["report.json", "flow.json", "log.txt"], markedSteps: report.stepIds.map((id, index) => ({ index: index + 1, id, name: id, type: "etch", loop: null })) };
   }

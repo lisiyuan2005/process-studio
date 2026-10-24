@@ -1701,3 +1701,59 @@ def test_a_problem_report_holds_the_flow_the_marked_steps_and_the_log(tmp_path):
     ]
     with pytest.raises(InvalidRequest):
         call("write_report", root=root, destination=str(tmp_path / "x.zip"), report={"flow": "both"})
+
+
+def test_the_workspace_keeps_one_result_per_step_and_nothing_left_behind(tmp_path):
+    """Space: a replaced result takes its 3D meshes with it, and tidying
+    removes what nothing needs (old layouts, leftovers, other results)."""
+    import os
+    import time as clock
+
+    root = tmp_path / "space"
+    document = call("create_workspace", root=str(root), name="Space", kernel="slab")
+    branch = document["branches"][0]
+    snapshots = next(root.glob("*_snapshots"))
+
+    def run_and_look():
+        current = call("open_workspace", root=str(root))
+        call("run_flow", root=str(root), branchId=branch["id"])
+        for step in current["branches"][0]["steps"]:
+            call("get_surfaces", root=str(root), branchId=branch["id"], stepId=step["id"])
+        return sorted(path.name for path in snapshots.iterdir())
+
+    first = run_and_look()
+    assert any(".mesh-" in name for name in first)
+    edited = call("open_workspace", root=str(root))
+    etch = next(step for step in edited["branches"][0]["steps"] if isinstance(step["parameters"].get("target"), float))
+    etch["parameters"]["target"] *= 1.1
+    call("save_document", root=str(root), document=edited)
+    second = run_and_look()
+    # as many files as before: the replaced results took their meshes along
+    assert len(second) == len(first)
+    owners = {name.split(".", 1)[0] for name in second if ".mesh-" not in name}
+    assert all(name.split(".", 1)[0] in owners for name in second)
+
+    # leftovers: an old file nothing owns, an old layout an import replaced
+    stray = snapshots / "0123456789abcdef.dfz.mesh-ears-free.npz"
+    stray.write_bytes(b"x" * 10)
+    os.utime(stray, (clock.time() - 3600, clock.time() - 3600))
+    young = snapshots / "fedcba9876543210.dfz"
+    young.write_bytes(b"x")
+    layouts = root / "layouts"
+    layouts.mkdir(exist_ok=True)
+    (layouts / "1-old.gds").write_bytes(b"x" * 100)
+    storage = call("workspace_storage", root=str(root))
+    assert storage["leftovers"] >= 11 and storage["unusedLayouts"] == 100
+    assert storage["results"] > 0 and storage["meshes"] > 0
+
+    call("open_workspace", root=str(root))  # tidies on the way in
+    assert not stray.exists() and not (layouts / "1-old.gds").exists()
+    assert young.exists()  # a run might be writing it
+
+    # on request: the meshes (built again when looked at) and the other film model
+    detailed_results = sum(1 for name in second if ".mesh-" not in name)
+    tidied = call("tidy_workspace", root=str(root), meshes=True)
+    assert tidied["after"]["meshes"] == 0 and tidied["freed"] > 0
+    assert sum(1 for path in snapshots.iterdir() if ".mesh-" not in path.name) == detailed_results + 1
+    statuses = tidied["document"]["stepStatuses"][branch["id"]]
+    assert all(status == "clean" for status in statuses.values())
