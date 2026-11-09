@@ -974,3 +974,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .storage-freed { margin: 6px 0 0; color: var(--accent); font-size: 12.5px; }
 .invalid-note { margin: 6px 0 0; color: #c0565e; font-size: 12px; }
 .open-button + .open-button { margin-top: 6px; }
+
+/* 3D view: the axes, the view's angles, and typed coordinates */
+.scene-wrap { position: relative; width: 100%; height: 100%; }
+.view-angles { position: absolute; right: 12px; bottom: 132px; padding: 3px 8px; border-radius: 5px; background: rgba(255, 255, 255, 0.82); color: #415161; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; pointer-events: none; }
+.coordinate-field { position: relative; display: inline-flex; align-items: center; }
+.coordinate-field input { width: 92px; height: 26px; padding: 0 30px 0 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; text-align: right; }
+.coordinate-field span { position: absolute; right: 8px; color: var(--muted); font-size: 11px; pointer-events: none; }
+.clip-at { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; color: var(--muted); }

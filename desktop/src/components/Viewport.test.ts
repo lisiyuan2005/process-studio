@@ -90,3 +90,51 @@ describe("keeping the view across a step", () => {
     expect(restoredCamera(fresh, 2.4).position).toEqual([3, -3, 2.4]);
   });
 });
+
+describe("coordinates typed into the view", () => {
+  it("puts a typed section position on the nearest plane there is", async () => {
+    const { nearestIndex } = await import("./CoordinateField");
+    const planes = [-0.5, -0.44, -0.38, 0, 0.38];
+    expect(nearestIndex(planes, -0.44)).toBe(1);
+    expect(nearestIndex(planes, -0.42)).toBe(1);
+    expect(nearestIndex(planes, 0.1)).toBe(3);
+    expect(nearestIndex(planes, -9)).toBe(0);
+    expect(nearestIndex(planes, 9)).toBe(4);
+    expect(nearestIndex([], 1)).toBe(0);
+  });
+
+  it("turns a typed clip position into the slider's fraction, kept inside the window", async () => {
+    const { clipFraction } = await import("./Viewport");
+    const bounds = { xMin: -1, xMax: 1, yMin: 0, yMax: 4, zMin: -0.5, zMax: 0.5 };
+    expect(clipFraction({ axis: "x", fraction: 0.5, flip: false }, bounds, 0.5)).toBeCloseTo(0.75);
+    expect(clipFraction({ axis: "y", fraction: 0.5, flip: false }, bounds, 1)).toBeCloseTo(0.25);
+    expect(clipFraction({ axis: "z", fraction: 0.5, flip: false }, bounds, 7)).toBe(1);
+    expect(clipFraction({ axis: "z", fraction: 0.5, flip: false }, bounds, -7)).toBe(0);
+    expect(clipFraction({ axis: null, fraction: 0.3, flip: false }, bounds, 1)).toBe(0.3);
+  });
+
+  it("reads the view's azimuth and elevation off the camera", async () => {
+    const { viewAngles } = await import("./Viewport");
+    const front = viewAngles([1, -1, 0], [0, 0, 0]);
+    expect(front.azimuth).toBeCloseTo(315);
+    expect(front.elevation).toBeCloseTo(0);
+    const above = viewAngles([0, 0, 5], [0, 0, 0]);
+    expect(above.elevation).toBeCloseTo(90);
+    const side = viewAngles([0, 2, 2], [0, 0, 0]);
+    expect(side.azimuth).toBeCloseTo(90);
+    expect(side.elevation).toBeCloseTo(45);
+  });
+});
+
+describe("looking along an axis", () => {
+  it("puts the camera on that axis, and above with +y up the screen", async () => {
+    const { cameraAlong, viewAngles } = await import("./Viewport");
+    const fromX = cameraAlong([1, 0, 0], [0, 0, 0], 5);
+    expect(fromX[0]).toBeCloseTo(5);
+    expect(viewAngles(fromX, [0, 0, 0]).azimuth).toBeCloseTo(0);
+    const above = cameraAlong([0, 0, 1], [1, 2, 3], 4);
+    expect(above[2]).toBeCloseTo(7);
+    expect(above[1]).toBeLessThan(2); // a hair towards −y
+    expect(viewAngles(above, [1, 2, 3]).elevation).toBeGreaterThan(89.9);
+  });
+});

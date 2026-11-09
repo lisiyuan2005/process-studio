@@ -1,4 +1,5 @@
-import { OrbitControls } from "@react-three/drei";
+import { GizmoHelper, GizmoViewport, OrbitControls } from "@react-three/drei";
+import { CoordinateField, nearestIndex } from "./CoordinateField";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
 import { Canvas, useThree } from "@react-three/fiber";
 import {
@@ -540,6 +541,113 @@ function KeepInView({ span }: { span: number }) {
 }
 
 /** Where a clip setting cuts, in model coordinates along its axis. */
+/** Which way the camera looks at the model: the azimuth about z from +x
+ * towards +y, and the elevation above the xy plane, both in degrees. */
+export function viewAngles(from: [number, number, number], to: [number, number, number]): { azimuth: number; elevation: number } {
+  const [dx, dy, dz] = [from[0] - to[0], from[1] - to[1], from[2] - to[2]];
+  const azimuth = (Math.atan2(dy, dx) * 180) / Math.PI;
+  const elevation = (Math.atan2(dz, Math.hypot(dx, dy)) * 180) / Math.PI;
+  return { azimuth: ((azimuth % 360) + 360) % 360, elevation };
+}
+
+/** The six directions the axes' ends look from. */
+const AXIS_ENDS: [number, number, number][] = [
+  [1, 0, 0],
+  [-1, 0, 0],
+  [0, 1, 0],
+  [0, -1, 0],
+  [0, 0, 1],
+  [0, 0, -1],
+];
+
+/** Where the camera goes to look at `target` from along `direction`,
+ * `distance` away. Straight down (or up) it sits a hair towards −y, so z
+ * stays the axis the view turns about and the picture has +x to the right
+ * and +y up, the way the top view draws it. */
+export function cameraAlong(
+  direction: [number, number, number],
+  target: [number, number, number],
+  distance: number,
+): [number, number, number] {
+  const offset = new THREE.Vector3(...direction);
+  if (direction[0] === 0 && direction[1] === 0) offset.y = -1e-4;
+  offset.normalize().multiplyScalar(distance);
+  return [target[0] + offset.x, target[1] + offset.y, target[2] + offset.z];
+}
+
+/**
+ * x, y and z in the corner, turning with the view so its angle can be read;
+ * clicking an axis' end looks along it. The ends are handled here rather
+ * than by the helper's own animation, which leaves the view from above
+ * turned with +x pointing down the screen.
+ */
+function ViewAxes() {
+  const { camera, controls, invalidate } = useThree();
+  const look = (direction: [number, number, number]) => {
+    const orbit = controls as unknown as OrbitControlsImpl | null;
+    if (!orbit) return;
+    const target = orbit.target.toArray() as [number, number, number];
+    camera.position.set(...cameraAlong(direction, target, camera.position.distanceTo(orbit.target)));
+    camera.up.set(0, 0, 1);
+    camera.lookAt(orbit.target);
+    orbit.update();
+    invalidate();
+  };
+  return (
+    <GizmoHelper alignment="bottom-right" margin={[64, 64]}>
+      <GizmoViewport disabled axisColors={["#d64545", "#3f9b4f", "#3b7dd8"]} labelColor="#ffffff" axisHeadScale={0.9} />
+      {AXIS_ENDS.map((direction) => (
+        <mesh
+          key={direction.join(",")}
+          position={direction.map((value) => value * 40) as [number, number, number]}
+          onPointerDown={(event) => {
+            event.stopPropagation();
+            look(direction);
+          }}
+          onPointerOver={() => {
+            document.body.style.cursor = "pointer";
+          }}
+          onPointerOut={() => {
+            document.body.style.cursor = "";
+          }}
+        >
+          <sphereGeometry args={[11, 12, 12]} />
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+        </mesh>
+      ))}
+    </GizmoHelper>
+  );
+}
+
+/** Reports the camera's angles whenever the view turns. */
+function CameraAngles({ onChange }: { onChange: (angles: { azimuth: number; elevation: number }) => void }) {
+  const { camera, controls } = useThree();
+  const orbit = controls as unknown as OrbitControlsImpl | null;
+  useEffect(() => {
+    if (!orbit) return;
+    const report = () =>
+      onChange(
+        viewAngles(
+          camera.position.toArray() as [number, number, number],
+          orbit.target.toArray() as [number, number, number],
+        ),
+      );
+    report();
+    orbit.addEventListener("change", report);
+    return () => orbit.removeEventListener("change", report);
+  }, [orbit, camera, onChange]);
+  return null;
+}
+
+/** Where along its axis a typed coordinate puts the plane, as the slider's fraction (clamped to the window). */
+export function clipFraction(clip: ClipState, bounds: SurfaceDocument["bounds"], um: number): number {
+  if (!clip.axis) return clip.fraction;
+  const low = bounds[`${clip.axis}Min` as const];
+  const high = bounds[`${clip.axis}Max` as const];
+  if (!(high > low)) return clip.fraction;
+  return Math.min(1, Math.max(0, (um - low) / (high - low)));
+}
+
 function clipPosition(clip: ClipState, bounds: SurfaceDocument["bounds"]): number {
   if (!clip.axis) return 0;
   const low = bounds[`${clip.axis}Min`];
@@ -623,11 +731,13 @@ function SurfaceScene({
   const planeRotation: [number, number, number] =
     clip.axis === "x" ? [0, Math.PI / 2, 0] : clip.axis === "y" ? [Math.PI / 2, 0, 0] : [0, 0, 0];
   const planeAt = clip.axis ? clipPosition(clip, bounds) - center[clip.axis] : 0;
+  const [angles, setAngles] = useState<{ azimuth: number; elevation: number } | null>(null);
 
   return (
-    // Frames are drawn only when something changed: a still scene stays
-    // still, and a driver that re-presents each frame differently has
-    // nothing to flicker with.
+    <div className="scene-wrap">
+    {/* Frames are drawn only when something changed: a still scene stays
+        still, and a driver that re-presents each frame differently has
+        nothing to flicker with. */}
     <Canvas camera={camera} dpr={[1, 2]} frameloop="demand" gl={{ localClippingEnabled: true }}>
       <color attach="background" args={["#f4f7f9"]} />
       <KeepInView span={span} />
@@ -675,8 +785,18 @@ function SurfaceScene({
         />
       </group>
       <OrbitControls enablePan enableZoom makeDefault />
+      <CameraAngles onChange={setAngles} />
+      <ViewAxes />
       <Snapshot register={registerSnapshot} />
     </Canvas>
+      {angles && (
+        <div className="view-angles" title="The view's direction: azimuth about z from +x towards +y, elevation above the xy plane">
+          {Math.abs(angles.elevation) > 89.5
+            ? `Straight ${angles.elevation > 0 ? "down" : "up"}, from ${angles.elevation > 0 ? "above" : "below"}`
+            : `Azimuth ${Math.round(angles.azimuth) % 360}° · Elevation ${Math.round(angles.elevation)}°`}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1540,9 +1660,14 @@ export function Viewport({
                     min={0}
                     max={Math.max(0, section.positions.length - 1)}
                     value={sectionIndex}
+                    aria-label="Where the section cuts"
                     onChange={(event) => onSectionIndexChange(Number(event.target.value))}
                   />
-                  <code>{section.position.toFixed(3)} µm</code>
+                  <CoordinateField
+                    aria-label={`Section position along ${sectionAxis}, in µm`}
+                    value={section.position}
+                    onCommit={(um) => onSectionIndexChange(nearestIndex(section.positions, um))}
+                  />
                 </label>
               )
             )}
@@ -1676,9 +1801,16 @@ export function Viewport({
                   aria-label="Where the plane cuts"
                   onChange={(event) => setClip((current) => ({ ...current, fraction: Number(event.target.value) / 1000 }))}
                 />
-                <code>
-                  {clip.axis} = {surfaces ? clipPosition(clip, surfaces.bounds).toFixed(3) : "–"} µm
-                </code>
+                <span className="clip-at">{clip.axis} =</span>
+                {surfaces ? (
+                  <CoordinateField
+                    aria-label={`Clipping plane position along ${clip.axis}, in µm`}
+                    value={clipPosition(clip, surfaces.bounds)}
+                    onCommit={(um) => setClip((current) => ({ ...current, fraction: clipFraction(current, surfaces.bounds, um) }))}
+                  />
+                ) : (
+                  <code>– µm</code>
+                )}
                 <button
                   type="button"
                   className={`footer-toggle ${clip.flip ? "active" : ""}`}
