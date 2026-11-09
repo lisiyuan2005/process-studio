@@ -160,15 +160,20 @@ jobs:
           if-no-files-found: error
 
   macos:
-    # Pinned to the image the emulator builds on. A newer runner means a newer
-    # SDK and a different linker signature, and that app opens where this one
-    # did not.
+    # Pinned to one image, so a release is not built on whatever GitHub calls
+    # "latest" that week. It was macos-14 until GitHub stopped running that
+    # image ("The configuration 'macos-14-arm64-us-default' is not
+    # supported"). A newer image brings a newer SDK, so the oldest macOS the
+    # app supports is stated here rather than left to the SDK's default: the
+    # same 12.0 as `minimumSystemVersion` in tauri.conf.json, for the Rust
+    # shell and for anything compiled while the worker is built.
     needs: prepare
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.platforms == 'all' || inputs.platforms == 'macos' }}
-    runs-on: macos-14
+    runs-on: macos-15
     env:
       PRODUCT: Process Studio
       ARTIFACT: ProcessStudio-macOS
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
     steps:
       - uses: actions/checkout@v4
 

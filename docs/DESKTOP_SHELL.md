@@ -379,7 +379,7 @@ worker 二进制（或解释器加 `-m process_studio.worker`）不带参数时�
 
 `Desktop builds` 工作流跑的就是这两个脚本，每个平台一个作业；手动触发时可以在 GitHub 的 Run workflow 对话框里选平台。构建前先执行 `python -m pytest -q`，前端测试由脚本里的 `npm run test` 负责。Windows 用 `--bundles nsis`，交付 `ProcessStudio.exe` 加同级的 `resources/`（免安装版，应用内更新装的也是它），外加一个 NSIS 安装程序 `ProcessStudio-Setup.exe`：按当前用户安装（不需要管理员，安装目录用户自己可写，应用内更新才能覆盖），把 embeddable Python 作为资源装到 exe 同级的 `resources/python`，和免安装版目录结构一样；主程序名用 `mainBinaryName` 固定成 `ProcessStudio`。macOS 用 `--bundles app`，交付 `Process Studio.app` 和 DMG。不生成 MSI。
 
-macOS 构建固定在 `macos-14` 运行器上，`tauri.conf.json` 里 `signingIdentity` 设为 `-`，由 Tauri 在打包时用 ad-hoc 身份签名整个 bundle，DMG 因此是从已签名的 app 生成的。
+macOS 构建固定在 `macos-15` 运行器上（原来是 `macos-14`，GitHub 已停用该镜像），并用 `MACOSX_DEPLOYMENT_TARGET=12.0` 保持与 `minimumSystemVersion` 一致的最低系统版本，`tauri.conf.json` 里 `signingIdentity` 设为 `-`，由 Tauri 在打包时用 ad-hoc 身份签名整个 bundle，DMG 因此是从已签名的 app 生成的。
 
 只靠链接器留下的签名是不够的：那只覆盖可执行文件，bundle 没有 `_CodeSignature/CodeResources`，Info.plist 也未绑定，`spctl` 会报 `code has no resources but signature indicates they must be present`，内核在启动时直接 SIGKILL。CI 因此在打包前检查该文件存在并跑 `codesign --verify --strict`，不通过就让构建失败。
 
