@@ -87,7 +87,7 @@ worker 为每一步计算一个链式摘要，内容包括该步自带的工艺�
 
 ## 仿真内核
 
-只有一个内核：slab（并入的 DeviceFlow）。视图、执行和快照格式都由内核自己提供，`runner.py` 和 `protocol.py` 不判断内核 id，`describe` 照旧报告有哪些内核可用——工程记着自己用的是哪个，`save_document` 拒绝改动它。原来的 level set 内核在 `0.9.8` 之后删掉了（代码在 `archive/levelset` 分支），用它建的工程打开时被明确拒绝并说明去哪个版本打开。内核能做什么见[内核说明](KERNELS.md)。
+有两个内核：slab（并入的 DeviceFlow，默认）和 OpenVDB（每种材料一个窄带距离场，目前只在 macOS 版里）。新建工作区时在内核卡片里选，之后不能换；这份构建跑不了的内核也会列出来，灰显并写明原因（`describe` 的 `unavailableKernels`）。两个内核都有 simplified / detailed 两档膜模型；OpenVDB 的 nm 按钮是体素边长，对话框里显示体素数，超过上限时不能应用。视图、执行和快照格式都由内核自己提供，`runner.py` 和 `protocol.py` 不判断内核 id，`describe` 报告有哪些内核可用——工程记着自己用的是哪个，`save_document` 拒绝改动它。原来的 level set 内核在 `0.9.8` 之后删掉了（代码在 `archive/levelset` 分支），用它建的工程打开时被明确拒绝并说明去哪个版本打开。内核能做什么见[内核说明](KERNELS.md)。
 
 ## 精度控制
 

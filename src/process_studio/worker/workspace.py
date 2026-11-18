@@ -205,6 +205,10 @@ def initialize_workspace(
         resolution_um=(
             None
             if chosen.info.spacing_role == "grid"
+            # a voxel lattice starts at its coarsest preset: every halving
+            # is eight times the voxels, and the starter window is wide
+            else chosen.info.spacing_presets_nm[0] / 1000.0
+            if chosen.info.spacing_role == "voxel"
             else chosen.info.spacing_presets_nm[1] / 1000.0
         ),
     )

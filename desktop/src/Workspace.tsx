@@ -1803,6 +1803,7 @@ export function Workspace({
         busy={busy}
         error={homeError}
         kernels={capabilities?.kernels ?? []}
+        unavailableKernels={capabilities?.unavailableKernels ?? []}
         defaultKernel={capabilities?.defaultKernel ?? ""}
         recent={recent}
         onCreate={handleCreate}
@@ -2093,7 +2094,9 @@ export function Workspace({
           <button
             type="button"
             title={
-              projectKernel && projectKernel.spacingRole !== "grid"
+              projectKernel && projectKernel.spacingRole === "voxel"
+                ? `${projectKernel.name}: voxel size`
+                : projectKernel && projectKernel.spacingRole !== "grid"
                 ? `${projectKernel.name}: geometry resolution`
                 : "Simulation grid"
             }
@@ -2107,7 +2110,7 @@ export function Workspace({
             ).toFixed(0)}{" "}
             nm
           </button>
-          {projectKernel?.id === "slab" && (
+          {(projectKernel?.id === "slab" || projectKernel?.id === "openvdb") && (
             <div className="fidelity-switch" role="radiogroup" aria-label="Film model">
               {FILM_MODELS.map((model) => {
                 const active = (document.project.fidelity ?? "detailed") === model.id;

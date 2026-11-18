@@ -1,7 +1,8 @@
 """The simulation kernel a project is built on.
 
-There is one: the slab kernel, exact polygon slabs from the DeviceFlow
-core. The level-set kernel lived here until 0.9.8 and was removed -- it is
+Two: the slab kernel, exact polygon slabs from the DeviceFlow core, and
+the OpenVDB kernel, per-material level sets on a voxel lattice, which needs
+a compiled core and so is missing from some builds. The level-set kernel lived here until 0.9.8 and was removed -- it is
 on the ``archive/levelset`` branch -- so a project made with it is refused
 with a message saying where to open it, never silently run on this one.
 
@@ -15,6 +16,7 @@ beside this file still names what this worker offers.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Iterable
 
@@ -24,6 +26,7 @@ from .base import Kernel, KernelInfo
 #: that provides it. Import failures mean the build left its dependencies out.
 _KNOWN: tuple[tuple[str, str, str], ...] = (
     ("slab", "process_studio.kernels.slab", "SlabKernel"),
+    ("openvdb", "process_studio.kernels.openvdb", "OpenVDBKernel"),
 )
 
 #: Kernels that were here and are not any more, and where to open a project
@@ -38,6 +41,9 @@ _RETIRED = {
 
 _KERNELS: dict[str, Kernel] = {}
 _UNAVAILABLE: dict[str, str] = {}
+
+#: Names to show for a kernel this worker could not load.
+_NAMES = {"slab": "Slab (DeviceFlow)", "openvdb": "OpenVDB (level set)"}
 
 
 def _configured_ids() -> set[str] | None:
@@ -66,7 +72,10 @@ def configure(enabled: Iterable[str] | None) -> None:
         try:
             module = importlib.import_module(module_name)
         except ImportError as error:
-            _UNAVAILABLE[kernel_id] = f"its dependencies are not installed ({error})"
+            if kernel_id == "openvdb" and sys.platform == "win32":
+                _UNAVAILABLE[kernel_id] = "it is built for macOS only for now"
+            else:
+                _UNAVAILABLE[kernel_id] = f"its dependencies are not installed ({error})"
             continue
         _KERNELS[kernel_id] = getattr(module, class_name)()
     if not _KERNELS:
@@ -79,6 +88,14 @@ def configure(enabled: Iterable[str] | None) -> None:
 def available_kernels() -> list[Kernel]:
     """Every kernel this worker can run, in offering order."""
     return list(_KERNELS.values())
+
+
+def unavailable_kernels() -> list[dict[str, str]]:
+    """Kernels this source knows that this worker cannot run, and why."""
+    return [
+        {"id": kernel_id, "name": _NAMES.get(kernel_id, kernel_id), "reason": reason}
+        for kernel_id, reason in _UNAVAILABLE.items()
+    ]
 
 
 def kernel_ids() -> tuple[str, ...]:
@@ -130,4 +147,5 @@ __all__ = [
     "default_kernel",
     "get_kernel",
     "kernel_ids",
+    "unavailable_kernels",
 ]

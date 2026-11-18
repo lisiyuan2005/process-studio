@@ -20,7 +20,7 @@ from typing import Any, IO, Mapping
 
 from . import PROTOCOL_VERSION, __version__
 from ..grid import UniformGrid3D, window_grid
-from ..kernels import available_kernels, build_variant, default_kernel, get_kernel
+from ..kernels import available_kernels, build_variant, default_kernel, get_kernel, unavailable_kernels
 from ..layout.gds import available_gds_layers
 from ..libraries import RecipeLibrary
 from ..models import ProcessType
@@ -182,6 +182,9 @@ def _describe() -> dict[str, Any]:
         # list that drifts from it.
         "flowColumns": [{"id": field, "label": heading} for field, heading, _width in FLOW_FIELDS],
         "kernels": [kernel.info.to_json() for kernel in available_kernels()],
+        # Known kernels this build cannot run, with the reason, so the
+        # client can say why a choice is missing instead of hiding it.
+        "unavailableKernels": unavailable_kernels(),
         "defaultKernel": default_kernel(),
         "buildVariant": build_variant(),
         "rendering": {
@@ -561,16 +564,29 @@ def _plan_grid(parameters: Mapping[str, Any]) -> dict[str, Any]:
     spacing = _target_spacing(parameters)
     spacing_xy = _target_spacing_xy(parameters)
     current_xy = project.resolution_xy_um
+    estimate: dict[str, Any] = {
+        "spacingNm": spacing,
+        "spacingXyNm": spacing if spacing_xy is None else spacing_xy,
+    }
+    within = True
+    ceiling = kernel.info.maximum_nodes
+    if kernel.info.spacing_role == "voxel":
+        # A voxel lattice costs memory by the voxel, so the count is the
+        # number worth showing and the ceiling is a real one.
+        nodes = 1
+        for low, high in (
+            (window.x_min, window.x_max), (window.y_min, window.y_max), (window.z_min, window.z_max)
+        ):
+            nodes *= max(1, math.ceil((high - low) / (spacing / 1000.0) - 1e-6))
+        estimate["nodeCount"] = nodes
+        within = ceiling is None or nodes <= ceiling
     return {
         "kernel": kernel.info.id,
         "spacingRole": kernel.info.spacing_role,
         "grid": grid_to_json(current if same_window else _as_window(window)),
-        "estimate": {
-            "spacingNm": spacing,
-            "spacingXyNm": spacing if spacing_xy is None else spacing_xy,
-        },
-        "maximumNodes": None,
-        "withinLimit": True,
+        "estimate": estimate,
+        "maximumNodes": ceiling,
+        "withinLimit": within,
         "unchanged": same_window
         and abs(spacing / 1000.0 - (project.resolution_um or 0.0)) < 1e-12
         and (

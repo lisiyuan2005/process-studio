@@ -32,8 +32,26 @@ packages = ["gdstk", "openpyxl", "PIL", "certifi", "truststore", "shapely", "tri
 # analysis cannot see; the slab kernel reaches its GDS reader through
 # deviceflow.__getattr__, which it also cannot see.
 hiddenimports += ["process_studio.kernels.slab", "deviceflow", "deviceflow.layout"]
-# The level-set kernel's solver and meshing went with it.
-excludes += ["scipy", "skfmm", "skimage"]
+# The OpenVDB kernel ships where its compiled core was built before this
+# (scripts/build_vdbcore.py; the macOS build does it). It needs scipy and
+# scikit-fmm, so they come with it and only with it; the core's own
+# libraries (OpenVDB, TBB, Blosc, ...) are found by PyInstaller as the
+# extension's dependencies. Without the core the registry reports the
+# kernel unavailable and the slab kernel is offered alone.
+openvdb_dir = project_root / "src" / "process_studio" / "kernels" / "openvdb"
+if any(openvdb_dir.glob("_vdbcore*")):
+    hiddenimports += [
+        "process_studio.kernels.openvdb",
+        "process_studio.kernels.openvdb.kernel",
+        "process_studio.kernels.openvdb.state",
+        "process_studio.kernels.openvdb.field",
+        "process_studio.kernels.openvdb.ops",
+        "process_studio.kernels.openvdb._vdbcore",
+    ]
+    packages += ["scipy", "skfmm"]
+    excludes += ["skimage"]
+else:
+    excludes += ["scipy", "skfmm", "skimage"]
 for package in packages:
     package_datas, package_binaries, package_hiddenimports = collect_all(package)
     datas += package_datas

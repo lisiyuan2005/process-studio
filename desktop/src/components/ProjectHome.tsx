@@ -146,6 +146,8 @@ interface ProjectHomeProps {
   busy: boolean;
   error?: string;
   kernels: KernelDescription[];
+  /** Kernels this build knows of but cannot run, shown with the reason. */
+  unavailableKernels?: { id: string; name: string; reason: string }[];
   defaultKernel: string;
   recent: RecentWorkspace[];
   onCreate: (name: string, kernel: string) => void;
@@ -167,6 +169,7 @@ export function ProjectHome({
   busy,
   error,
   kernels,
+  unavailableKernels = [],
   defaultKernel,
   recent,
   onCreate,
@@ -253,6 +256,12 @@ export function ProjectHome({
               <Lock size={12} />
               Every workspace runs on the {kernels[0].name} kernel. A project made with the
               level-set kernel, which this no longer ships, opens in Process Studio 0.9.8.
+              {unavailableKernels.map((item) => (
+                <span key={item.id} className="kernel-missing">
+                  {" "}
+                  {item.name} is not available in this build: {item.reason}.
+                </span>
+              ))}
             </p>
           )}
 
@@ -274,6 +283,12 @@ export function ProjectHome({
                   </span>
                   <span className="kernel-summary">{item.summary}</span>
                 </label>
+              ))}
+              {unavailableKernels.map((item) => (
+                <div key={item.id} className="kernel-card unavailable" aria-disabled="true">
+                  <span className="kernel-name">{item.name}</span>
+                  <span className="kernel-summary">Not available in this build: {item.reason}.</span>
+                </div>
               ))}
               <p className="kernel-lock">
                 <Lock size={12} />

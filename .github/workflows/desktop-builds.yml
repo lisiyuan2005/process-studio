@@ -205,9 +205,21 @@ jobs:
         shell: bash
         run: python scripts/set_version.py "${{ needs.prepare.outputs.version }}"
 
+      # The OpenVDB kernel's C++ core, against Homebrew's OpenVDB. The
+      # worker bundles it with the libraries it links (PyInstaller follows
+      # them); a build without it offers the slab kernel alone. Homebrew's
+      # bottles target this image's macOS, so on an older one the kernel
+      # reports itself unavailable rather than failing to start.
+      - name: Build the OpenVDB kernel's core
+        run: |
+          brew install openvdb
+          python -m pip install -e ".[render,test,openvdb]"
+          python scripts/build_vdbcore.py
+          python -c "import process_studio.kernels.openvdb as k; print(k.OpenVDBKernel.info.version)"
+
       - name: Run the kernel and worker tests
         run: |
-          python -m pip install -e ".[render,test]"
+          python -m pip install -e ".[render,test,openvdb]"
           python -m pytest -q
 
       - name: Build the desktop shell

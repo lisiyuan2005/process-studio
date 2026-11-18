@@ -52,9 +52,10 @@ def default_recipes(kernel: str = "slab") -> list[Recipe]:
     The kernel etches either straight down or isotropically, so the starter
     etch asks for a fully directional profile, and the CMP names no
     materials because this kernel polishes everything above the plane. The
-    argument is kept so a future kernel can be written for again.
+    OpenVDB kernel means the same by every step, so it gets the same
+    library; the argument is kept so a future kernel can be written for.
     """
-    slab = kernel == "slab"
+    slab = kernel in ("slab", "openvdb")
     return [
         Recipe(
             "Si Directional Trench Etch",

@@ -36,6 +36,13 @@ echo "Using Python $(python3 -c 'import sys; print(sys.version.split()[0], sys.e
 
 python3 -m pip install --upgrade pip >/dev/null
 python3 -m pip install -e .
+# The OpenVDB kernel ships when its compiled core was built first
+# (scripts/build_vdbcore.py); it brings scipy and scikit-fmm with it.
+OPENVDB_CORE="$(ls src/process_studio/kernels/openvdb/_vdbcore* 2>/dev/null | head -1 || true)"
+if [ -n "$OPENVDB_CORE" ]; then
+  echo "Including the OpenVDB kernel ($OPENVDB_CORE)"
+  python3 -m pip install -e ".[openvdb]"
+fi
 python3 -m pip install 'pyinstaller>=6.10'
 
 # The shell spawns this binary for every RPC call, so it ships inside the bundle.
@@ -56,6 +63,10 @@ DESCRIBED="$(echo '{"kind":"request","id":1,"method":"describe"}' | "$WORKER")"
 echo "$DESCRIBED" | grep -q '"protocolVersion"'
 echo "$DESCRIBED" | tr -d ' ' | grep -q '"id":"slab"' || {
   echo "The packaged worker does not offer the slab kernel"; exit 1; }
+if [ -n "$OPENVDB_CORE" ]; then
+  echo "$DESCRIBED" | tr -d ' ' | grep -q '"id":"openvdb"' || {
+    echo "The packaged worker lost the OpenVDB kernel: $DESCRIBED"; exit 1; }
+fi
 
 # The update check is the one thing that needs certificate authorities, and a
 # frozen build has none of its own unless certifi and truststore were

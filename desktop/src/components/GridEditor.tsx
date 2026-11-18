@@ -57,6 +57,8 @@ export function GridEditor({
   onClose,
 }: GridEditorProps) {
   const currentNm = (resolutionUm ?? grid.spacingUm) * 1000;
+  // The OpenVDB kernel's number is the edge of a voxel, not a walk step.
+  const voxel = kernel?.spacingRole === "voxel";
   const [spacing, setSpacing] = useState(String(Number(currentNm.toFixed(4))));
   // The XY arc sagitta: empty follows the z step.
   const [spacingXy, setSpacingXy] = useState(
@@ -128,7 +130,7 @@ export function GridEditor({
   }, [spacing, bounds, xyNm, onPlan]);
 
   const spacingNm = plan?.estimate.spacingNm;
-  const applicable = !!plan && !!bounds && (!plan.unchanged || windowChanged) && !busy;
+  const applicable = !!plan && plan.withinLimit && !!bounds && (!plan.unchanged || windowChanged) && !busy;
   // The substrate is the part of the window below the wafer surface, so its
   // thickness is z min -- the one number somebody asking for a 200 nm wafer
   // is actually after.
@@ -175,14 +177,25 @@ export function GridEditor({
               />
               <span>nm</span>
             </span>
-            <small>
-              {kernel?.name ?? "This kernel"} keeps exact geometry and has no grid. This is the z
-              step it samples a conformal film or an isotropic etch in: the height of the staircase
-              on a rounded shoulder. Planar deposition, vertical etching and CMP are identical to
-              the last bit whatever it is, so a flow made of those will not change when this does.
-            </small>
+            {voxel ? (
+              <small>
+                {kernel?.name ?? "This kernel"} keeps every material as a level set on a lattice of
+                voxels this size. Surfaces sit between voxel centres, so a film or an edge is placed
+                to a fraction of a voxel, but a feature thinner than about two voxels is not
+                resolved. Time and memory grow with the voxel count: halving this makes eight
+                times as many.
+              </small>
+            ) : (
+              <small>
+                {kernel?.name ?? "This kernel"} keeps exact geometry and has no grid. This is the z
+                step it samples a conformal film or an isotropic etch in: the height of the staircase
+                on a rounded shoulder. Planar deposition, vertical etching and CMP are identical to
+                the last bit whatever it is, so a flow made of those will not change when this does.
+              </small>
+            )}
           </label>
 
+          {!voxel && (
           <label className="field-row">
             <span>XY arcs</span>
             <span className="number-input-wrap">
@@ -202,6 +215,7 @@ export function GridEditor({
               ring more expensive.
             </small>
           </label>
+          )}
 
           <span className="section-label">PROJECT WINDOW (µm)</span>
           <div className="window-grid">
@@ -250,7 +264,9 @@ export function GridEditor({
           <dl className="grid-summary">
             <dt>Current</dt>
             <dd>
-              {`z ${currentNm.toFixed(3)} nm · XY ${((resolutionXyUm ?? currentNm / 1000) * 1000).toFixed(3)} nm`}
+              {voxel
+                ? `${currentNm.toFixed(3)} nm voxels`
+                : `z ${currentNm.toFixed(3)} nm · XY ${((resolutionXyUm ?? currentNm / 1000) * 1000).toFixed(3)} nm`}
             </dd>
             <dt>Proposed</dt>
             <dd>
@@ -258,6 +274,10 @@ export function GridEditor({
                 <LoaderCircle className="spin" size={11} />
               ) : spacingNm === undefined ? (
                 "—"
+              ) : voxel ? (
+                `${spacingNm.toFixed(3)} nm voxels · ${(
+                  ((plan?.estimate as { nodeCount?: number } | undefined)?.nodeCount ?? 0) / 1e6
+                ).toFixed(2)} million`
               ) : (
                 `z ${spacingNm.toFixed(3)} nm · XY ${(
                   (plan?.estimate as { spacingXyNm?: number } | undefined)?.spacingXyNm ?? spacingNm
@@ -285,6 +305,17 @@ export function GridEditor({
               <span>
                 The z range has to cross zero: the substrate is what lies below the wafer surface,
                 and the flow builds above it.
+              </span>
+            </div>
+          )}
+
+          {plan && !plan.withinLimit && (
+            <div className="error-box">
+              <TriangleAlert size={13} />
+              <span>
+                That is more voxels than the {kernel?.name ?? "kernel"} works with (
+                {((plan.maximumNodes ?? 0) / 1e6).toFixed(0)} million): use a coarser voxel or a
+                smaller window.
               </span>
             </div>
           )}

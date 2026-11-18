@@ -1,8 +1,9 @@
 """The packaged worker installs numpy, pillow, gdstk, openpyxl, pyyaml,
-shapely and trimesh -- and never scipy, scikit-image or scikit-fmm, which
-were the level-set kernel's own solver and meshing and went with it. The
-worker's module-level imports must not quietly grow a dependency on any of
-them, or the package stops merely importing.
+shapely and trimesh -- and scipy and scikit-fmm only where the OpenVDB
+kernel ships beside them (the macOS build). The slab kernel and the
+worker's start-up must not quietly grow a dependency on them, or a build
+without the OpenVDB kernel stops merely importing; that build reports the
+OpenVDB kernel unavailable instead.
 
 This does not literally uninstall anything (that would need a whole
 separate environment); it makes further imports of those packages fail the
@@ -71,8 +72,10 @@ def test_the_startup_path_never_needs_scipy_or_scikit_image(
     for name in _STARTUP_MODULES:
         importlib.import_module(name)
 
-    from process_studio.kernels import configure
+    from process_studio.kernels import configure, unavailable_kernels
 
+    # without scipy and scikit-fmm the OpenVDB kernel is reported, not offered
+    assert "openvdb" in {item["id"] for item in unavailable_kernels()}
     configure({"slab"})
     try:
         from process_studio.worker.protocol import dispatch

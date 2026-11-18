@@ -19,3 +19,8 @@ desktop/src-tauri/gen/
 desktop/src-tauri/resources/worker/*
 !desktop/src-tauri/resources/worker/.gitkeep
 desktop/src-tauri/resources/python/
+
+# The OpenVDB kernel's compiled core, built by scripts/build_vdbcore.py
+src/process_studio/kernels/openvdb/_vdbcore*.so
+src/process_studio/kernels/openvdb/_vdbcore*.pyd
+src/process_studio/kernels/openvdb/_vdbcore*.dylib

@@ -62,7 +62,16 @@ def test_describe_publishes_the_kernel_a_project_is_built_on():
     described = call("describe")
     kernels = {kernel["id"]: kernel for kernel in described["kernels"]}
     assert described["defaultKernel"] == "slab"
-    assert list(kernels) == ["slab"]
+    # The OpenVDB kernel is offered after it where this build has its
+    # compiled core, and listed with the reason where it does not.
+    missing = {item["id"]: item for item in described["unavailableKernels"]}
+    assert list(kernels) in (["slab"], ["slab", "openvdb"])
+    assert set(kernels) | set(missing) == {"slab", "openvdb"}
+    if "openvdb" in kernels:
+        assert kernels["openvdb"]["spacingRole"] == "voxel"
+        assert kernels["openvdb"]["maximumNodes"] > 0
+    else:
+        assert missing["openvdb"]["reason"]
     assert kernels["slab"]["spacingRole"] == "conformal_resolution"
     # The kernel has no field, so there is no node ceiling to report.
     assert kernels["slab"]["maximumNodes"] is None
@@ -78,6 +87,35 @@ def test_a_workspace_keeps_the_kernel_it_was_created_with(tmp_path):
     assert created["project"]["resolutionUm"] == pytest.approx(0.01)
     reopened = call("open_workspace", root=str(root))
     assert reopened["project"]["kernel"] == "slab"
+
+
+def test_an_openvdb_project_runs_its_flow_and_draws_every_view(tmp_path):
+    from process_studio.kernels import kernel_ids
+
+    if "openvdb" not in kernel_ids():
+        pytest.skip("the OpenVDB kernel is not built here")
+    root = tmp_path / "vdb-run"
+    document = call("create_workspace", root=str(root), name="VDB", kernel="openvdb")
+    assert document["project"]["kernel"] == "openvdb"
+    assert document["project"]["resolutionUm"] == pytest.approx(0.01)
+    branch = document["branches"][0]
+    result = call("run_flow", root=str(root), branchId=branch["id"])
+    assert len(result["executedStepIds"]) == len(branch["steps"])
+    assert result["materials"] == ["Si", "Al2O3"]
+    last = branch["steps"][-1]["id"]
+    surfaces = call("get_surfaces", root=str(root), branchId=branch["id"], stepId=last)
+    assert {surface["material"] for surface in surfaces["surfaces"]} == {"Si", "Al2O3"}
+    assert surfaces["exact"] is False
+    section = call("get_section", root=str(root), branchId=branch["id"], stepId=last, axis="y")
+    assert base64.b64decode(section["image"])[:4] == b"\x89PNG"
+    top = call("get_top_view", root=str(root), branchId=branch["id"], stepId=last)
+    assert base64.b64decode(top["image"])[:4] == b"\x89PNG"
+    # the plan for a finer voxel says how many there would be
+    plan = call("plan_grid", root=str(root), targetSpacingNm=5.0)
+    assert plan["spacingRole"] == "voxel"
+    assert plan["estimate"]["nodeCount"] == 320 * 320 * 240
+    assert plan["withinLimit"] is True
+    assert call("plan_grid", root=str(root), targetSpacingNm=1.0)["withinLimit"] is False
 
 
 def test_an_unknown_kernel_is_rejected_rather_than_defaulted(tmp_path):

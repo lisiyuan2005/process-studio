@@ -49,13 +49,13 @@ export interface GridPlan {
   spacingRole: SpacingRole;
   grid: GridDefinition;
   /** A kernel without a field reports only the spacing it would work at. */
-  estimate: GridEstimate | { spacingNm: number; spacingXyNm: number };
+  estimate: GridEstimate | { spacingNm: number; spacingXyNm: number; nodeCount?: number };
   maximumNodes: number | null;
   withinLimit: boolean;
   unchanged: boolean;
 }
 
-export type SpacingRole = "grid" | "conformal_resolution";
+export type SpacingRole = "grid" | "conformal_resolution" | "voxel";
 
 /** One simulation core a project can be built on. */
 export interface KernelDescription {
@@ -425,6 +425,8 @@ export interface WorkerCapabilities {
   maskSources: MaskSource[];
   sketch: { shapes: string[]; operations: string[] };
   kernels: KernelDescription[];
+  /** Kernels this build knows of but cannot run, and why. */
+  unavailableKernels?: { id: string; name: string; reason: string }[];
   defaultKernel: string;
   /** The columns a flow table can be exported with, in table order. */
   flowColumns?: FlowColumn[];
