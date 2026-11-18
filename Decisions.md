@@ -13,6 +13,7 @@
 | D5 | 后端 | 首个后端 **ViennaPS**，先打通前端与数据流；**OpenVDB** 后端已实现（R2） | 2026-11-15 / 11-16 |
 | D6 | 导出 | 图片 + 3D 模型；3D 模型首选 **GLB**（每种材料一个网格+颜色） | 2026-11-15 |
 | D7 | 手机查看 | 用网页（model-viewer / three.js）加载 GLB，iPhone Safari 打开；USDZ 以后再说 | 2026-11-15 |
+| D8 | 代码仓库 | GitHub `lisiyuan2005/process-studio` 的 **`nowprocess3d` 分支**（独立历史，不影响 main 等原有分支）；本地 `/users/sli52/Nowprocess3D` | 2026-11-18 |
 
 ## 基准规格 B1：10 层 3D NAND 单元格（已确认）
 
@@ -191,3 +192,4 @@
 - 2026-11-16：新增精度检查 `examples/nand10/checks.yaml`（探测线界面的解析期望值）；推导时修正了 3 处期望值（顶面 ONO 界面、孔口圆角、空腔口边角）。
 - 2026-11-16：OpenVDB 后端（R2）完成并与 ViennaPS 在 2 nm、1 nm 下对比；新增每阶段峰值内存采样、精度检查、对比脚本。
 - 2026-11-17：R3：ViennaPS 体素化改为 C++ 读取 .lvst（lsvox），1 nm 进程峰值 19.8 → 2.0 GB，结果逐体素一致。
+- 2026-11-18：代码推送到 process-studio 仓库的 nowprocess3d 分支（D8）。
