@@ -43,6 +43,29 @@ def snapshot_files(path: Path) -> list[Path]:
     return [path, *path.parent.glob(f"{path.name}.*")]
 
 
+def _remove(path: Path, *, derived: bool, patience: float = 1.0) -> None:
+    """Delete a stored file, waiting a moment for whoever has it open.
+
+    On Windows a file cannot be deleted while it is open, and a mesh beside
+    a result may be being written right then by the view warmer, which runs
+    in the background after every step. A result itself is never held open
+    (it is read whole into memory), so it must go; a mesh that is still
+    held after the wait is left behind -- it is named after a result that
+    no longer exists, so nothing will ever read it again.
+    """
+    deadline = time.monotonic() + patience
+    while True:
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                if derived:
+                    return
+                raise
+            time.sleep(0.05)
+
+
 class ProjectRepository:
     """One workspace on disk, plus the shared library it draws its names from.
 
@@ -695,8 +718,9 @@ class ProjectRepository:
         if row is not None:
             found = self.on_disk(row["path"], self.snapshot_directory)
             if found:
-                for path in snapshot_files(Path(found)):
-                    path.unlink(missing_ok=True)
+                main = Path(found)
+                for path in snapshot_files(main):
+                    _remove(path, derived=path != main)
 
     # -- what the workspace holds on disk, and tidying it -------------------------
 

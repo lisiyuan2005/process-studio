@@ -132,3 +132,47 @@ def test_a_snapshot_recorded_by_absolute_path_is_adopted(tmp_path):
         )
 
     assert repository.snapshot_path("b", "s1").read_bytes() == b"a result"
+
+
+def test_a_mesh_held_open_does_not_stop_a_result_being_deleted(tmp_path, monkeypatch):
+    """Windows will not delete a file that is open, and the view warmer may
+    be writing a mesh beside a result just as a rerun replaces it. The
+    result goes; the held mesh is left, since nothing will read it again."""
+    from pathlib import Path
+
+    from process_studio import storage
+
+    result = tmp_path / "abc.dfz"
+    mesh = tmp_path / "abc.dfz.mesh-ears-free.npz"
+    result.write_bytes(b"result")
+    mesh.write_bytes(b"mesh")
+    real_unlink = Path.unlink
+
+    def held(self, missing_ok=False):
+        if self.name.endswith(".npz"):
+            raise PermissionError(32, "The process cannot access the file")
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", held)
+    for path in storage.snapshot_files(result):
+        storage._remove(path, derived=path != result, patience=0.1)
+    assert not result.exists()
+    assert mesh.exists()
+
+
+def test_a_result_held_open_is_still_an_error(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    import pytest
+
+    from process_studio import storage
+
+    result = tmp_path / "abc.dfz"
+    result.write_bytes(b"result")
+
+    def held(self, missing_ok=False):
+        raise PermissionError(32, "The process cannot access the file")
+
+    monkeypatch.setattr(Path, "unlink", held)
+    with pytest.raises(PermissionError):
+        storage._remove(result, derived=False, patience=0.1)
