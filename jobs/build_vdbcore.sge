@@ -1,0 +1,18 @@
+#!/bin/bash
+#$ -N np3d_vdbbuild
+#$ -q long
+#$ -pe smp 8
+#$ -o /users/sli52/Nowprocess3D/jobs/logs/
+#$ -j y
+set -eo pipefail
+source /software/Modules/5.6.1/init/bash
+module load conda
+cd /users/sli52/Nowprocess3D
+source activate "$PWD/.conda-vdb" 2>/dev/null || conda activate "$PWD/.conda-vdb"
+export CONDA_PREFIX=$PWD/.conda-vdb
+rm -rf cpp/vdbcore/build
+cmake -S cpp/vdbcore -B cpp/vdbcore/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPython_EXECUTABLE=$(which python)
+cmake --build cpp/vdbcore/build -j $NSLOTS
+cp cpp/vdbcore/build/_vdbcore*.so src/nowprocess3d/backends/
+python -c "from nowprocess3d.backends import _vdbcore as v; print('vdbcore OK', v.OPENVDB_VERSION)"
+echo BUILD_OK

@@ -1,0 +1,39 @@
+# B1 精度检查：沿探测线的材料界面位置（nm）的解析期望值。
+# 只计材料变化的界面（同种材料之间不算）；空列表表示该线上没有界面。
+# 探测线略偏离网格节点，避免与网格面重合导致的退化求交；偏移对期望值的影响 < 0.001 nm。
+probes:
+  wl5_x:   {axis: x, at: {y: 75.13, z: 260.07}, range: [0.3, 317.7]}   # 第 5 条字线中部，过孔中心
+  hole_z:  {axis: z, at: {x: 160.13, y: 75.07}, range: [-49, 790]}    # 孔中心竖线
+  stack_z: {axis: z, at: {x: 80.11, y: 75.07}, range: [-49, 790]}     # 狭缝与孔之间的竖线
+
+# 不计入总体误差统计的检查：孔芯中心是圆环偏移自相交形成的锥形细坑（侧壁斜率约 3.5），
+# 坑底在任何网格上都不可分辨，测量值随网格不收敛，单独报告
+exclude_from_stats: [[s08_core, hole_z]]
+
+_layers: &layers [0, 25, 55, 80, 110, 135, 165, 190, 220, 245, 275, 300, 330, 355, 385, 410, 440, 465, 495, 520, 550]
+_ring: &ring [110, 116, 122, 127, 193, 198, 204, 210]
+_ring_ch: &ring_ch [110, 116, 122, 127, 135, 185, 193, 198, 204, 210]
+
+expect:
+  s01_substrate:   {hole_z: [0], stack_z: [0]}
+  s02_on_stack:    {hole_z: [*layers, 575], stack_z: [*layers, 575]}
+  s03_cap:         {hole_z: [*layers, 625], stack_z: [*layers, 625]}
+  s04_hole_etch:   {wl5_x: [110, 210], hole_z: [-20], stack_z: [*layers, 625]}
+  s05a_block_ox:   {wl5_x: [110, 116, 204, 210], hole_z: [-20, -14], stack_z: [*layers, 631]}
+  s05b_ctl:        {wl5_x: [110, 116, 122, 198, 204, 210], hole_z: [-20, -14, -8], stack_z: [*layers, 631, 637]}
+  s05c_tunnel_ox:  {wl5_x: *ring, hole_z: [-20, -14, -8, -3], stack_z: [*layers, 631, 637, 642]}
+  s06_punch:       {wl5_x: *ring, hole_z: [-25], stack_z: [*layers, 620]}
+  s07_channel:     {wl5_x: *ring_ch, hole_z: [-25, -17], stack_z: [*layers, 620, 628]}
+  # 孔口被 ONO 磨圆（圆心 r=50, z=625, 半径 17），打底下移 22 → 圆心 z=603；沟道后半径 25，孔芯后半径 52
+  # 孔中心顶面 = 603 + √(52² − 50²) = 617.28
+  s08_core:        {wl5_x: *ring_ch, hole_z: [-25, -17, 617.28], stack_z: [*layers, 620, 628, 655]}
+  s09_cmp:         {wl5_x: *ring_ch, hole_z: [-25, -17, 615], stack_z: [*layers, 615]}
+  s09b_cap2:       {wl5_x: *ring_ch, hole_z: [-25, -17, 645], stack_z: [*layers, 645]}
+  s10_slit_etch:   {wl5_x: [40, *ring_ch, 280], hole_z: [-25, -17, 645], stack_z: [*layers, 645]}
+  s11_sin_removal: {wl5_x: *ring_ch, hole_z: [-25, -17, 645], stack_z: [*layers, 645]}
+  # 字线高度处狭缝“墙”是空腔口：最近的固体是氧化物边角 (40, 245) 与 (40, 275)
+  # W 表面 = 40 − √(18² − 15²) = 30.05；回刻 25 后 = 55.05（从尖点沿 x 推进）
+  s12_w_fill:      {wl5_x: [30.05, *ring_ch, 289.95], hole_z: [-25, -17, 645, 663], stack_z: [*layers, 645, 663]}
+  s13_w_recess:    {wl5_x: [55.05, *ring_ch, 264.95], hole_z: [-25, -17, 645], stack_z: [*layers, 645]}
+  s14a_slit_fill:  {wl5_x: [55.05, *ring_ch, 264.95], hole_z: [-25, -17, 691], stack_z: [*layers, 691]}
+  s14b_cmp:        {wl5_x: [55.05, *ring_ch, 264.95], hole_z: [-25, -17, 645], stack_z: [*layers, 645]}

@@ -1,0 +1,23 @@
+#!/bin/bash
+#$ -N np3d_setup
+#$ -q long
+#$ -pe smp 4
+#$ -o /users/sli52/Nowprocess3D/jobs/logs/
+#$ -j y
+set -euo pipefail
+source /software/Modules/5.6.1/init/bash
+module load python/3.12.15
+cd /users/sli52/Nowprocess3D
+[ -d .venv ] || python3 -m venv .venv
+source .venv/bin/activate
+pip install -q --upgrade pip
+pip install -q ViennaPS==4.7.0 numpy pyyaml scikit-image trimesh psutil matplotlib
+python - <<'PY'
+import viennaps, viennals, sys
+print("python", sys.version)
+print("viennaps", getattr(viennaps, "__version__", "?"), viennaps.__file__)
+print("viennals", getattr(viennals, "__version__", "?"))
+PY
+python jobs/dump_api.py > jobs/logs/viennaps_api.txt 2>&1 || true
+pip freeze > jobs/logs/pip_freeze.txt
+echo SETUP_OK

@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nowprocess3d"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = ["numpy", "pyyaml", "scikit-image", "trimesh", "psutil", "matplotlib"]
+
+[project.optional-dependencies]
+viennaps = ["ViennaPS==4.7.0"]
+
+[project.scripts]
+process3d = "nowprocess3d.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

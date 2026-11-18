@@ -1,0 +1,13 @@
+# 环境与依赖（由 jobs/setup_*.sge 重建）
+.venv/
+.conda-vdb/
+third_party/
+# 编译产物（由 jobs/build_*.sge 重建）
+cpp/*/build/
+src/nowprocess3d/backends/*.so
+__pycache__/
+*.egg-info/
+# 运行结果与网页包（体积大，可由配方重新生成）
+runs/
+site/
+jobs/logs/

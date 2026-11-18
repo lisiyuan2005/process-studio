@@ -1,0 +1,106 @@
+# 基准 B1：10 条字线 3D NAND 单元格（几何版），对应 Decisions.md
+format: nowprocess3d.recipe/0.1
+name: nand10_b1
+units: nm
+
+domain:
+  x: [0, 320]
+  y: [0, 150]
+  boundary: periodic      # 版图在 x 方向对称（两侧各半条狭缝），周期边界与反射边界等价
+  z_top: 800              # 输出与截面的 z 上限
+
+outputs:
+  sections:
+    y: 75                 # xz 截面过孔中心
+    z: [260, -10]         # 第 5 条字线中心（245–275）、衬底内孔底
+
+materials:
+  Si:     {color: "#8c8c8c"}
+  SiO2:   {color: "#7fb3e6", opacity: 0.35}
+  SiN:    {color: "#4caf50"}
+  PolySi: {color: "#e6a23c"}
+  W:      {color: "#b0413e"}
+
+initial:
+  substrate: {material: Si, thickness: 50}
+
+steps:
+  - id: s02_on_stack
+    op: deposit_stack
+    layers: [{SiO2: 25}, {SiN: 30}]
+    repeat: 10
+    cap: {SiO2: 25}
+
+  - id: s03_cap
+    op: deposit_planar
+    material: SiO2
+    thickness: 50
+
+  - id: s04_hole_etch
+    op: etch_masked
+    mask: {shape: circle, center: [160, 75], radius: 50}
+    depth: 645            # 625 + 20，刻入 Si 20
+
+  - id: s05a_block_ox
+    op: deposit_conformal
+    material: SiO2
+    thickness: 6
+  - id: s05b_ctl
+    op: deposit_conformal
+    material: SiN
+    thickness: 6
+  - id: s05c_tunnel_ox
+    op: deposit_conformal
+    material: SiO2
+    thickness: 5
+
+  - id: s06_punch
+    op: etch_directional
+    thickness: 22         # 17 nm ONO + 5 nm 过刻
+
+  - id: s07_channel
+    op: deposit_conformal
+    material: PolySi
+    thickness: 8
+
+  - id: s08_core
+    op: deposit_conformal
+    material: SiO2
+    thickness: 27         # ≥ 25 封孔
+
+  - id: s09_cmp
+    op: cmp
+    z: 615
+
+  - id: s09b_cap2           # 保护孔顶，否则湿法去 SiN 会从顶部吃掉俘获层
+    op: deposit_planar
+    material: SiO2
+    thickness: 30           # 顶面 z = 645
+
+  - id: s10_slit_etch
+    op: etch_masked
+    mask: {shape: rect, x: [-40, 40], y: [0, 150]}   # 跨 x 周期边界，两侧各 40
+    to_z: 0
+
+  - id: s11_sin_removal
+    op: etch_isotropic
+    materials: [SiN]
+    thickness: 130          # 需 ≥ 120：狭缝边(40)到单元中线(160)，孔与孔之间的 SiN 也要去净
+
+  - id: s12_w_fill
+    op: deposit_conformal
+    material: W
+    thickness: 18
+
+  - id: s13_w_recess
+    op: etch_isotropic
+    materials: [W]
+    thickness: 25
+
+  - id: s14a_slit_fill
+    op: deposit_conformal
+    material: SiO2
+    thickness: 46           # 狭缝中心到字线高度处氧化物边角距离 √(40²+15²)=42.7，需 > 42.7 才无空洞
+  - id: s14b_cmp
+    op: cmp
+    z: 645

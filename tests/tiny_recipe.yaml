@@ -1,0 +1,20 @@
+# 极小配方：登录节点上几秒内跑完，用于检查整条链路
+format: nowprocess3d.recipe/0.1
+name: tiny
+units: nm
+domain: {x: [0, 40], y: [0, 20], boundary: periodic, z_top: 80}
+outputs: {sections: {y: 10, z: [15]}}
+materials:
+  Si:   {color: "#8c8c8c"}
+  SiO2: {color: "#7fb3e6", opacity: 0.35}
+  SiN:  {color: "#4caf50"}
+  W:    {color: "#b0413e"}
+initial: {substrate: {material: Si, thickness: 10}}
+steps:
+  - {id: stack, op: deposit_stack, layers: [{SiO2: 6}, {SiN: 8}], repeat: 2, cap: {SiO2: 6}}
+  - {id: hole, op: etch_masked, mask: {shape: circle, center: [20, 10], radius: 6}, depth: 40}
+  - {id: slit, op: etch_masked, mask: {shape: rect, x: [-4, 4], y: [0, 20]}, to_z: 0}
+  - {id: sin_rm, op: etch_isotropic, materials: [SiN], thickness: 6}
+  - {id: w, op: deposit_conformal, material: W, thickness: 4}
+  - {id: punch, op: etch_directional, thickness: 4}
+  - {id: cmp, op: cmp, z: 30}

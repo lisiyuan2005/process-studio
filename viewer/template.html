@@ -1,0 +1,296 @@
+<title>B1 NAND 单元工艺步进</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600&display=swap">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<style>
+/* 布局：单列，3D 视图在上，步骤控制紧随其后，截面与性能表在下；宽屏时左右两栏 */
+:root {
+  --bg: #f3f5f7;
+  --panel: #ffffff;
+  --fg: #1b2430;
+  --muted: #5d6b7a;
+  --line: #d9dfe6;
+  --accent: #1f6f8b;
+  --accent-soft: #dcecf2;
+  --stage: #e6ebf0;
+  --warn: #a5402d;
+  --font-head: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11161c; --panel: #182029; --fg: #e3e9ef; --muted: #93a1b0; --line: #2a3542;
+    --accent: #5fb4cf; --accent-soft: #1d3440; --stage: #0c1116; --warn: #e07a62; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11161c; --panel: #182029; --fg: #e3e9ef; --muted: #93a1b0; --line: #2a3542;
+  --accent: #5fb4cf; --accent-soft: #1d3440; --stage: #0c1116; --warn: #e07a62; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 16px 40px;
+}
+.wrap { max-width: 1180px; margin: 0 auto; display: grid; gap: 16px; }
+header { display: grid; gap: 4px; }
+h1 { font-family: var(--font-head); font-weight: 600; font-size: 1.6rem; margin: 0; text-wrap: balance; letter-spacing: 0.01em; }
+.meta { color: var(--muted); font-size: 0.85rem; display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.meta b { color: var(--fg); font-weight: 500; font-family: var(--font-mono); font-size: 0.82rem; }
+.cols { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 960px) { .cols { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); align-items: start; } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: grid; gap: 12px; min-width: 0; }
+.stage { position: relative; border-radius: 8px; overflow: hidden; background: var(--stage); }
+#view { width: 100%; height: min(62vh, 560px); min-height: 320px; background: var(--stage); touch-action: none; display: block; }
+#view canvas { display: block; width: 100% !important; height: 100% !important; }
+.stage-tag { position: absolute; left: 10px; top: 10px; font-family: var(--font-mono); font-size: 0.78rem; background: var(--panel); color: var(--fg); border: 1px solid var(--line); padding: 2px 8px; border-radius: 4px; }
+.loading { position: absolute; right: 10px; top: 10px; font-size: 0.78rem; color: var(--muted); background: var(--panel); padding: 2px 8px; border-radius: 4px; }
+.loaderr { position: absolute; left: 10px; right: 10px; bottom: 10px; font-size: 0.8rem; color: var(--warn); background: var(--panel); border: 1px solid var(--line); padding: 6px 10px; border-radius: 6px; }
+.hint { position: absolute; right: 10px; bottom: 10px; font-size: 0.72rem; color: var(--muted); }
+.stepper { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+button { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button:focus-visible, input:focus-visible, tr:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+.stepinfo { display: grid; gap: 4px; }
+.stepinfo .name { font-family: var(--font-head); font-size: 1.15rem; font-weight: 600; }
+.stepinfo .op { font-family: var(--font-mono); font-size: 0.8rem; color: var(--accent); }
+.params { font-family: var(--font-mono); font-size: 0.78rem; color: var(--muted); overflow-wrap: anywhere; }
+.err { color: var(--warn); font-size: 0.85rem; }
+.label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+.mats { display: flex; flex-wrap: wrap; gap: 8px; }
+.mat { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px 4px 6px; cursor: pointer; user-select: none; font-size: 0.85rem; }
+.mat input { position: absolute; opacity: 0; pointer-events: none; }
+.mat .sw { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--line); }
+.mat .vol { font-family: var(--font-mono); font-size: 0.75rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.mat.off { opacity: 0.45; }
+.mat.off .sw { background: transparent !important; }
+.mat:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.section img { width: 100%; border-radius: 6px; background: #fff; display: block; }
+.tablebox { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+th, td { padding: 5px 8px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line); }
+th { font-weight: 600; color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; position: sticky; top: 0; background: var(--panel); }
+td.l, th.l { text-align: left; }
+td.id { font-family: var(--font-mono); }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: var(--accent-soft); }
+tbody tr.cur { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.bar { display: inline-block; height: 6px; border-radius: 3px; background: var(--accent); vertical-align: middle; margin-left: 6px; opacity: 0.75; }
+.foot { color: var(--muted); font-size: 0.78rem; }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1 id="title">B1 · 10 层 3D NAND 单元</h1>
+    <div class="meta" id="meta"></div>
+  </header>
+
+  <div class="cols">
+    <section class="panel">
+      <div class="stage">
+        <div id="view" role="img" aria-label="当前工艺步骤的 3D 结构"></div>
+        <span class="stage-tag" id="stageTag"></span>
+        <span class="loading" id="loading" hidden>加载中…</span>
+        <span class="hint">单指旋转 · 双指缩放/平移</span>
+        <div class="loaderr" id="loadErr" hidden></div>
+      </div>
+      <div class="stepper">
+        <button id="prev" aria-label="上一步">‹</button>
+        <input type="range" id="slider" min="0" max="0" value="0" aria-label="工艺步骤">
+        <button id="next" aria-label="下一步">›</button>
+      </div>
+      <div class="stepinfo">
+        <div class="name" id="stepName"></div>
+        <div class="op" id="stepOp"></div>
+        <div class="params" id="stepParams"></div>
+        <div class="err" id="stepErr" hidden></div>
+      </div>
+      <div class="label">材料（点击显示/隐藏；数值为本步体积，10⁶ nm³）</div>
+      <div class="mats" id="mats"></div>
+    </section>
+
+    <section class="panel section">
+      <div class="label">截面（体素）</div>
+      <img id="secImg" alt="当前步骤的 xz 与 xy 截面">
+      <div class="label">每步性能（计算节点）</div>
+      <div class="tablebox">
+        <table>
+          <thead><tr>
+            <th>#</th><th class="l">步骤</th><th>计算 s</th><th>CPU s</th><th>体素化 s</th><th>导出 s</th><th>计算峰值 MB</th><th>网格数</th><th>窄带点数</th>
+          </tr></thead>
+          <tbody id="perfBody"></tbody>
+        </table>
+      </div>
+      <div class="foot" id="foot"></div>
+    </section>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+
+const DATA = /*__DATA__*/null;
+const $ = (id) => document.getElementById(id);
+const steps = DATA.steps;
+const matNames = Object.keys(DATA.materials);
+const hidden = new Set();
+try { JSON.parse(localStorage.getItem("np3d-hidden") || "[]").forEach((m) => hidden.add(m)); } catch (e) {}
+let cur = steps.length - 1;
+try { const s = parseInt(localStorage.getItem("np3d-step"), 10); if (s >= 0 && s < steps.length) cur = s; } catch (e) {}
+
+const fmt = (v, d = 2) => (v == null || Number.isNaN(v)) ? "–" : Number(v).toFixed(d);
+const fmtInt = (v) => v == null ? "–" : Number(v).toLocaleString("en-US");
+
+$("meta").innerHTML = [
+  ["后端", `${DATA.backend} ${Object.values(DATA.backend_version || {})[0] ?? ""}`],
+  ["网格", `${DATA.grid} nm`],
+  ["区域", `${DATA.domain.x[1] - DATA.domain.x[0]} × ${DATA.domain.y[1] - DATA.domain.y[0]} nm`],
+  ["节点", `${DATA.host.hostname?.split(".")[0]} · ${DATA.host.nslots} 核`],
+  ["总耗时", `${fmt(DATA.total_s, 1)} s`],
+].map(([k, v]) => `<span>${k} <b>${v}</b></span>`).join("");
+
+const maxCompute = Math.max(...steps.map((s) => s.compute_s || 0));
+$("perfBody").innerHTML = steps.map((s, i) => `
+  <tr data-i="${i}" tabindex="0">
+    <td>${s.n}</td>
+    <td class="l id">${s.id}${s.error ? " ⚠" : ""}</td>
+    <td>${fmt(s.compute_s)}<span class="bar" style="width:${Math.max(1, 48 * (s.compute_s || 0) / maxCompute)}px"></span></td>
+    <td>${fmt(s.cpu_s, 1)}</td><td>${fmt(s.voxel_s)}</td><td>${fmt(s.export_s)}</td>
+    <td>${fmt(s.peak_mb, 0)}</td><td>${s.n_ls ?? "–"}</td><td>${fmtInt(s.n_pts)}</td>
+  </tr>`).join("");
+$("foot").textContent = `计算 = 后端工艺步骤本身；体素化 = level set → 材料体素；导出 = 截面图（GLB 另行导出）；计算峰值 = 该步计算阶段内的内存峰值。网格数：ViennaPS 为包裹 level set 层数，OpenVDB 为材料网格数。启动时导入绘图库 ${fmt(DATA.startup_s, 1)} s 未计入。`;
+$("perfBody").addEventListener("click", (e) => { const tr = e.target.closest("tr"); if (tr) go(+tr.dataset.i); });
+$("perfBody").addEventListener("keydown", (e) => { if (e.key === "Enter") { const tr = e.target.closest("tr"); if (tr) go(+tr.dataset.i); } });
+
+function renderMats() {
+  const vols = steps[cur].volumes || {};
+  $("mats").innerHTML = matNames.map((m) => {
+    const c = DATA.materials[m].color;
+    const v = vols[m] ? (vols[m] / 1e6).toFixed(2) : "0";
+    return `<label class="mat ${hidden.has(m) ? "off" : ""}">
+      <input type="checkbox" id="mat-${m}" ${hidden.has(m) ? "" : "checked"} data-m="${m}">
+      <span class="sw" style="background:${c}"></span>${m}<span class="vol">${v}</span></label>`;
+  }).join("");
+}
+$("mats").addEventListener("change", (e) => {
+  const m = e.target.dataset.m; if (!m) return;
+  e.target.checked ? hidden.delete(m) : hidden.add(m);
+  try { localStorage.setItem("np3d-hidden", JSON.stringify([...hidden])); } catch (err) {}
+  renderMats(); applyVisibility();
+});
+
+// ---------- three.js 场景 ----------
+const view = $("view");
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+view.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 0.6));
+const sun = new THREE.DirectionalLight(0xffffff, 1.2); sun.position.set(3, 5, 4); scene.add(sun);
+const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+let framed = false, current = null;
+const loader = new GLTFLoader();
+const cache = new Map();           // 最近 4 步的解析结果
+
+function resize() {
+  const w = view.clientWidth, h = view.clientHeight;
+  renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(view); resize();
+(function loop() { controls.update(); renderer.render(scene, camera); requestAnimationFrame(loop); })();
+
+function frame(obj) {
+  const box = new THREE.Box3().setFromObject(obj), c = box.getCenter(new THREE.Vector3());
+  const r = box.getSize(new THREE.Vector3()).length() / 2;
+  controls.target.copy(c);
+  const d = r / Math.sin((camera.fov * Math.PI) / 360) * 1.05;
+  camera.position.copy(c).add(new THREE.Vector3(-0.55, 0.45, 0.75).normalize().multiplyScalar(d));
+  camera.near = d / 100; camera.far = d * 10; camera.updateProjectionMatrix();
+}
+
+function b64ToBuffer(text) {
+  const bin = atob(text.trim()), out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out.buffer;
+}
+
+async function loadModel(url) {
+  if (cache.has(url)) return cache.get(url);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`读取 ${url} 失败：HTTP ${res.status}`);
+  const buf = b64ToBuffer(await res.text());
+  const gltf = await new Promise((ok, bad) => loader.parse(buf, "", ok, bad));
+  gltf.scene.traverse((o) => {
+    if (o.isMesh && o.material.transparent) { o.material.depthWrite = false; o.renderOrder = 1; }
+  });
+  cache.set(url, gltf.scene);
+  if (cache.size > 4) cache.delete(cache.keys().next().value);
+  return gltf.scene;
+}
+
+function applyVisibility() {
+  if (!current) return;
+  current.traverse((o) => { if (o.isMesh) o.visible = !hidden.has(o.material.name); });
+}
+
+let want = null;
+async function show(url) {
+  want = url;
+  $("loading").hidden = false; $("loadErr").hidden = true;
+  try {
+    const obj = await loadModel(url);
+    if (want !== url) return;                 // 期间又切换了步骤
+    if (current) scene.remove(current);
+    current = obj; scene.add(obj); applyVisibility();
+    if (!framed) { frame(obj); framed = true; }
+  } catch (err) {
+    $("loadErr").textContent = `3D 模型加载失败：${err.message || err}`;
+    $("loadErr").hidden = false;
+  } finally {
+    if (want === url) $("loading").hidden = true;
+  }
+}
+
+function go(i) {
+  cur = Math.max(0, Math.min(steps.length - 1, i));
+  try { localStorage.setItem("np3d-step", String(cur)); } catch (e) {}
+  const s = steps[cur];
+  $("slider").value = cur;
+  $("stageTag").textContent = `${s.n}/${steps[steps.length - 1].n}`;
+  $("stepName").textContent = `${s.n}. ${s.id}`;
+  $("stepOp").textContent = s.op;
+  $("stepParams").textContent = JSON.stringify(s.params);
+  $("stepErr").hidden = !s.error; $("stepErr").textContent = s.error || "";
+  if (s.glb) show(s.glb);
+  if (s.png) $("secImg").src = s.png;
+  document.querySelectorAll("#perfBody tr").forEach((tr) => tr.classList.toggle("cur", +tr.dataset.i === cur));
+  renderMats();
+}
+$("slider").max = steps.length - 1;
+$("slider").addEventListener("input", (e) => go(+e.target.value));
+$("prev").addEventListener("click", () => go(cur - 1));
+$("next").addEventListener("click", () => go(cur + 1));
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT") return;
+  if (e.key === "ArrowLeft") go(cur - 1);
+  if (e.key === "ArrowRight") go(cur + 1);
+});
+go(cur);
+</script>

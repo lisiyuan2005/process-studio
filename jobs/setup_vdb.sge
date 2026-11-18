@@ -1,0 +1,29 @@
+#!/bin/bash
+#$ -N np3d_vdbenv
+#$ -q long
+#$ -pe smp 4
+#$ -o /users/sli52/Nowprocess3D/jobs/logs/
+#$ -j y
+set -eo pipefail
+source /software/Modules/5.6.1/init/bash
+module load conda
+cd /users/sli52/Nowprocess3D
+ENV=$PWD/.conda-vdb
+[ -d "$ENV" ] || conda create -y -p "$ENV" -c conda-forge --override-channels \
+  python=3.12 openvdb=14.0.0 numpy scipy scikit-image trimesh pyyaml psutil matplotlib \
+  cxx-compiler cmake ninja nanobind tbb-devel
+source activate "$ENV" 2>/dev/null || conda activate "$ENV"
+pip install -q fast-simplification scikit-fmm
+pip install -q -e .
+python - <<'PY'
+import openvdb as vdb, sys
+print("openvdb", vdb.__version__ if hasattr(vdb, "__version__") else vdb.LIBRARY_VERSION, vdb.__file__)
+names = [n for n in dir(vdb) if not n.startswith("_")]
+print("TOP", names)
+for sub in ("tools", "math"):
+    if hasattr(vdb, sub):
+        print(sub.upper(), [n for n in dir(getattr(vdb, sub)) if not n.startswith("_")])
+print("FloatGrid", [n for n in dir(vdb.FloatGrid) if not n.startswith("_")])
+PY
+ls $ENV/include/openvdb | head -5; ls $ENV/lib | grep -i openvdb
+echo VDB_SETUP_OK

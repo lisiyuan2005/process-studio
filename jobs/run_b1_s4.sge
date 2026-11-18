@@ -1,0 +1,23 @@
+#!/bin/bash
+# 用法：qsub -v BACKEND=viennaps,GRID=2,GLB=all jobs/run_b1.sge
+#   BACKEND = viennaps（.venv）| openvdb（.conda-vdb）
+#$ -N np3d_b1
+#$ -q long
+#$ -pe smp 4
+#$ -o /users/sli52/Nowprocess3D/jobs/logs/
+#$ -j y
+set -eo pipefail
+source /software/Modules/5.6.1/init/bash
+cd /users/sli52/Nowprocess3D
+BACKEND=${BACKEND:-viennaps}; GRID=${GRID:-2}; GLB=${GLB:-all}
+if [ "$BACKEND" = openvdb ]; then
+  module load conda; source activate "$PWD/.conda-vdb" 2>/dev/null || conda activate "$PWD/.conda-vdb"
+else
+  module load python/3.12.15; source .venv/bin/activate
+fi
+export OMP_NUM_THREADS=$NSLOTS TBB_NUM_THREADS=$NSLOTS
+OUT=runs/b1_${BACKEND}_g${GRID}_${JOB_ID}
+/usr/bin/time -v process3d run examples/nand10/recipe.yaml --out "$OUT" --grid "$GRID" \
+  --backend "$BACKEND" --glb "$GLB" --checks examples/nand10/checks.yaml \
+  2> >(grep -vE "Process time|WARNING|^.\[0m$" > "jobs/logs/time_${JOB_ID}.txt")
+echo "RUN_DIR=$OUT"

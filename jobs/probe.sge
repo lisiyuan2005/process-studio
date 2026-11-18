@@ -1,0 +1,12 @@
+#!/bin/bash
+#$ -N np3d_probe
+#$ -q long
+#$ -pe smp 4
+#$ -o /users/sli52/Nowprocess3D/jobs/logs/
+#$ -j y
+source /software/Modules/5.6.1/init/bash
+module load python/3.12.15
+cd /users/sli52/Nowprocess3D
+source .venv/bin/activate
+export OMP_NUM_THREADS=$NSLOTS
+python jobs/probe_viennaps.py

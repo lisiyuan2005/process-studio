@@ -1,0 +1,335 @@
+{
+  "runs": [
+    {
+      "name": "viennaps@1nm",
+      "dir": "runs/b1_viennaps_g1_1758616",
+      "compute_s": 1723.57,
+      "compute_cpu_s": 12323.5,
+      "voxelize_s": 2017.15,
+      "save_state_s": 34.63,
+      "export_s": 10.16,
+      "checks_s": 299.93,
+      "peak_compute_mb": 2468.3,
+      "peak_voxelize_mb": 16428.8,
+      "peak_process_mb": 19834.4,
+      "checks_n": 606,
+      "checks_matched": 603,
+      "checks_missing": 0,
+      "checks_extra": 0,
+      "check_max_abs_err": 2.048,
+      "check_rms_err": 0.255,
+      "excluded_checks_max_err": {
+        "s08_core.hole_z": 0.281
+      }
+    },
+    {
+      "name": "openvdb@1nm",
+      "dir": "runs/b1_openvdb_g1_1758638",
+      "compute_s": 140.23,
+      "compute_cpu_s": 551.6,
+      "voxelize_s": 23.53,
+      "save_state_s": 12.15,
+      "export_s": 9.24,
+      "checks_s": 87.85,
+      "peak_compute_mb": 2218.1,
+      "peak_voxelize_mb": 2287.8,
+      "peak_process_mb": 2806.4,
+      "checks_n": 606,
+      "checks_matched": 603,
+      "checks_missing": 0,
+      "checks_extra": 0,
+      "check_max_abs_err": 0.13,
+      "check_rms_err": 0.01,
+      "excluded_checks_max_err": {
+        "s08_core.hole_z": 1.802
+      }
+    },
+    {
+      "name": "viennaps@2nm",
+      "dir": "runs/b1_viennaps_g2_1758468",
+      "compute_s": 263.89,
+      "compute_cpu_s": 2045.9,
+      "voxelize_s": 195.93,
+      "save_state_s": 22.21,
+      "export_s": 6.26,
+      "checks_s": 71.66,
+      "peak_compute_mb": 619.1,
+      "peak_voxelize_mb": 2318.2,
+      "peak_process_mb": 2721.6,
+      "checks_n": 606,
+      "checks_matched": 595,
+      "checks_missing": 8,
+      "checks_extra": 8,
+      "check_max_abs_err": 0.818,
+      "check_rms_err": 0.174,
+      "excluded_checks_max_err": {
+        "s08_core.hole_z": 0.687
+      }
+    },
+    {
+      "name": "openvdb@2nm",
+      "dir": "runs/b1_openvdb_g2_1758637",
+      "compute_s": 29.93,
+      "compute_cpu_s": 128.5,
+      "voxelize_s": 5.5,
+      "save_state_s": 3.2,
+      "export_s": 4.88,
+      "checks_s": 22.95,
+      "peak_compute_mb": 581.2,
+      "peak_voxelize_mb": 596.5,
+      "peak_process_mb": 697.2,
+      "checks_n": 606,
+      "checks_matched": 603,
+      "checks_missing": 0,
+      "checks_extra": 0,
+      "check_max_abs_err": 0.759,
+      "check_rms_err": 0.081,
+      "excluded_checks_max_err": {
+        "s08_core.hole_z": 1.354
+      }
+    }
+  ],
+  "ref": "viennaps@1nm",
+  "agreement": {
+    "openvdb@1nm": {
+      "s01_substrate": {
+        "disagree_voxels": 0,
+        "disagree_frac_of_solid": 0.0,
+        "iou": {
+          "Si": 1.0,
+          "SiO2": null,
+          "SiN": null,
+          "PolySi": null,
+          "W": null
+        }
+      },
+      "s02_on_stack": {
+        "disagree_voxels": 0,
+        "disagree_frac_of_solid": 0.0,
+        "iou": {
+          "Si": 1.0,
+          "SiO2": 1.0,
+          "SiN": 1.0,
+          "PolySi": null,
+          "W": null
+        }
+      },
+      "s03_cap": {
+        "disagree_voxels": 0,
+        "disagree_frac_of_solid": 0.0,
+        "iou": {
+          "Si": 1.0,
+          "SiO2": 1.0,
+          "SiN": 1.0,
+          "PolySi": null,
+          "W": null
+        }
+      },
+      "s04_hole_etch": {
+        "disagree_voxels": 3568,
+        "disagree_frac_of_solid": 0.00013,
+        "iou": {
+          "Si": 0.9999,
+          "SiO2": 0.9997,
+          "SiN": 0.9997,
+          "PolySi": null,
+          "W": null
+        }
+      },
+      "s05a_block_ox": {
+        "disagree_voxels": 15214,
+        "disagree_frac_of_solid": 0.00053,
+        "iou": {
+          "Si": 0.9999,
+          "SiO2": 0.9989,
+          "SiN": 0.9997,
+          "PolySi": null,
+          "W": null
+        }
+      },
+      "s05b_ctl": {
+        "disagree_voxels": 31045,
+        "disagree_frac_of_solid": 0.00104,
+        "iou": {
+          "Si": 0.9999,
+          "SiO2": 0.9989,
+          "SiN": 0.9977,
+          "PolySi": null,
+          "W": null
+        }
+      },
+      "s05c_tunnel_ox": {
+        "disagree_voxels": 55067,
+        "disagree_frac_of_solid": 0.00179,
+        "iou": {
+          "Si": 0.9999,
+          "SiO2": 0.9964,
+          "SiN": 0.9977,
+          "PolySi": null,
+          "W": null
+        }
+      },
+      "s06_punch": {
+        "disagree_voxels": 52770,
+        "disagree_frac_of_solid": 0.00178,
+        "iou": {
+          "Si": 0.9993,
+          "SiO2": 0.9966,
+          "SiN": 0.9978,
+          "PolySi": null,
+          "W": null
+        }
+      },
+      "s07_channel": {
+        "disagree_voxels": 82990,
+        "disagree_frac_of_solid": 0.00268,
+        "iou": {
+          "Si": 0.9993,
+          "SiO2": 0.9966,
+          "SiN": 0.9978,
+          "PolySi": 0.9581,
+          "W": null
+        }
+      },
+      "s08_core": {
+        "disagree_voxels": 88094,
+        "disagree_frac_of_solid": 0.00263,
+        "iou": {
+          "Si": 0.9993,
+          "SiO2": 0.995,
+          "SiN": 0.9978,
+          "PolySi": 0.958,
+          "W": null
+        }
+      },
+      "s09_cmp": {
+        "disagree_voxels": 77285,
+        "disagree_frac_of_solid": 0.00245,
+        "iou": {
+          "Si": 0.9993,
+          "SiO2": 0.9952,
+          "SiN": 0.9979,
+          "PolySi": 0.9487,
+          "W": null
+        }
+      },
+      "s09b_cap2": {
+        "disagree_voxels": 77285,
+        "disagree_frac_of_solid": 0.00234,
+        "iou": {
+          "Si": 0.9993,
+          "SiO2": 0.9956,
+          "SiN": 0.9979,
+          "PolySi": 0.9487,
+          "W": null
+        }
+      },
+      "s10_slit_etch": {
+        "disagree_voxels": 77285,
+        "disagree_frac_of_solid": 0.00304,
+        "iou": {
+          "Si": 0.9993,
+          "SiO2": 0.9942,
+          "SiN": 0.9971,
+          "PolySi": 0.9487,
+          "W": null
+        }
+      },
+      "s11_sin_removal": {
+        "disagree_voxels": 99895,
+        "disagree_frac_of_solid": 0.00584,
+        "iou": {
+          "Si": 0.9993,
+          "SiO2": 0.9925,
+          "SiN": 0.9744,
+          "PolySi": 0.9487,
+          "W": null
+        }
+      },
+      "s12_w_fill": {
+        "disagree_voxels": 169925,
+        "disagree_frac_of_solid": 0.00576,
+        "iou": {
+          "Si": 0.9993,
+          "SiO2": 0.9925,
+          "SiN": 0.9744,
+          "PolySi": 0.9487,
+          "W": 0.9924
+        }
+      },
+      "s13_w_recess": {
+        "disagree_voxels": 234313,
+        "disagree_frac_of_solid": 0.00967,
+        "iou": {
+          "Si": 0.9993,
+          "SiO2": 0.9925,
+          "SiN": 0.9744,
+          "PolySi": 0.9487,
+          "W": 0.9778
+        }
+      },
+      "s14a_slit_fill": {
+        "disagree_voxels": 248617,
+        "disagree_frac_of_solid": 0.00708,
+        "iou": {
+          "Si": 0.9993,
+          "SiO2": 0.9897,
+          "SiN": 0.9744,
+          "PolySi": 0.9487,
+          "W": 0.9778
+        }
+      },
+      "s14b_cmp": {
+        "disagree_voxels": 234313,
+        "disagree_frac_of_solid": 0.00709,
+        "iou": {
+          "Si": 0.9993,
+          "SiO2": 0.9894,
+          "SiN": 0.9744,
+          "PolySi": 0.9487,
+          "W": 0.9778
+        }
+      }
+    },
+    "viennaps@2nm": {
+      "s01_substrate": null,
+      "s02_on_stack": null,
+      "s03_cap": null,
+      "s04_hole_etch": null,
+      "s05a_block_ox": null,
+      "s05b_ctl": null,
+      "s05c_tunnel_ox": null,
+      "s06_punch": null,
+      "s07_channel": null,
+      "s08_core": null,
+      "s09_cmp": null,
+      "s09b_cap2": null,
+      "s10_slit_etch": null,
+      "s11_sin_removal": null,
+      "s12_w_fill": null,
+      "s13_w_recess": null,
+      "s14a_slit_fill": null,
+      "s14b_cmp": null
+    },
+    "openvdb@2nm": {
+      "s01_substrate": null,
+      "s02_on_stack": null,
+      "s03_cap": null,
+      "s04_hole_etch": null,
+      "s05a_block_ox": null,
+      "s05b_ctl": null,
+      "s05c_tunnel_ox": null,
+      "s06_punch": null,
+      "s07_channel": null,
+      "s08_core": null,
+      "s09_cmp": null,
+      "s09b_cap2": null,
+      "s10_slit_etch": null,
+      "s11_sin_removal": null,
+      "s12_w_fill": null,
+      "s13_w_recess": null,
+      "s14a_slit_fill": null,
+      "s14b_cmp": null
+    }
+  }
+}

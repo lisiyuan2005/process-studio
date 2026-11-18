@@ -1,0 +1,15 @@
+#!/bin/bash
+# 用法：qsub -v RUN=runs/<run> jobs/export_glb.sge
+#$ -N np3d_glb
+#$ -q long
+#$ -pe smp 4
+#$ -o /users/sli52/Nowprocess3D/jobs/logs/
+#$ -j y
+set -eo pipefail
+source /software/Modules/5.6.1/init/bash
+module load conda
+cd /users/sli52/Nowprocess3D
+source activate "$PWD/.conda-vdb" 2>/dev/null || conda activate "$PWD/.conda-vdb"
+export OMP_NUM_THREADS=$NSLOTS
+python tools/export_glb.py "$RUN"
+echo GLB_OK
