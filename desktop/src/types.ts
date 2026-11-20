@@ -162,10 +162,12 @@ export interface ProjectSummary {
   grid: GridDefinition;
   gdsPath: string | null;
   activeBranchId: string | null;
-  /** Fixed when the project was created; the worker refuses to change it. */
+  /** The kernel the flow runs on now; switched like the film model, each keeping its results. */
   kernel: string;
-  /** Length a gridless kernel resolves geometry at, in micrometres. */
+  /** The slab kernel's resolution (its walk step), in micrometres. */
   resolutionUm: number | null;
+  /** The OpenVDB kernel's voxel edge, in micrometres; null is its default. */
+  voxelUm?: number | null;
   /** The slab kernel's XY arc sagitta when it differs from the z step; null follows it. */
   resolutionXyUm: number | null;
   sectionLines: SectionLine[];

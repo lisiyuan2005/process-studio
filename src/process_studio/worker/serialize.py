@@ -336,6 +336,7 @@ def project_to_json(project: ProjectDefinition) -> dict[str, Any]:
         "kernel": project.kernel,
         "resolutionUm": project.resolution_um,
         "resolutionXyUm": project.resolution_xy_um,
+        "voxelUm": project.voxel_um,
         "sectionLines": [dict(line) for line in project.section_lines],
         "fidelity": project.fidelity,
         "experimentSteps": project.experiment_steps,
@@ -421,4 +422,5 @@ def project_from_json(payload: Mapping[str, Any]) -> ProjectDefinition:
         section_lines=section_lines_from_json(payload.get("sectionLines")),
         fidelity=fidelity,
         experiment_steps=experiment_steps_from_json(payload.get("experimentSteps")),
+        voxel_um=None if payload.get("voxelUm") in (None, "") else float(payload["voxelUm"]),
     )

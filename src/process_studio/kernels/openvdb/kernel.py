@@ -52,8 +52,8 @@ from . import ops
 from .field import HALF_WIDTH
 from .state import Lattice, VdbState, initial
 
-#: Voxel size when a project names none.
-DEFAULT_VOXEL_UM = 0.005
+#: Voxel size when a project names none: the coarsest preset.
+DEFAULT_VOXEL_UM = 0.01
 #: Voxels a project window may hold. Every material is a dense block of
 #: this many floats while a step runs, so the ceiling is a memory one.
 MAXIMUM_NODES = 40_000_000
@@ -64,7 +64,9 @@ class OpenVDBError(ValueError):
 
 
 def voxel_um(project: ProjectDefinition) -> float:
-    value = getattr(project, "resolution_um", None)
+    """The project's voxel edge: its own, apart from the slab kernel's
+    resolution, so switching kernels never turns one into the other."""
+    value = getattr(project, "voxel_um", None)
     return DEFAULT_VOXEL_UM if not value else float(value)
 
 

@@ -314,7 +314,18 @@ function SurfaceMesh({
         // and still show through.
         tiles.map((tile) => (
           <mesh key={`depth ${tile[0]} ${tile[1]}`} geometry={geometry} position={at(tile)} renderOrder={2 * order}>
-            <meshBasicMaterial transparent colorWrite={false} side={side} clippingPlanes={clippingPlanes} />
+            {/* The same depth bias as the colour pass below: without it a
+                sampled surface's colour lands behind its own depth and the
+                whole translucent material disappears. */}
+            <meshBasicMaterial
+              transparent
+              colorWrite={false}
+              side={side}
+              clippingPlanes={clippingPlanes}
+              polygonOffset={!exact}
+              polygonOffsetFactor={exact ? 0 : order}
+              polygonOffsetUnits={exact ? 0 : order}
+            />
           </mesh>
         ))}
       {/* One geometry, drawn once per copy: the copies cost a draw each and

@@ -202,15 +202,12 @@ def initialize_workspace(
         active_branch_id=branch.id,
         id=DEFAULT_PROJECT_ID,
         kernel=chosen.info.id,
-        resolution_um=(
-            None
-            if chosen.info.spacing_role == "grid"
-            # a voxel lattice starts at its coarsest preset: every halving
-            # is eight times the voxels, and the starter window is wide
-            else chosen.info.spacing_presets_nm[0] / 1000.0
-            if chosen.info.spacing_role == "voxel"
-            else chosen.info.spacing_presets_nm[1] / 1000.0
-        ),
+        # The slab kernel's walk step and the OpenVDB kernel's voxel are
+        # kept apart, so the project can switch between them: 10 nm each,
+        # the OpenVDB kernel's coarsest preset (every halving is eight
+        # times the voxels, and the starter window is wide).
+        resolution_um=0.01,
+        voxel_um=0.01,
     )
     # The starter library belongs to the user, not to this project: seed it
     # only the first time, or a new workspace would put the shipped Si back

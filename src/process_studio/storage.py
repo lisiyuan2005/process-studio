@@ -13,10 +13,12 @@ from uuid import uuid4
 
 from .models import (
     FIDELITIES,
+    KERNELS,
     RETIRED_FIDELITIES,
     known_fidelity,
     result_key,
     result_keys,
+    split_result_key,
     FlowBranch,
     MaterialDefinition,
     MaterialResponse,
@@ -261,20 +263,66 @@ class ProjectRepository:
                 )
             if "experiment_json" not in columns:
                 connection.execute("ALTER TABLE projects ADD COLUMN experiment_json TEXT")
+            if "voxel_um" not in columns:
+                connection.execute("ALTER TABLE projects ADD COLUMN voxel_um REAL")
+                self._adopt_kernel_keys(connection)
+
+    @staticmethod
+    def _adopt_kernel_keys(connection: sqlite3.Connection) -> None:
+        """Bring a workspace from before kernels were switchable.
+
+        An OpenVDB project then kept its results under the slab kernel's
+        keys and its voxel edge in the resolution. Its results move to the
+        OpenVDB keys (so the slab kernel never reads them as its own), and
+        its resolution becomes its voxel edge.
+        """
+        for project in connection.execute(
+            "SELECT id, resolution_um FROM projects WHERE kernel='openvdb'"
+        ).fetchall():
+            connection.execute(
+                "UPDATE projects SET voxel_um=? WHERE id=?", (project["resolution_um"], project["id"])
+            )
+            branches = [
+                row["id"]
+                for row in connection.execute(
+                    "SELECT id FROM branches WHERE project_id=?", (project["id"],)
+                ).fetchall()
+            ]
+            tables = ["branch_snapshots"]
+            if connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='worker_step_digests'"
+            ).fetchone():
+                tables.append("worker_step_digests")
+            for branch_id in branches:
+                for table in tables:
+                    keys = [
+                        row["step_id"]
+                        for row in connection.execute(
+                            f"SELECT step_id FROM {table} WHERE branch_id=?", (branch_id,)
+                        ).fetchall()
+                    ]
+                    for key in keys:
+                        step_id, fidelity, kernel = split_result_key(key)
+                        if kernel != "slab":
+                            continue
+                        connection.execute(
+                            f"UPDATE {table} SET step_id=? WHERE branch_id=? AND step_id=?",
+                            (result_key(step_id, fidelity, "openvdb"), branch_id, key),
+                        )
 
     def save_project(self, project: ProjectDefinition) -> None:
         with self.connect() as connection:
             connection.execute(
                 """INSERT INTO projects(
                     id, name, grid_json, gds_path, active_branch_id, kernel, resolution_um,
-                    resolution_xy_um, section_lines_json, fidelity, experiment_json
+                    resolution_xy_um, section_lines_json, fidelity, experiment_json, voxel_um
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                -- kernel is deliberately absent from the update list: a
-                -- project keeps the kernel it was created with.
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET name=excluded.name,
                 grid_json=excluded.grid_json, gds_path=excluded.gds_path,
                 active_branch_id=excluded.active_branch_id,
+                kernel=excluded.kernel,
+                voxel_um=excluded.voxel_um,
                 resolution_um=excluded.resolution_um,
                 resolution_xy_um=excluded.resolution_xy_um,
                 section_lines_json=excluded.section_lines_json,
@@ -292,6 +340,7 @@ class ProjectRepository:
                     json.dumps(project.section_lines),
                     project.fidelity,
                     None if project.experiment_steps is None else json.dumps(project.experiment_steps),
+                    project.voxel_um,
                 ),
             )
 
@@ -314,6 +363,7 @@ class ProjectRepository:
             section_lines=json.loads(row["section_lines_json"]) if row["section_lines_json"] else [],
             fidelity=known_fidelity(row["fidelity"], "detailed"),
             experiment_steps=json.loads(row["experiment_json"]) if row["experiment_json"] else None,
+            voxel_um=row["voxel_um"] if "voxel_um" in row.keys() else None,
         )
 
     def list_projects(self) -> list[ProjectDefinition]:
@@ -650,8 +700,28 @@ class ProjectRepository:
             raise KeyError((branch_id, step_id))
         return Path(self.on_disk(row["path"], self.snapshot_directory) or row["path"])
 
-    def delete_project_snapshots(self, project_id: str) -> int:
-        """Remove every cached state for a project while preserving its flow."""
+    def delete_project_snapshots(self, project_id: str, kernel: str | None = None) -> int:
+        """Remove every cached state for a project while preserving its flow;
+        with ``kernel``, only that kernel's."""
+        if kernel is not None:
+            with self.connect() as connection:
+                rows = connection.execute(
+                    """SELECT branch_snapshots.branch_id AS branch_id,
+                    branch_snapshots.step_id AS key, branch_snapshots.snapshot_id AS id
+                    FROM branch_snapshots JOIN snapshots ON snapshots.id = branch_snapshots.snapshot_id
+                    WHERE snapshots.project_id=?""",
+                    (project_id,),
+                ).fetchall()
+                dropped = [row for row in rows if split_result_key(row["key"])[2] == kernel]
+                for row in dropped:
+                    connection.execute(
+                        "DELETE FROM branch_snapshots WHERE branch_id=? AND step_id=?",
+                        (row["branch_id"], row["key"]),
+                    )
+                self._forget_digests(connection, [(row["branch_id"], row["key"]) for row in dropped])
+            for snapshot_id in {row["id"] for row in dropped}:
+                self._delete_snapshot_if_unreferenced(snapshot_id)
+            return len(dropped)
         with self.connect() as connection:
             snapshot_ids = [
                 row[0]
@@ -759,14 +829,14 @@ class ProjectRepository:
             for row in connection.execute("SELECT branch_id, step_id FROM branch_steps"):
                 wanted_steps.setdefault(row["branch_id"], set()).add(row["step_id"])
             current = known_fidelity(project.fidelity)
-            kept_suffixes = {result_key("", fidelity) for fidelity in FIDELITIES}
-            if other_fidelity:
-                kept_suffixes = {result_key("", current)}
             dropped: list[tuple[str, str]] = []
             for row in connection.execute("SELECT branch_id, step_id FROM branch_snapshots"):
-                step, _, suffix = row["step_id"].partition("~")
-                key_suffix = f"~{suffix}" if suffix else ""
-                if step not in wanted_steps.get(row["branch_id"], set()) or key_suffix not in kept_suffixes:
+                step, fidelity, kernel = split_result_key(row["step_id"])
+                kept = fidelity in FIDELITIES and kernel in KERNELS
+                if other_fidelity:
+                    # what is not on screen: another film model or kernel
+                    kept = fidelity == current and kernel == project.kernel
+                if step not in wanted_steps.get(row["branch_id"], set()) or not kept:
                     dropped.append((row["branch_id"], row["step_id"]))
             for branch_id, key in dropped:
                 connection.execute(
@@ -866,8 +936,11 @@ class ProjectRepository:
             ).fetchall()
         fidelity_of: dict[str, str] = {}
         for row in links:
-            _, _, suffix = row["key"].partition("~")
-            fidelity = suffix or "detailed"
+            _, fidelity, kernel = split_result_key(row["key"])
+            # another kernel's result counts with the other film model's:
+            # both are results that are kept but not on screen
+            if kernel != project.kernel and fidelity not in RETIRED_FIDELITIES:
+                fidelity = f"{kernel}:{fidelity}"
             # a result shared by two keys counts once, as the current model's if either is
             if fidelity_of.get(row["id"]) != current:
                 fidelity_of[row["id"]] = fidelity

@@ -23,7 +23,7 @@ from ..grid import UniformGrid3D, window_grid
 from ..kernels import available_kernels, build_variant, default_kernel, get_kernel, unavailable_kernels
 from ..layout.gds import available_gds_layers
 from ..libraries import RecipeLibrary
-from ..models import ProcessType
+from ..models import KERNELS, ProcessType
 from .errors import InvalidRequest, WorkerError, WorkspaceError
 
 #: Triangulators the 3D view can be built with. Spelt out rather than
@@ -48,6 +48,7 @@ from .files import (
 from .update import check_update, install_update, open_url
 from .runner import (
     apply_resolution,
+    discard_results,
     build_document,
     project_kernel,
     run_flow,
@@ -368,13 +369,22 @@ def _persist_document(parameters: Mapping[str, Any]) -> dict[str, Any]:
         raise InvalidRequest(
             "Use set_grid to change the resolution; it discards results computed at the old one."
         )
+    # the voxel edge changes through set_grid, like the resolution
+    project.voxel_um = stored.voxel_um
     if project.kernel != stored.kernel:
-        raise InvalidRequest(
-            f"This project runs on the {stored.kernel!r} kernel and cannot be moved to "
-            f"{project.kernel!r}. The kernels store geometry differently, so a result of "
-            "one is not a result of the other. Create a new project to use another kernel."
-        )
-    project.kernel = stored.kernel
+        # Switching kernels is like switching the film model: the flow is
+        # the same, each kernel's results are kept under its own keys, and
+        # the views show the chosen kernel's. Only a kernel this build can
+        # run, and only between the kernels that read a flow the same way.
+        if project.kernel not in KERNELS or stored.kernel not in KERNELS:
+            raise InvalidRequest(
+                f"This project runs on the {stored.kernel!r} kernel and cannot be moved to "
+                f"{project.kernel!r}; projects switch between {', '.join(KERNELS)} only."
+            )
+        try:
+            get_kernel(project.kernel)
+        except KeyError as error:
+            raise InvalidRequest(error.args[0]) from error
     repository.save_project(project)
 
     # Materials, tools and recipes are the shared library's, so what is saved
@@ -564,6 +574,14 @@ def _plan_grid(parameters: Mapping[str, Any]) -> dict[str, Any]:
     spacing = _target_spacing(parameters)
     spacing_xy = _target_spacing_xy(parameters)
     current_xy = project.resolution_xy_um
+    voxel = kernel.info.spacing_role == "voxel"
+    current_spacing_um = (
+        (project.voxel_um or kernel.info.spacing_presets_nm[0] / 1000.0) if voxel else project.resolution_um
+    )
+    if voxel:
+        # a voxel has no separate XY value
+        current_xy = None
+        spacing_xy = None
     estimate: dict[str, Any] = {
         "spacingNm": spacing,
         "spacingXyNm": spacing if spacing_xy is None else spacing_xy,
@@ -588,7 +606,7 @@ def _plan_grid(parameters: Mapping[str, Any]) -> dict[str, Any]:
         "maximumNodes": ceiling,
         "withinLimit": within,
         "unchanged": same_window
-        and abs(spacing / 1000.0 - (project.resolution_um or 0.0)) < 1e-12
+        and abs(spacing / 1000.0 - (current_spacing_um or 0.0)) < 1e-12
         and (
             (spacing_xy is None and current_xy is None)
             or (
@@ -617,13 +635,21 @@ def _set_grid(parameters: Mapping[str, Any]) -> dict[str, Any]:
             f"The {kernel.info.name} kernel has no grid to set; give targetSpacingNm "
             "to change the resolution it works at."
         )
-    if not _same_bounds(window, current):
+    window_changed = not _same_bounds(window, current)
+    if window_changed:
         project.grid = grid_dict(_as_window(window))
     spacing_xy = _target_spacing_xy(parameters)
+    target_kernel = parameters.get("kernel")
+    if target_kernel is not None and target_kernel not in KERNELS:
+        raise InvalidRequest(f"kernel must be one of {', '.join(KERNELS)}, got {target_kernel!r}")
     apply_resolution(
         repository, project, _target_spacing(parameters) / 1000.0,
         None if spacing_xy is None else spacing_xy / 1000.0,
+        kernel=target_kernel,
     )
+    if window_changed:
+        # the window is the wafer itself: no kernel's results survive it
+        discard_results(repository, project)
     return build_document(root, repository, project)
 
 

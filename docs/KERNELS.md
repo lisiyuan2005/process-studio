@@ -1,6 +1,6 @@
 # 仿真内核：Slab (DeviceFlow) 与 OpenVDB
 
-有两个内核，建工作区时选，之后不能换（两者的几何表示不同，结果互不可读）：
+有两个内核。新建工作区时选一个起步，之后随时可以在顶栏的 **Slab | OpenVDB** 开关上切换，和 simplified / detailed 一样：流程就是流程，两个内核读它的方式相同；各内核的结果分开保存（结果键带 `@openvdb` 标记，slab 的键保持原样），切回去不用重算。分辨率也分开存：slab 的是保形沉积的行走步长（`resolution_um`），OpenVDB 的是体素边长（`voxel_um`），改其中一个只丢掉那个内核的结果；改窗口则两个内核的结果都丢掉。命令行是 `process-studio kernel [slab|openvdb]`，流程文件里写 `kernel` 和 `voxel_nm`。
 
 - **Slab (DeviceFlow)**：工程的几何是**精确的多边形板层（slab）堆叠**，由并入的 DeviceFlow 0.2.0 内核计算，不是网格上的场。默认内核。
 - **OpenVDB (level set)**：每种材料一个**窄带符号距离场**，存在 OpenVDB 网格里，界面落在体素中心之间（亚体素精度）。代价随体素数增长，与形状无关：斜面、曲面、多次湿法刻蚀之后的复杂前沿，不会像 slab 那样让多边形顶点越积越多。见下面「OpenVDB 内核」一节。

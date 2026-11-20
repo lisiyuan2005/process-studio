@@ -80,7 +80,8 @@ def measure(case: str, kernel_id: str, fidelity: str, resolution_nm: float) -> d
     flow, sketches, window = CASES[case]()
     kernel = get_kernel(kernel_id)
     project = ProjectDefinition(
-        case, grid_dict(window_grid(*window)), kernel=kernel_id, resolution_um=resolution_nm * NM
+        case, grid_dict(window_grid(*window)), kernel=kernel_id,
+        resolution_um=resolution_nm * NM, voxel_um=resolution_nm * NM,
     )
     project.fidelity = fidelity
     materials = default_materials()

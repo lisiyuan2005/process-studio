@@ -46,6 +46,7 @@ def project(fidelity: str = "detailed", voxel: float = 0.005, kernel: str = "ope
         grid_dict(window_grid(bounds["x_min"], bounds["x_max"], bounds["y_min"], bounds["y_max"], bounds["z_min"], bounds["z_max"])),
         kernel=kernel,
         resolution_um=voxel,
+        voxel_um=voxel,
     )
     p.fidelity = fidelity
     return p

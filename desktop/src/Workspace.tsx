@@ -180,6 +180,12 @@ export type WorkspaceProps = {
 };
 
 /** The slab kernel's film models, fastest first. */
+/** The kernels a project switches between, in the order the switch shows them. */
+const SWITCHABLE_KERNELS = [
+  { id: "slab", label: "Slab" },
+  { id: "openvdb", label: "OpenVDB" },
+] as const;
+
 const FILM_MODELS: { id: Fidelity; label: string; title: string; icon: typeof Square }[] = [
   {
     id: "simplified",
@@ -1718,6 +1724,32 @@ export function Workspace({
   // so switching only changes which of them the views and statuses show:
   // the document is saved at once (the views read the stored setting) and
   // the statuses come back with it.
+  // The kernel is switched the same way: the flow is the same, each
+  // kernel's results stay stored, and the views show the chosen one's.
+  const setKernel = async (kernel: string) => {
+    if (!document || busy) return;
+    setBusy(true);
+    try {
+      const saved = await bridge.saveDocument({
+        ...document,
+        project: { ...document.project, kernel },
+      });
+      viewCache.current.clear();
+      skipNextAutosave.current = true;
+      setDocumentState(saved);
+      setSaveState("saved");
+      setViewNonce((nonce) => nonce + 1);
+    } catch (reason) {
+      setEvents((current) => [
+        ...current,
+        { kind: "log", message: `Could not switch the kernel: ${errorMessage(reason)}` },
+      ]);
+      setShowLog(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const setFidelity = async (fidelity: Fidelity) => {
     if (!document || busy) return;
     setBusy(true);
@@ -2104,21 +2136,43 @@ export function Workspace({
           >
             <Grid3x3 size={13} />
             {(
-              (projectKernel && projectKernel.spacingRole !== "grid"
+              (projectKernel?.spacingRole === "voxel"
+                ? document.project.voxelUm ?? (projectKernel.spacingPresetsNm[0] ?? 10) / 1000
+                : projectKernel && projectKernel.spacingRole !== "grid"
                 ? document.project.resolutionUm ?? document.project.grid.spacingUm
                 : document.project.grid.spacingUm) * 1000
             ).toFixed(0)}{" "}
             nm
           </button>
-          {projectKernel && (
-            // Which kernel this project is built on, and how to get the other:
-            // the kernel is chosen with the workspace and never changes.
-            <span
-              className="kernel-chip"
-              title={`This project runs on the ${projectKernel.name} kernel. A kernel is chosen when a workspace is created and cannot be changed: to use another, open File → New tab, pick it on the new-workspace card and create a workspace, then bring this flow over with File → Export → Flow file and File → Import → Flow file.`}
-            >
-              {projectKernel.id === "openvdb" ? "OpenVDB" : projectKernel.id === "slab" ? "Slab" : projectKernel.name}
-            </span>
+          {(document.project.kernel === "slab" || document.project.kernel === "openvdb") && (
+            <div className="fidelity-switch kernel-switch" role="radiogroup" aria-label="Kernel">
+              {SWITCHABLE_KERNELS.map((item) => {
+                const active = document.project.kernel === item.id;
+                const offered = capabilities?.kernels.find((kernel) => kernel.id === item.id);
+                const missing = capabilities?.unavailableKernels?.find((kernel) => kernel.id === item.id);
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    className={`fidelity-button${active ? " active" : ""}`}
+                    title={
+                      offered
+                        ? `${offered.summary} Results of each kernel are kept, so switching back shows what was computed before.`
+                        : `${item.label} is not available in this build${missing ? `: ${missing.reason}` : ""}.`
+                    }
+                    disabled={busy || (!offered && !active)}
+                    onClick={() => {
+                      if (!active && offered) void setKernel(item.id);
+                    }}
+                  >
+                    <Cpu size={13} />
+                    {item.label}
+                  </button>
+                );
+              })}
+            </div>
           )}
           {(projectKernel?.id === "slab" || projectKernel?.id === "openvdb") && (
             <div className="fidelity-switch" role="radiogroup" aria-label="Film model">
@@ -2145,7 +2199,7 @@ export function Workspace({
               })}
             </div>
           )}
-          {projectKernel && (
+          {projectKernel && projectKernel.id !== "slab" && projectKernel.id !== "openvdb" && (
             <span
               className="kernel-badge"
               title={`${projectKernel.summary} Fixed when the project was created.`}
@@ -2827,7 +2881,11 @@ export function Workspace({
         <GridEditor
           grid={document.project.grid}
           kernel={projectKernel}
-          resolutionUm={document.project.resolutionUm}
+          resolutionUm={
+            projectKernel?.spacingRole === "voxel"
+              ? document.project.voxelUm ?? (projectKernel.spacingPresetsNm[0] ?? 10) / 1000
+              : document.project.resolutionUm
+          }
           resolutionXyUm={document.project.resolutionXyUm}
           presetsNm={projectKernel?.spacingPresetsNm ?? [25, 10, 2]}
           busy={busy}

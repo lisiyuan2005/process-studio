@@ -31,20 +31,40 @@ def known_fidelity(value: str | None, default: str = "simplified") -> str:
     return RETIRED_FIDELITIES.get(value, value)
 
 
-def result_key(step_id: str, fidelity: str) -> str:
+#: Kernels a project can be switched between. Every one reads a step the
+#: same way, so a flow is a flow on any of them; their results are kept
+#: side by side, like the film models'.
+KERNELS = ("slab", "openvdb")
+
+
+def result_key(step_id: str, fidelity: str, kernel: str = "slab") -> str:
     """The key a step's stored result lives under.
 
-    Results of every fidelity are kept side by side: the detailed one
-    under the bare step id (what every workspace already has), the others
-    under a suffixed id. Switching the project's fidelity
-    then shows what was computed in that mode without a rerun.
+    Results of every fidelity and every kernel are kept side by side: the
+    slab kernel's detailed one under the bare step id (what every workspace
+    already has), the others under a marked id -- ``@kernel`` for a kernel
+    other than slab, then ``~fidelity`` for a film model other than
+    detailed. Switching the project's fidelity or kernel then shows what
+    was computed that way without a rerun.
     """
-    return step_id if fidelity == "detailed" else f"{step_id}~{fidelity}"
+    key = step_id if kernel == "slab" else f"{step_id}@{kernel}"
+    return key if fidelity == "detailed" else f"{key}~{fidelity}"
+
+
+def split_result_key(key: str) -> tuple[str, str, str]:
+    """(step id, fidelity, kernel) of a stored result's key."""
+    head, _, fidelity = key.partition("~")
+    step_id, _, kernel = head.partition("@")
+    return step_id, fidelity or "detailed", kernel or "slab"
 
 
 def result_keys(step_id: str) -> list[str]:
     """Every key a step's results may live under, for forgetting them all."""
-    return [result_key(step_id, fidelity) for fidelity in (*FIDELITIES, *RETIRED_FIDELITIES)]
+    return [
+        result_key(step_id, fidelity, kernel)
+        for kernel in KERNELS
+        for fidelity in (*FIDELITIES, *RETIRED_FIDELITIES)
+    ]
 
 
 class ProcessType(str, Enum):
@@ -333,10 +353,9 @@ class ProjectDefinition:
     gds_path: str | None = None
     active_branch_id: str | None = None
     id: str = field(default_factory=new_id)
-    #: Which simulation kernel this project is built on. Recorded when the
-    #: project is created and never changed afterwards, so a project made on
-    #: a kernel this build no longer has is refused instead of run on another
-    #: one. There is one kernel now; the field stays because the refusal does.
+    #: Which simulation kernel the project runs on now: one of KERNELS, and
+    #: switchable like the film model (each kernel's results are kept). A
+    #: retired kernel's project is refused instead of run on another one.
     kernel: str = "slab"
     #: Length the kernel resolves geometry at when it is not the grid: the
     #: slab kernel's conformal-deposition resolution. None means its default.
@@ -354,6 +373,10 @@ class ProjectDefinition:
     #: start simplified: it is what this is used for, and a detailed film is
     #: a deliberate look at one step rather than how a flow is built.
     fidelity: str = "simplified"
+    #: The OpenVDB kernel's voxel edge, in µm, kept apart from the slab
+    #: kernel's resolution (a walk step) so switching kernels never turns one
+    #: into the other. None means the kernel's default.
+    voxel_um: float | None = None
     #: The experiment record: what was done in the lab, step by step, with
     #: the tool and every setting -- a flow of its own that is never run and
     #: never read by a kernel, and can be turned into a simulation branch.

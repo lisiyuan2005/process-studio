@@ -292,9 +292,9 @@ export function ProjectHome({
               ))}
               <p className="kernel-lock">
                 <Lock size={12} />
-                The kernel is part of the project: it cannot be changed once the workspace
-                exists, because the two store geometry differently and neither can read the
-                other&apos;s results.
+                This is only where the project starts: the kernel can be switched at any time
+                in the top bar, like the film model. Each kernel&apos;s results are kept, so
+                switching back shows what was computed before.
               </p>
             </div>
           )}

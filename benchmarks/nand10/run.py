@@ -164,7 +164,7 @@ def main() -> int:
     kernel = get_kernel(args.kernel)
     project = ProjectDefinition(
         "nand10", grid_dict(window_grid(0.0, 0.32, 0.0, 0.15, -0.05, 0.8)),
-        kernel=args.kernel, resolution_um=args.resolution_nm * NM,
+        kernel=args.kernel, resolution_um=args.resolution_nm * NM, voxel_um=args.resolution_nm * NM,
     )
     project.fidelity = args.fidelity
     materials = default_materials()

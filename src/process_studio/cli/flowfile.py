@@ -88,6 +88,8 @@ def flow_from_document(document: Mapping[str, Any]) -> dict[str, Any]:
             "z": [grid["zMin"], grid["zMax"]],
         },
     }
+    if project.get("voxelUm") is not None:
+        flow["voxel_nm"] = project["voxelUm"] * 1000.0
     if project.get("resolutionUm") is not None:
         flow["resolution_nm"] = project["resolutionUm"] * 1000.0
         if project.get("resolutionXyUm") is not None:
@@ -286,7 +288,7 @@ def step_from_spec(spec: Mapping[str, Any], *, step_id: str | None = None) -> di
     }
 
 
-#: Kernels whose steps mean the same, so a flow file moves between them.
+#: Kernels a project switches between; a flow file names the one it ran on.
 INTERCHANGEABLE_KERNELS = {"slab", "openvdb"}
 
 
@@ -294,19 +296,20 @@ def apply_flow(session: Session, flow: Mapping[str, Any]) -> dict[str, Any]:
     """Make the workspace match the flow file; returns the saved document."""
     document = session.document()
     project = document["project"]
-    # The slab and the OpenVDB kernels read every step the same way, so a flow
-    # made on one runs on the other. Only the resolution does not carry over:
-    # on the slab kernel it is a walk step, on OpenVDB the voxel edge, and
-    # the slab number would often be a lattice too fine to hold. The
-    # workspace keeps its own.
-    other_kernel = "kernel" in flow and flow["kernel"] != project["kernel"]
-    if other_kernel and {flow["kernel"], project["kernel"]} != INTERCHANGEABLE_KERNELS:
-        raise InvalidRequest(
-            f"the file wants the {flow['kernel']!r} kernel but this workspace runs on "
-            f"{project['kernel']!r}; a kernel is chosen when a workspace is created."
-        )
-    if other_kernel:
-        flow = {key: value for key, value in flow.items() if key not in ("resolution_nm", "resolution_xy_nm")}
+    # The kernel first, like the film model it is switched like: what the
+    # file says about resolution is the resolution of that kernel (a slab
+    # walk step, an OpenVDB voxel), and set_grid sets the current one's.
+    wanted = flow.get("kernel", project["kernel"])
+    if wanted != project["kernel"]:
+        if wanted not in INTERCHANGEABLE_KERNELS or project["kernel"] not in INTERCHANGEABLE_KERNELS:
+            raise InvalidRequest(
+                f"the file wants the {wanted!r} kernel but this workspace runs on "
+                f"{project['kernel']!r}, and a project switches between "
+                f"{', '.join(sorted(INTERCHANGEABLE_KERNELS))} only."
+            )
+        project["kernel"] = wanted
+        document = session.save(document)
+        project = document["project"]
 
     # The window and the resolution first: changing either discards results.
     grid = project["grid"]
@@ -322,7 +325,11 @@ def apply_flow(session: Session, flow: Mapping[str, Any]) -> dict[str, Any]:
                 low, high = window[axis]
                 bounds[f"{axis}Min"], bounds[f"{axis}Max"] = float(low), float(high)
     spacing_xy_nm: float | None = None
-    if project.get("resolutionUm") is not None:
+    voxel = project["kernel"] == "openvdb"
+    if voxel:
+        current_voxel_nm = (project.get("voxelUm") or 0.01) * 1000.0
+        spacing_nm = float(flow.get("voxel_nm", current_voxel_nm))
+    elif project.get("resolutionUm") is not None:
         spacing_nm = float(flow.get("resolution_nm", project["resolutionUm"] * 1000.0))
         if "resolution_xy_nm" in flow:
             spacing_xy_nm = None if flow["resolution_xy_nm"] in (None, 0, "") else float(flow["resolution_xy_nm"])
@@ -335,11 +342,13 @@ def apply_flow(session: Session, flow: Mapping[str, Any]) -> dict[str, Any]:
         for key in ("xMin", "xMax", "yMin", "yMax", "zMin", "zMax")
     )
     current_nm = (
-        project["resolutionUm"] * 1000.0
+        current_voxel_nm
+        if voxel
+        else project["resolutionUm"] * 1000.0
         if project.get("resolutionUm") is not None
         else grid["spacingUm"] * 1000.0
     )
-    current_xy = project.get("resolutionXyUm")
+    current_xy = None if voxel else project.get("resolutionXyUm")
     current_xy_nm = None if current_xy is None else current_xy * 1000.0
     xy_changed = (spacing_xy_nm is None) != (current_xy_nm is None) or (
         spacing_xy_nm is not None and current_xy_nm is not None and abs(spacing_xy_nm - current_xy_nm) > 1e-9
@@ -350,6 +359,27 @@ def apply_flow(session: Session, flow: Mapping[str, Any]) -> dict[str, Any]:
             targetSpacingXyNm=spacing_xy_nm, bounds=bounds,
         )
         session.note("Window or resolution changed: stored results were discarded.")
+    # the other kernel's resolution, which set_grid sets when named
+    if project["kernel"] == "openvdb" and "resolution_nm" in flow:
+        target = float(flow["resolution_nm"])
+        xy = flow.get("resolution_xy_nm")
+        xy = None if xy in (None, 0, "") else float(xy)
+        current = (document["project"].get("resolutionUm") or 0.0) * 1000.0
+        current_xy = document["project"].get("resolutionXyUm")
+        if abs(target - current) > 1e-9 or (xy is None) != (current_xy is None) or (
+            xy is not None and abs(xy - current_xy * 1000.0) > 1e-9
+        ):
+            document = session.call(
+                "set_grid", root=str(session.root), targetSpacingNm=target,
+                targetSpacingXyNm=xy, kernel="slab",
+            )
+    elif project["kernel"] != "openvdb" and "voxel_nm" in flow:
+        target = float(flow["voxel_nm"])
+        current = (document["project"].get("voxelUm") or 0.01) * 1000.0
+        if abs(target - current) > 1e-9:
+            document = session.call(
+                "set_grid", root=str(session.root), targetSpacingNm=target, kernel="openvdb",
+            )
 
     if "name" in flow:
         document["project"]["name"] = str(flow["name"])

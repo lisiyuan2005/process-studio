@@ -24,6 +24,7 @@ from .serialize import (
     recipe_to_json,
     step_to_json,
 )
+from ..models import split_result_key
 from .workspace import (
     result_key,
     result_keys,
@@ -146,7 +147,7 @@ def step_statuses(
     statuses: dict[str, str] = {}
     invalidated = False
     for step, digest in zip(branch.steps, digests):
-        key = result_key(step.id, project.fidelity)
+        key = result_key(step.id, project.fidelity, project.kernel)
         stored_result = key in with_snapshot
         clean = not invalidated and stored_result and stored.get(key) == digest
         statuses[step.id] = "clean" if clean else "stale" if stored_result else "dirty"
@@ -225,7 +226,7 @@ def run_flow(
             raise Cancelled(
                 f"Stopped before {step.name}; {len(executed)} step(s) ran and are kept."
             )
-        key = result_key(step.id, project.fidelity)
+        key = result_key(step.id, project.fidelity, project.kernel)
         if redo_from is not None and index >= redo_from:
             reusable = False
         if reusable and stored.get(key) == digest:
@@ -321,7 +322,7 @@ def run_flow(
         _warm_views_later(
             kernel,
             [
-                repository.snapshot_path(branch.id, result_key(step_id, project.fidelity))
+                repository.snapshot_path(branch.id, result_key(step_id, project.fidelity, project.kernel))
                 for step_id in executed
             ],
             buried=prepare_buried,
@@ -396,7 +397,7 @@ def state_for_step(
     if all(step.id != step_id for step in branch.steps):
         raise InvalidRequest(f"step {step_id!r} is not part of this branch")
     try:
-        path = repository.snapshot_path(branch.id, result_key(step_id, project.fidelity))
+        path = repository.snapshot_path(branch.id, result_key(step_id, project.fidelity, project.kernel))
     except KeyError as error:
         raise InvalidRequest(
             "This step has no stored result yet in the project's current fidelity. Run the flow first."
@@ -422,18 +423,26 @@ def _load_state(kernel: Kernel, path: Path) -> Any:
     return state
 
 
-def discard_results(repository: ProjectRepository, project: ProjectDefinition) -> None:
-    """Drop every stored result of this project.
+def discard_results(
+    repository: ProjectRepository, project: ProjectDefinition, kernel: str | None = None
+) -> None:
+    """Drop every stored result of this project, or with ``kernel`` only
+    that kernel's.
 
     The stored states were computed at a resolution the project no longer
     uses, so they are not results of this project any more and go rather than
-    linger as views of a setting nobody chose.
+    linger as views of a setting nobody chose. A resolution belongs to one
+    kernel (the slab kernel's walk step, the OpenVDB kernel's voxel), so
+    changing it leaves the other kernel's results alone.
     """
-    repository.delete_project_snapshots(project.id)
+    repository.delete_project_snapshots(project.id, kernel)
     cache = DigestCache(repository)
     for branch in repository.list_branches(project.id):
         loaded = repository.load_branch(branch.id)
-        cache.forget(branch.id, [key for step in loaded.steps for key in result_keys(step.id)])
+        keys = [key for step in loaded.steps for key in result_keys(step.id)]
+        if kernel is not None:
+            keys = [key for key in keys if split_result_key(key)[2] == kernel]
+        cache.forget(branch.id, keys)
 
 
 def apply_resolution(
@@ -441,13 +450,23 @@ def apply_resolution(
     project: ProjectDefinition,
     resolution_um: float,
     resolution_xy_um: float | None = None,
+    kernel: str | None = None,
 ) -> ProjectDefinition:
     """Change a gridless kernel's resolution and drop the old results.
 
     ``resolution_xy_um`` None means the XY arcs follow the z step.
+    ``kernel`` names whose resolution it is when not the current kernel's.
     """
+    target = kernel or project.kernel
+    if target == "openvdb":
+        # the voxel edge is the OpenVDB kernel's own; the slab kernel's
+        # resolution and results stay as they are
+        project.voxel_um = float(resolution_um)
+        repository.save_project(project)
+        discard_results(repository, project, target)
+        return project
     project.resolution_um = float(resolution_um)
     project.resolution_xy_um = None if resolution_xy_um is None else float(resolution_xy_um)
     repository.save_project(project)
-    discard_results(repository, project)
+    discard_results(repository, project, target)
     return project

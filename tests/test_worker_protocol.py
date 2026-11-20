@@ -1848,25 +1848,82 @@ def test_a_project_travels_as_one_zip_with_or_without_its_results(tmp_path):
     assert not (tmp_path / "escape.txt").exists()
 
 
-def test_a_slab_flow_moves_to_an_openvdb_workspace(tmp_path):
-    """The kernel is fixed per workspace, so moving a flow to the other
-    kernel is: export the flow file, create a workspace on that kernel,
-    import it. The steps come across; the resolution stays the new
-    workspace's own (a slab walk step is no voxel size)."""
+def test_a_project_switches_kernels_and_keeps_each_ones_results(tmp_path):
+    """The kernel is switched like the film model: the flow is the same,
+    each kernel's results are kept, and switching back reruns nothing."""
     from process_studio.kernels import kernel_ids
 
     if "openvdb" not in kernel_ids():
         pytest.skip("the OpenVDB kernel is not built here")
-    slab = tmp_path / "slab"
-    source = call("create_workspace", root=str(slab), name="Slab", kernel="slab")
+    root = tmp_path / "switch"
+    document = call("create_workspace", root=str(root), name="Switch", kernel="slab")
+    branch = document["branches"][0]
+    steps = [step["id"] for step in branch["steps"]]
+    first = call("run_flow", root=str(root), branchId=branch["id"])
+    assert first["executedStepIds"] == steps
+
+    document["project"]["kernel"] = "openvdb"
+    switched = call("save_document", root=str(root), document=document)
+    assert switched["project"]["kernel"] == "openvdb"
+    # nothing computed on OpenVDB yet
+    assert "clean" not in switched["stepStatuses"][branch["id"]].values()
+    on_vdb = call("run_flow", root=str(root), branchId=branch["id"])
+    assert on_vdb["executedStepIds"] == steps
+    surfaces = call("get_surfaces", root=str(root), branchId=branch["id"], stepId=steps[-1])
+    assert surfaces["exact"] is False
+
+    switched["project"]["kernel"] = "slab"
+    back = call("save_document", root=str(root), document=switched)
+    assert set(back["stepStatuses"][branch["id"]].values()) == {"clean"}
+    again = call("run_flow", root=str(root), branchId=branch["id"])
+    assert again["executedStepIds"] == []
+    assert call("get_surfaces", root=str(root), branchId=branch["id"], stepId=steps[-1])["exact"] is True
+
+    # a voxel size is the OpenVDB kernel's own: setting it keeps the slab
+    # kernel's resolution and results
+    back["project"]["kernel"] = "openvdb"
+    call("save_document", root=str(root), document=back)
+    voxel = call("set_grid", root=str(root), targetSpacingNm=20.0)
+    assert voxel["project"]["voxelUm"] == pytest.approx(0.02)
+    assert voxel["project"]["resolutionUm"] == pytest.approx(0.01)
+    voxel["project"]["kernel"] = "slab"
+    slab_again = call("save_document", root=str(root), document=voxel)
+    assert set(slab_again["stepStatuses"][branch["id"]].values()) == {"clean"}
+
+    # a flow file names its kernel and brings the project to it
     flow = str(tmp_path / "flow.yaml")
-    call("export_flow", root=str(slab), destination=flow, format="yaml")
-    vdb = tmp_path / "vdb"
-    call("create_workspace", root=str(vdb), name="VDB", kernel="openvdb")
-    applied = call("import_flow", root=str(vdb), source=flow)["document"]
-    assert applied["project"]["kernel"] == "openvdb"
-    assert applied["project"]["resolutionUm"] == pytest.approx(0.01)
-    names = [step["name"] for step in applied["branches"][0]["steps"]]
-    assert names == [step["name"] for step in source["branches"][0]["steps"]]
-    result = call("run_flow", root=str(vdb), branchId=applied["branches"][0]["id"])
-    assert len(result["executedStepIds"]) == len(names)
+    call("export_flow", root=str(root), destination=flow, format="yaml")
+    other = tmp_path / "other"
+    call("create_workspace", root=str(other), name="Other", kernel="openvdb")
+    imported = call("import_flow", root=str(other), source=flow)["document"]
+    assert imported["project"]["kernel"] == "slab"
+    assert imported["project"]["voxelUm"] == pytest.approx(0.02)
+
+
+def test_an_openvdb_workspace_from_before_kernels_switched_keeps_its_results(tmp_path):
+    """0.2.1-beta.1/2 kept OpenVDB results under the slab kernel's keys and
+    the voxel in the resolution; opening such a workspace moves both."""
+    import sqlite3
+
+    from process_studio.kernels import kernel_ids
+    from process_studio.models import split_result_key
+
+    if "openvdb" not in kernel_ids():
+        pytest.skip("the OpenVDB kernel is not built here")
+    root = tmp_path / "old"
+    document = call("create_workspace", root=str(root), name="Old", kernel="openvdb")
+    branch = document["branches"][0]
+    call("run_flow", root=str(root), branchId=branch["id"])
+    database = next(root.rglob("*.sqlite3"), None) or next(root.rglob("*.db"))
+    with sqlite3.connect(database) as connection:
+        for (key,) in connection.execute("SELECT step_id FROM branch_snapshots").fetchall():
+            step, fidelity, _ = split_result_key(key)
+            old = step if fidelity == "detailed" else f"{step}~{fidelity}"
+            connection.execute("UPDATE branch_snapshots SET step_id=? WHERE step_id=?", (old, key))
+            connection.execute("UPDATE worker_step_digests SET step_id=? WHERE step_id=?", (old, key))
+        connection.execute("ALTER TABLE projects DROP COLUMN voxel_um")
+    reopened = call("open_workspace", root=str(root))
+    assert reopened["project"]["kernel"] == "openvdb"
+    assert reopened["project"]["voxelUm"] == pytest.approx(0.01)
+    assert set(reopened["stepStatuses"][branch["id"]].values()) == {"clean"}
+    assert call("run_flow", root=str(root), branchId=branch["id"])["executedStepIds"] == []

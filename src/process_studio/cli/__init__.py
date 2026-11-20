@@ -17,7 +17,7 @@ import threading
 from pathlib import Path
 from typing import IO, Any, Mapping, Sequence
 
-from ..models import FIDELITIES, new_id
+from ..models import FIDELITIES, KERNELS, new_id
 from ..worker.errors import Cancelled, InvalidRequest, WorkerError, WorkspaceError
 from .flowfile import (
     PROCESS_TYPES,
@@ -632,6 +632,22 @@ def cmd_fidelity(session: Session, args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_kernel(session: Session, args: argparse.Namespace) -> int:
+    """Show or switch the kernel; like the film model, each keeps its results."""
+    document = session.document()
+    project = document["project"]
+    if args.value is None:
+        session.emit({"kernel": project["kernel"]}, [f"Kernel     {project['kernel']}"])
+        return EXIT_OK
+    project["kernel"] = args.value
+    saved = session.save(document)
+    session.emit(
+        {"kernel": saved["project"]["kernel"], "steps": Session.steps(saved)},
+        lambda: [f"Kernel     {saved['project']['kernel']}"] + table(STEP_HEADER, step_rows(saved)),
+    )
+    return EXIT_OK
+
+
 def cmd_view_section(session: Session, args: argparse.Namespace) -> int:
     document = session.document()
     branch = Session.branch(document)
@@ -1232,6 +1248,16 @@ def build_parser() -> argparse.ArgumentParser:
         "Results of each are kept, so switching back shows what was computed before",
     )
     fidelity.set_defaults(handler=cmd_fidelity)
+
+    kernel = commands.add_parser(
+        "kernel", help="show or switch the kernel the flow runs on: slab or openvdb"
+    )
+    kernel.add_argument(
+        "value", nargs="?", choices=KERNELS,
+        help="slab: exact polygon slabs; openvdb: level sets on voxels (where this build has it). "
+        "Results of each are kept, so switching back shows what was computed before",
+    )
+    kernel.set_defaults(handler=cmd_kernel)
 
     view = commands.add_parser("view", help="write a section, a top view or a mesh to a file")
     view_commands = view.add_subparsers(dest="view_command", metavar="KIND")
