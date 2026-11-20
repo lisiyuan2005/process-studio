@@ -286,15 +286,27 @@ def step_from_spec(spec: Mapping[str, Any], *, step_id: str | None = None) -> di
     }
 
 
+#: Kernels whose steps mean the same, so a flow file moves between them.
+INTERCHANGEABLE_KERNELS = {"slab", "openvdb"}
+
+
 def apply_flow(session: Session, flow: Mapping[str, Any]) -> dict[str, Any]:
     """Make the workspace match the flow file; returns the saved document."""
     document = session.document()
     project = document["project"]
-    if "kernel" in flow and flow["kernel"] != project["kernel"]:
+    # The slab and the OpenVDB kernels read every step the same way, so a flow
+    # made on one runs on the other. Only the resolution does not carry over:
+    # on the slab kernel it is a walk step, on OpenVDB the voxel edge, and
+    # the slab number would often be a lattice too fine to hold. The
+    # workspace keeps its own.
+    other_kernel = "kernel" in flow and flow["kernel"] != project["kernel"]
+    if other_kernel and {flow["kernel"], project["kernel"]} != INTERCHANGEABLE_KERNELS:
         raise InvalidRequest(
             f"the file wants the {flow['kernel']!r} kernel but this workspace runs on "
             f"{project['kernel']!r}; a kernel is chosen when a workspace is created."
         )
+    if other_kernel:
+        flow = {key: value for key, value in flow.items() if key not in ("resolution_nm", "resolution_xy_nm")}
 
     # The window and the resolution first: changing either discards results.
     grid = project["grid"]

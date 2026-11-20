@@ -1846,3 +1846,27 @@ def test_a_project_travels_as_one_zip_with_or_without_its_results(tmp_path):
     with pytest.raises(InvalidRequest, match="unsafe"):
         call("import_workspace_zip", source=str(evil), destination=str(tmp_path / "evil-out"))
     assert not (tmp_path / "escape.txt").exists()
+
+
+def test_a_slab_flow_moves_to_an_openvdb_workspace(tmp_path):
+    """The kernel is fixed per workspace, so moving a flow to the other
+    kernel is: export the flow file, create a workspace on that kernel,
+    import it. The steps come across; the resolution stays the new
+    workspace's own (a slab walk step is no voxel size)."""
+    from process_studio.kernels import kernel_ids
+
+    if "openvdb" not in kernel_ids():
+        pytest.skip("the OpenVDB kernel is not built here")
+    slab = tmp_path / "slab"
+    source = call("create_workspace", root=str(slab), name="Slab", kernel="slab")
+    flow = str(tmp_path / "flow.yaml")
+    call("export_flow", root=str(slab), destination=flow, format="yaml")
+    vdb = tmp_path / "vdb"
+    call("create_workspace", root=str(vdb), name="VDB", kernel="openvdb")
+    applied = call("import_flow", root=str(vdb), source=flow)["document"]
+    assert applied["project"]["kernel"] == "openvdb"
+    assert applied["project"]["resolutionUm"] == pytest.approx(0.01)
+    names = [step["name"] for step in applied["branches"][0]["steps"]]
+    assert names == [step["name"] for step in source["branches"][0]["steps"]]
+    result = call("run_flow", root=str(vdb), branchId=applied["branches"][0]["id"])
+    assert len(result["executedStepIds"]) == len(names)

@@ -2110,6 +2110,16 @@ export function Workspace({
             ).toFixed(0)}{" "}
             nm
           </button>
+          {projectKernel && (
+            // Which kernel this project is built on, and how to get the other:
+            // the kernel is chosen with the workspace and never changes.
+            <span
+              className="kernel-chip"
+              title={`This project runs on the ${projectKernel.name} kernel. A kernel is chosen when a workspace is created and cannot be changed: to use another, open File → New tab, pick it on the new-workspace card and create a workspace, then bring this flow over with File → Export → Flow file and File → Import → Flow file.`}
+            >
+              {projectKernel.id === "openvdb" ? "OpenVDB" : projectKernel.id === "slab" ? "Slab" : projectKernel.name}
+            </span>
+          )}
           {(projectKernel?.id === "slab" || projectKernel?.id === "openvdb") && (
             <div className="fidelity-switch" role="radiogroup" aria-label="Film model">
               {FILM_MODELS.map((model) => {

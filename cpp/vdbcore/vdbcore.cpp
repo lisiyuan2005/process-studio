@@ -227,6 +227,9 @@ static std::vector<std::tuple<std::string, SDF>> read_vdb(const std::string& pat
 }
 
 NB_MODULE(_vdbcore, m) {
+    // States still alive when the interpreter exits are not leaks worth a
+    // warning on every run of the worker.
+    nb::set_leak_warnings(false);
     openvdb::initialize();
     nb::class_<SDF>(m, "SDF")
         .def_prop_ro("active_voxels", [](const SDF& s) { return s.grid->activeVoxelCount(); })

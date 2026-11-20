@@ -376,6 +376,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .kernel-card.active { border-color: rgba(85, 142, 209, 0.65); background: rgba(85, 142, 209, 0.09); }
 .kernel-card input { grid-row: 1 / span 2; margin: 2px 0 0; accent-color: #5b9eea; }
 .kernel-card.unavailable { cursor: default; opacity: 0.55; }
+.kernel-chip { display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border: 1px solid #34414c; border-radius: 6px; color: #a9b6c1; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; cursor: help; white-space: nowrap; }
 .kernel-card.unavailable .kernel-name { grid-column: 2; }
 .kernel-card.unavailable .kernel-summary { grid-column: 2; }
 .kernel-name { display: flex; align-items: baseline; gap: 7px; color: #dbe3ea; font-size: 12px; font-weight: 600; }
@@ -458,6 +459,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .home-card { background: rgba(255,255,255,0.96); border-color: #d1dbe3; box-shadow: 0 25px 70px rgba(44,63,79,0.13); }
 .home-field input { background: #f8fafb; color: #263746; border-color: #cbd6df; }
 .kernel-card { background: #f8fafb; border-color: #cbd6df; }
+.kernel-chip { border-color: #cbd6df; color: #4d5b67; }
 .kernel-card.active { background: rgba(85, 142, 209, 0.08); }
 .kernel-name { color: #263746; }
 .kernel-summary { color: #5d6d7b; }
